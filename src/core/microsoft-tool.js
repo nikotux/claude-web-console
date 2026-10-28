@@ -247,11 +247,16 @@ function rangeBoundary(value, fallbackDay) {
   if (!normalized) return `${fallbackDay}T00:00:00-05:00`;
   if (normalized === 'hoy') return `${today}T00:00:00-05:00`;
   if (normalized === 'mañana' || normalized === 'manana') return `${addDays(today, 1)}T00:00:00-05:00`;
-  const parsed = new Date(normalized);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return `${normalized}T00:00:00-05:00`;
+  const graphValue = normalized
+    .replace(/^(\d{4}-\d{2}-\d{2})t/, '$1T')
+    .replace(/z$/, 'Z');
+  const parsed = new Date(graphValue);
   if (!Number.isFinite(parsed.getTime())) {
     throw toolError('La fecha no es válida. Usá ISO 8601, "hoy" o "mañana".');
   }
-  return /(?:Z|[+-]\d\d:\d\d)$/i.test(normalized) ? normalized : `${normalized}-05:00`;
+  if (/(?:Z|[+-]\d\d:\d\d)$/.test(graphValue)) return graphValue;
+  return /T\d\d:\d\d/.test(graphValue) ? `${graphValue}-05:00` : graphValue;
 }
 
 function calendarError(err) {

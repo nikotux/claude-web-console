@@ -410,15 +410,23 @@ export async function teardownEnv(id, { force = false } = {}) {
   }
 
   await stopDevServer(id);
+  const cleanupErrors = [];
   if (rec.db) {
-    try { await dropEnvDb(rec.db); } catch { /* noop */ }
+    try {
+      const dropped = await dropEnvDb(rec.db);
+      if (!dropped.ok) cleanupErrors.push(`DB ${rec.db}: ${dropped.detail || 'DROP falló'}`);
+    } catch (err) {
+      cleanupErrors.push(`DB ${rec.db}: ${String(err?.message || err)}`);
+    }
   }
   let worktreeRemoved = false;
   if (rec.worktree) {
     try {
       gitBase(['worktree', 'remove', '--force', rec.worktree]);
       worktreeRemoved = true;
-    } catch { /* noop */ }
+    } catch (err) {
+      cleanupErrors.push(`worktree: ${String(err?.message || err)}`);
+    }
   }
   if (worktreeRemoved) {
     try {
@@ -430,6 +438,12 @@ export async function teardownEnv(id, { force = false } = {}) {
       // No se borra el projectKey ni sus transcripts: son conversaciones y
       // requieren una decisión humana, aunque el worktree ya no exista.
     } catch { /* noop */ }
+  }
+  if (cleanupErrors.length > 0) {
+    const detail = cleanupErrors.join(' | ').slice(0, 500);
+    patchEnv(id, { status: 'error', error: detail });
+    appendProvisionLog(id, `teardown error: ${detail}`);
+    return { ok: false, detail };
   }
   try { fs.rmSync(path.join(ENVS_DIR, id), { recursive: true, force: true }); } catch { /* noop */ }
   // console:BUG-2142 endurece el C5 de console:BUG-2086: la rama cwc-env/<id>
@@ -508,7 +522,16 @@ export async function reapEnvs({ idleMs, closedChatIds = [], activeChatIds = [] 
     const idle = hasIdleCutoff
       && !active.has(String(rec.chatId))
       && now - Number(rec.heartbeatAt || 0) > idleMs;
-    if (idle || closedChat) await teardownEnv(rec.id, { force: false });
+    if (idle || closedChat) {
+      try {
+        await teardownEnv(rec.id, { force: false });
+      } catch (err) {
+        const detail = String(err?.message || err).slice(0, 500);
+        try { patchEnv(rec.id, { status: 'error', error: detail }); } catch { /* noop */ }
+        try { appendProvisionLog(rec.id, `reap teardown error: ${detail}`); } catch { /* noop */ }
+        console.error(`[tolkien-env] reap no pudo desmontar ${rec.id}:`, detail);
+      }
+    }
   }
 }
 

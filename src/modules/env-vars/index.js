@@ -33,39 +33,61 @@ const EDITABLE = {
 // es genérico de la app, no la validación por-endpoint que pide la regla.
 const MAX_ZOHO_DEPARTMENTS = 50;
 
+function badRequest(message) {
+  const error = new Error(message);
+  error.badRequest = true;
+  throw error;
+}
+
+function cleanScalar(value, field, maxLength) {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    badRequest(`${field} debe ser texto o número.`);
+  }
+  return String(value).trim().slice(0, maxLength);
+}
+
 function pickAllowed(patch) {
   const out = {};
   for (const [section, fields] of Object.entries(EDITABLE)) {
+    if (Array.isArray(patch?.[section])) badRequest(`${section} debe ser un objeto.`);
     if (!patch?.[section] || typeof patch[section] !== 'object') continue;
     const clean = {};
     for (const f of fields) {
       if (Object.prototype.hasOwnProperty.call(patch[section], f)) {
-        clean[f] = String(patch[section][f] ?? '').trim().slice(0, 200);
+        clean[f] = cleanScalar(patch[section][f], `${section}.${f}`, 200);
       }
     }
     if (Object.keys(clean).length) out[section] = clean;
   }
   // zohoDepartments y reviewer son objetos anidados con claves libres — se
   // aceptan aparte, saneando valores a string corto (nunca objetos/arrays).
-  if (patch?.client?.zohoDepartments && typeof patch.client.zohoDepartments === 'object') {
+  if (Object.prototype.hasOwnProperty.call(patch?.client || {}, 'zohoDepartments')) {
+    if (!patch.client.zohoDepartments
+      || typeof patch.client.zohoDepartments !== 'object'
+      || Array.isArray(patch.client.zohoDepartments)) {
+      badRequest('client.zohoDepartments debe ser un objeto.');
+    }
     const depKeys = Object.keys(patch.client.zohoDepartments);
     if (depKeys.length > MAX_ZOHO_DEPARTMENTS) {
-      const err = new Error(`Demasiados departamentos de Zoho (máximo ${MAX_ZOHO_DEPARTMENTS}).`);
-      err.badRequest = true;
-      throw err;
+      badRequest(`Demasiados departamentos de Zoho (máximo ${MAX_ZOHO_DEPARTMENTS}).`);
     }
     const deps = {};
     for (const [k, v] of Object.entries(patch.client.zohoDepartments)) {
       const key = String(k).slice(0, 40);
-      if (key) deps[key] = String(v ?? '').trim().slice(0, 60);
+      if (key) deps[key] = cleanScalar(v, `client.zohoDepartments.${key}`, 60);
     }
     out.client = { ...out.client, zohoDepartments: deps };
   }
-  if (patch?.client?.reviewer && typeof patch.client.reviewer === 'object') {
+  if (Object.prototype.hasOwnProperty.call(patch?.client || {}, 'reviewer')) {
+    if (!patch.client.reviewer
+      || typeof patch.client.reviewer !== 'object'
+      || Array.isArray(patch.client.reviewer)) {
+      badRequest('client.reviewer debe ser un objeto.');
+    }
     const rev = {};
     for (const f of ['name', 'github', 'contactId']) {
       if (Object.prototype.hasOwnProperty.call(patch.client.reviewer, f)) {
-        rev[f] = String(patch.client.reviewer[f] ?? '').trim().slice(0, 60);
+        rev[f] = cleanScalar(patch.client.reviewer[f], `client.reviewer.${f}`, 60);
       }
     }
     if (Object.keys(rev).length) out.client = { ...out.client, reviewer: rev };
@@ -85,8 +107,9 @@ export default {
         const scope = systemScopeFor(req);
         const inst = loadInstance({ dataDir: scope.dataDir });
         res.json({ identity: inst.identity, client: inst.client, needsRestart: false });
-      } catch {
-        res.status(500).json({ error: 'No se pudo leer la config de instancia.' });
+      } catch (e) {
+        console.error('[env-vars] no se pudo leer la config de instancia:', e);
+        res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
       }
     });
 
@@ -104,6 +127,7 @@ export default {
         res.json({ ok: true, identity: next.identity, client: next.client, needsRestart: true });
       } catch (e) {
         if (e && e.badRequest) return res.status(400).json({ error: e.message });
+        console.error('[env-vars] no se pudo guardar la config de instancia:', e);
         res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
       }
     });
@@ -114,6 +138,7 @@ export default {
         const scope = systemScopeFor(req);
         res.json({ path: instanceFilePath(scope.dataDir) });
       } catch (e) {
+        console.error('[env-vars] no se pudo resolver la ruta de instance.json:', e);
         res.status(500).json({ error: String(e?.message || e).slice(0, 300) });
       }
     });

@@ -62,10 +62,7 @@ function makeButton(className, text, title = '') {
 }
 
 function floatingPanelIcon(name) {
-  const body = name === 'acta'
-    ? '<path d="M3 3h10M3 8h10M3 13h10"></path><path d="M1 3h.01M1 8h.01M1 13h.01"></path>'
-    : '<path d="M3 1h7l3 3v11H3z"></path><path d="M10 1v4h3M6 9h4M6 12h4"></path>';
-  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+  return icon(name === 'acta' ? 'list' : 'fileGeneric', { size: 16 });
 }
 
 function identityName(identity) {

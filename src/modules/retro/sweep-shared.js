@@ -17,7 +17,8 @@ import { writeJsonAtomic } from '../../core/atomic-write.js';
 import {
   hostUser, userClaudeDir, userDataDir, userSpace,
 } from '../../core/user-space.js';
-import { queueRetroDistill, readRetroJob, retroJobId } from './shared.js';
+import { queueRetroDistill } from './server-shared.js';
+import { readRetroJob, retroJobId } from './shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..');

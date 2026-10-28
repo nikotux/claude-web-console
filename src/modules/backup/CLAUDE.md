@@ -52,12 +52,17 @@ y el diálogo encuesta cada 1.5 s — si la IA falla, el mensaje se
 escribe a mano (nunca bloquea). GET /git-info ahora expone
 `dirty[]` (name-status contra HEAD, incluye stageados) además de
 dirtyCount. Lógica compartida en backup/commitmsg-shared.js.
+Excepción multi-tenant deliberada: todo el módulo es admin/host-only; por eso
+backups, jobs, logs y el entorno del runner se resuelven contra el HOME del host.
 Untracked: NUNCA viajan solos — el diálogo de Push los lista con
 checkbox por archivo (body {includeUntracked:[...]}) y el backend
 valida la selección en 3 capas: solo lo que git lista como
 untracked no-ignorado (un .env ignorado NI aparece), re-chequeo con
 isSecretPath() (403 si un secreto se coló) y
-selección humana explícita archivo por archivo. Cada push exitoso
+selección humana explícita archivo por archivo. Las rutas que aceptan
+includeUntracked rechazan más de 200 elementos y /commit-message devuelve 409
+durante otra operación. Restore valida el tar.gz antes de extraer y el changelog
+se escribe atómicamente como best-effort. Cada push exitoso
 ADEMÁS: (1) agrega
 una entrada EN INGLÉS a la sección "## Changelog" de README.md
 (marcadores <!-- cwc:changelog:start/end -->, función

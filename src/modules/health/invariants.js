@@ -29,6 +29,12 @@ const LEARNED_FILE = path.join(__dirname, 'invariants-learned.json');
 const LEARNED_MATCH_MAX = 200;
 const LEARNED_TEXT_MAX = 400;
 
+function badRequest(msg) {
+  const err = new Error(msg);
+  err.badRequest = true;
+  return err;
+}
+
 // Seeds hand-authored (RegExp ricas). Los aprendidos se suman aparte.
 export const SEED_INVARIANTS = [
   {
@@ -37,7 +43,7 @@ export const SEED_INVARIANTS = [
   },
   {
     match: /src\/modules\/terminal\/sessions\.js$/,
-    text: 'BLINDAJE ANTICONSUMO MULTI-TENANT DEL PTY (BUG-2104 · BUG-2105): el PTY de una sesión cuyo owner es un INQUILINO se spawnea con `userRunnerEnv(owner)` + HOME aislado + `CWC_DATA_DIR` aislado + `CLAUDE_CODE_OAUTH_TOKEN` propio, NUNCA con `...process.env`; si la sesión corre `claude` y falta la credencial propia, falla cerrado antes del spawn. Cada `new-session` inyecta las variables críticas con `-e` porque el server tmux es compartido y fue arrancado por el host; además, las variables de su entorno global que sean secretos o empiecen con `CWC_` se neutralizan con `-e CLAVE=` en las sesiones de inquilino, antes de superponer la allowlist owner-scoped. Con `-A`, una sesión ya creada conserva el env viejo y hay que matarla y recrearla para aplicar el aislamiento nuevo. El host (`owner === null` o `owner === hostUser()`) conserva el entorno completo por retrocompatibilidad.',
+    text: 'BLINDAJE ANTICONSUMO MULTI-TENANT DEL PTY (BUG-2104 · BUG-2105): el PTY de una sesión cuyo owner es un INQUILINO se spawnea con `userRunnerEnv(owner)` + HOME aislado + `CWC_DATA_DIR` aislado + `CLAUDE_CODE_OAUTH_TOKEN` propio, NUNCA con `...process.env`; si la sesión corre `claude` y falta la credencial propia, falla cerrado antes del spawn. Las credenciales (`CLAUDE_CODE_OAUTH_TOKEN`, etc.) NUNCA aparecen en el argv de ningún proceso: al crear una sesión, el `new-session -d` completo —todos sus `-e`, `-c` y el comando— se escribe en un archivo de comandos tmux efímero modo 0600 dentro de `userDataDir(owner)/terminal-spawn`, directorio modo 0700 del dueño; se ejecuta sincrónicamente mediante `tmux start-server ; source-file <archivo>` y el archivo se borra SIEMPRE en `finally`. El PTY sólo ejecuta `attach-session -t =<name>`; una sesión existente (rehidratación) no escribe archivo alguno y sólo hace attach. Como el server tmux es compartido y fue arrancado por el host, las variables de su entorno global que sean secretos o empiecen con `CWC_` se neutralizan con `-e CLAVE=` en las sesiones de inquilino antes de superponer la allowlist owner-scoped. Una sesión ya creada conserva el env viejo y hay que matarla y recrearla para aplicar el aislamiento nuevo. El host (`owner === null` o `owner === hostUser()`) conserva el entorno completo por retrocompatibilidad.',
   },
   {
     // Familia A · NO-CRUCE / ownership por usuario×mundo (PLAN-500/PLAN-593 SP1).
@@ -238,12 +244,9 @@ export function invariantsFor(unit) {
   return invariantsForDetailed(unit).map((entry) => entry.text);
 }
 
-let _repoFiles = null;
-
 // Lista los archivos reales auditables para impedir que se aprueben patrones
 // compilables pero inertes. Si el disco no se puede leer, falla abierto.
 function repoFiles() {
-  if (_repoFiles) return _repoFiles;
   try {
     const root = path.resolve(__dirname, '..', '..', '..');
     const files = [];
@@ -256,11 +259,10 @@ function repoFiles() {
       }
     };
     for (const base of ['src', 'bin', 'public']) walk(path.join(root, base));
-    _repoFiles = files;
+    return files;
   } catch {
-    _repoFiles = [];
+    return [];
   }
-  return _repoFiles;
 }
 
 // Agrega un invariante APROBADO al JSON de aprendidos (repo). Valida el regex
@@ -269,14 +271,15 @@ function repoFiles() {
 export function appendLearnedInvariant({ match, text, exclude, origen }) {
   const m = String(match || '').trim();
   const t = String(text || '').trim();
-  if (!m || !t) throw new Error('Faltan match o texto del invariante.');
+  if (!m || !t) throw badRequest('Faltan match o texto del invariante.');
+  if (m.length > LEARNED_MATCH_MAX) throw badRequest(`El patrón supera ${LEARNED_MATCH_MAX} caracteres; acortalo.`);
   // El match es un GLOB (`src/modules/**/*.js`), no un regex — se valida
   // compilando su conversión, así `**` no revienta al aprobar.
   let re;
-  try { re = compileMatch(m); } catch { throw new Error('El patrón de archivos no es válido.'); }
+  try { re = compileMatch(m); } catch { throw badRequest('El patrón de archivos no es válido.'); }
   const files = repoFiles();
   if (files.length && !files.some((f) => re.test(f))) {
-    throw new Error('El patrón no coincide con ningún archivo del repo.');
+    throw badRequest('El patrón no coincide con ningún archivo del repo.');
   }
   let arr = [];
   try { arr = JSON.parse(fss.readFileSync(LEARNED_FILE, 'utf8')); if (!Array.isArray(arr)) arr = []; } catch { arr = []; }

@@ -14,8 +14,14 @@ function errorMessage(err) {
   return String(err?.message || err);
 }
 
-function send502(res, err) {
-  res.status(502).json({ error: errorMessage(err) });
+function errorStatus(err) {
+  if (err?.notConfigured) return 503;
+  if (err?.upstream) return 502;
+  return 500;
+}
+
+function sendError(res, err) {
+  res.status(errorStatus(err)).json({ error: errorMessage(err) });
 }
 
 export default {
@@ -27,55 +33,59 @@ export default {
     r.get('/devices', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await getDevices()); }
-      catch (err) { send502(res, err); }
+      catch (err) { sendError(res, err); }
     });
 
     r.get('/clients', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await getClients()); }
-      catch (err) { send502(res, err); }
+      catch (err) { sendError(res, err); }
     });
 
     r.get('/health', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await getHealth()); }
-      catch (err) { send502(res, err); }
+      catch (err) { sendError(res, err); }
     });
 
     r.get('/radios', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await getRadios()); }
-      catch (err) { send502(res, err); }
+      catch (err) { sendError(res, err); }
     });
 
     r.get('/wan', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await getWan()); }
-      catch (err) { send502(res, err); }
+      catch (err) { sendError(res, err); }
     });
 
     r.get('/audit', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await buildVoiceAudit()); }
-      catch (err) { send502(res, err); }
+      catch (err) { sendError(res, err); }
     });
 
     r.get('/client', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       try { res.json(await findClient(req.query.q || '')); }
-      catch (err) { send502(res, err); }
+      catch (err) { sendError(res, err); }
     });
 
     r.post('/scan', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
-      try { res.json(await scanToPad()); }
-      catch (err) { send502(res, err); }
+      try {
+        const result = await scanToPad();
+        res.status(result.ok === false ? 502 : 200).json(result);
+      } catch (err) { sendError(res, err); }
     });
 
     r.post('/audit-snapshot', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
-      try { res.json(await snapshotToPad()); }
-      catch (err) { send502(res, err); }
+      try {
+        const result = await snapshotToPad();
+        res.status(result.ok === false ? 502 : 200).json(result);
+      } catch (err) { sendError(res, err); }
     });
 
     router.use('/unifi', r);

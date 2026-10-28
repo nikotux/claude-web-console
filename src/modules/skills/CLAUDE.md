@@ -45,8 +45,9 @@ whitelist estricta y confinan la ruta a `scope.claudeDir/skills`. La instalació
 deja `.cwc-catalog.json` (mode 600, escritura atómica) con origen
 `console-catalog`, nombre, hash y fecha. Un directorio sin ese marcador, con
 marcador inválido o con otro origen es una skill propia del usuario: el catálogo
-NUNCA la pisa ni la borra. La copia tampoco sigue symlinks. La validación real
-del pedido responde 400; un fallo inesperado de instalación o desinstalación
+NUNCA la pisa ni la borra. La copia tampoco sigue symlinks. La validación
+responde 400, una skill ausente 404 y una colisión con contenido propio 409;
+un fallo inesperado de instalación o desinstalación
 responde 500 porque indica infraestructura rota.
 
 El cruce con `playbooks` usa `reqPadContext(req)` y, por tanto, el token y

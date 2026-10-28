@@ -9,6 +9,8 @@ import { padContextForUser } from '../src/core/pad-context.js';
 import { systemScopeFor } from '../src/core/system-scope.js';
 import { hostUser } from '../src/core/user-space.js';
 import { listUsers } from '../src/core/users.js';
+// Instala los resolvers owner-scoped antes de leer stores de inquilinos.
+import '../src/modules/retro/server-shared.js';
 import {
   contextPathsFor,
   getContext,

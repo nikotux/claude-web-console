@@ -15,11 +15,18 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { settingSourcesFor } from './sdk-settings.js';
 
+export const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+
 export async function textOnlyQuery(prompt, {
-  model = 'sonnet', effort, maxTurns = 1, timeoutMs, cwd,
+  // Quien necesite más calidad pasa 'sonnet', como hacen hoy los callers.
+  model = 'haiku', effort, maxTurns = 1, timeoutMs, cwd,
   denyReason = 'Esta corrida no usa herramientas.',
   timeoutMessage = 'La corrida tardó demasiado.',
 } = {}) {
+  const effectiveTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_TIMEOUT_MS;
+  const abortController = new AbortController();
   const deny = {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
@@ -31,6 +38,7 @@ export async function textOnlyQuery(prompt, {
     prompt,
     options: {
       cwd,
+      abortController,
       settingSources: settingSourcesFor('none'), // [] — cero settings/skills/MCP
       model,
       ...(effort ? { effort } : {}),
@@ -43,7 +51,10 @@ export async function textOnlyQuery(prompt, {
   let text = '';
   let timer = null;
   const timeout = new Promise((_, rej) => {
-    timer = setTimeout(() => rej(new Error(timeoutMessage)), timeoutMs);
+    timer = setTimeout(() => {
+      abortController.abort();
+      rej(new Error(timeoutMessage));
+    }, effectiveTimeoutMs);
   });
   const pump = (async () => {
     for await (const m of q) {

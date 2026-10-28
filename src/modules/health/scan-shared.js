@@ -132,6 +132,7 @@ export async function crossCheckPad(findings = []) {
   try {
     // BUG-1792: sin `all` solo se omiten soft-deleted, no terminales (fixed/wontfix), preservando regresiones; `all=true` dio 0 vs 60 en el Pad local (verificado en vivo 2026-07-24; ver nota en pad-service-client.js).
     const r = await padLocal.listItems('bugs', { workspace: 'console' });
+    if (!r || !r.ok) return { available: false, error: String(r?.error || 'Pad no respondió').slice(0, 160), nuevo: [], rastreado: [], regresion: [], openCount: 0, rules };
     bugs = (r && (r.data || r.items || r)) || [];
     if (!Array.isArray(bugs)) bugs = [];
   } catch (err) {
@@ -183,7 +184,11 @@ export async function createBugFromFinding(finding = {}) {
       codex: 'pending',
     },
   }, { workspace: 'console' });
-  if (!r || !r.ok) throw new Error(`Pad no aceptó el BUG: ${r?.error || 'error'}`);
+  if (!r || !r.ok) {
+    const err = new Error(`Pad no aceptó el BUG: ${r?.error || 'error'}`);
+    err.upstream = true;
+    throw err;
+  }
   const ref = r.data?.ref || null;
   if (ref) {
     try { const idx = await loadArquiIndex(); await linkItemToArqui(ref, finding, idx); }

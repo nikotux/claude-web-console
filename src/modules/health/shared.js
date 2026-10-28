@@ -458,8 +458,7 @@ export function readReview() {
 
 export function writeReview(data) {
   try {
-    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    fss.writeFileSync(REVIEW_FILE, JSON.stringify(data), { mode: 0o600 });
+    writeJsonAtomic(REVIEW_FILE, data);
   } catch (err) { console.error('[health] no pude escribir review.json:', err?.message); }
 }
 
@@ -622,8 +621,7 @@ export function readAuditCache() {
 }
 export function writeAuditCache(cache) {
   try {
-    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    fss.writeFileSync(AUDIT_CACHE_FILE, JSON.stringify(cache), { mode: 0o600 });
+    writeJsonAtomic(AUDIT_CACHE_FILE, cache);
   } catch (err) { console.error('[health] no pude escribir audit-cache:', err?.message); }
 }
 // Fingerprint de una unidad → cambia si cambia su código O sus invariantes
@@ -653,7 +651,7 @@ export const BATCH_FILE = path.join(DATA_DIR, 'healthfix-batch.json');
 export const BATCH_LOCK = path.join(DATA_DIR, 'healthfix-batch.lock');
 export function readBatch() { try { return JSON.parse(fss.readFileSync(BATCH_FILE, 'utf8')); } catch { return null; } }
 export function writeBatch(b) {
-  try { fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); fss.writeFileSync(BATCH_FILE, JSON.stringify(b), { mode: 0o600 }); }
+  try { writeJsonAtomic(BATCH_FILE, b); }
   catch (err) { console.error('[health] no pude escribir batch:', err?.message); }
 }
 export function writeBatchLock(pid) {
@@ -713,8 +711,7 @@ export function readProposals() {
 }
 export function writeProposals(list) {
   try {
-    fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    fss.writeFileSync(PROPOSALS_FILE, JSON.stringify(list), { mode: 0o600 });
+    writeJsonAtomic(PROPOSALS_FILE, list);
   } catch (err) { console.error('[health] no pude escribir invariant-proposals:', err?.message); }
 }
 export function addProposal({ text, match, fromFinding }) {
@@ -756,12 +753,42 @@ export function readFixLock() {
 }
 
 // ===== Allowlist del auto-fix (DOS capas, regla 6 — excepción de ESCRITURA) =====
-// Puede LEER, EDITAR/CREAR archivos y verificar SOLO con `node --check`/`node -c`.
-// Todo lo demás (git, rm, systemctl, npm, curl, kill, reinicios…) DENEGADO: el
-// fix queda en el working tree (revertible con git) y el usuario reinicia al
-// revisar. Bash restringido por contenido a la verificación de sintaxis.
-export function fixToolAllowed(name, input) {
-  if (['Read', 'Grep', 'Glob', 'TodoWrite', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(name)) return true;
+// Puede LEER y verificar SOLO con `node --check`/`node -c`; las escrituras se
+// confinan al root de la corrida. El auto-fix lee código no confiable: aceptar
+// una ruta absoluta externa permitiría que una prompt-injection escribiera en
+// el árbol real o ~/.claude/settings.json, eludiendo el git apply --check del
+// orquestador. Todo lo demás queda DENEGADO.
+function realpathOr(p) {
+  try { return fss.realpathSync(p); } catch { return p; }
+}
+
+function pathInsideRoot(root, p) {
+  if (typeof root !== 'string' || !root.trim() || typeof p !== 'string' || !p.trim()) return false;
+  try {
+    const rootReal = realpathOr(path.resolve(root));
+    const abs = path.resolve(rootReal, p);
+    let ancestor = abs;
+    const missing = [];
+    while (!fss.existsSync(ancestor)) {
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) return false;
+      missing.unshift(path.basename(ancestor));
+      ancestor = parent;
+    }
+    const targetReal = path.resolve(fss.realpathSync(ancestor), ...missing);
+    const rel = path.relative(rootReal, targetReal);
+    return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+  } catch { return false; }
+}
+
+export function fixToolAllowed(name, input, root) {
+  if (['Read', 'Grep', 'Glob', 'TodoWrite'].includes(name)) return true;
+  if (['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(name)) {
+    const target = name === 'NotebookEdit'
+      ? (input?.notebook_path || input?.file_path)
+      : input?.file_path;
+    return pathInsideRoot(root, target);
+  }
   if (name === 'Bash') {
     const cmd = String(input?.command || '').trim();
     // El token de RUTA de `node --check <ruta>` se acota a una allowlist de
@@ -776,6 +803,23 @@ export function fixToolAllowed(name, input) {
     return /^node\s+(--check|-c)\s+[^\s;&|$`()<>'"\\]+(\s*&&\s*node\s+(--check|-c)\s+[^\s;&|$`()<>'"\\]+)*$/.test(cmd);
   }
   return false;
+}
+
+export const FIX_DENY_REASON = 'Auto-fix: solo lectura/edición + node --check.';
+
+// Fuente única del blindaje de escritura: antes las dos capas estaban
+// duplicadas entre el runner individual y el orquestador.
+export function fixQueryOptions({ cwd, allowed = fixToolAllowed, denyReason = FIX_DENY_REASON, mcpServers } = {}) {
+  if (typeof cwd !== 'string' || !cwd.trim()) throw new Error('Auto-fix: cwd requerido.');
+  // Las DOS capas de la regla 6 evalúan el MISMO predicado y el MISMO root.
+  const ok = (name, toolInput) => allowed(name, toolInput, cwd);
+  const deny = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: denyReason } };
+  return {
+    cwd, model: 'sonnet', maxTurns: FIX_MAX_TURNS, permissionMode: 'default', settingSources: [],
+    ...(mcpServers ? { mcpServers } : {}),
+    hooks: { PreToolUse: [{ hooks: [async (input) => (ok(input.tool_name, input.tool_input) ? {} : deny)] }] },
+    canUseTool: async (name, input) => (ok(name, input) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: denyReason }),
+  };
 }
 
 // ===== Allowlist del auto-fix en modo TÁNDEM (opt-in, 2026-07-19) =====

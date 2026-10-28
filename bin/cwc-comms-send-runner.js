@@ -16,7 +16,26 @@ import {
 
 const log = (...a) => console.log(`[${new Date().toISOString()}]`, '[comms-send]', ...a);
 const id = process.argv[2];
-const TIMEOUT_MS = 4 * 60000;
+const WALL_TIMEOUT_MS = 5 * 60000;
+
+function timeoutError() {
+  const error = new Error('El envío superó el límite de 5 minutos.');
+  error.code = 'SEND_TIMEOUT';
+  return error;
+}
+
+function abortableSleep(ms, signal) {
+  if (signal.aborted) return Promise.reject(timeoutError());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => { clearTimeout(timer); reject(timeoutError()); };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
 
 function deskReplyPrompt(payload) {
   const n = String(payload.ticketNumber || '');
@@ -94,6 +113,17 @@ function teamsDmPrompt(payload, contact, self) {
 }
 
 async function runSend(job) {
+  const abortController = new AbortController();
+  let wallTimer = null;
+  let wallExpired = false;
+  const wallTimeout = new Promise((_, reject) => {
+    wallTimer = setTimeout(() => {
+      wallExpired = true;
+      const error = timeoutError();
+      abortController.abort(error);
+      reject(error);
+    }, WALL_TIMEOUT_MS);
+  });
   const allowed = job.channel === 'desk' ? deskWriteAllowed : teamsWriteAllowed;
   const isReadOnlyTool = (name) => {
     const tool = String(name);
@@ -114,7 +144,8 @@ async function runSend(job) {
   const denyHook = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: denyMsg } };
   let out = '';
   let usedWriteTool = false;
-  await withRateLimitRetry(async () => {
+  const operation = withRateLimitRetry(async () => {
+    if (abortController.signal.aborted) throw timeoutError();
     usedWriteTool = false;
     out = '';
     // Marcamos la aprobación, no el resultado: si el proveedor falla después
@@ -130,6 +161,7 @@ async function runSend(job) {
       prompt,
       options: {
         cwd: config.projectDir,
+        abortController,
         model: 'sonnet',
         maxTurns: 12,
         permissionMode: 'default',
@@ -138,8 +170,6 @@ async function runSend(job) {
         canUseTool: async (name, input) => (approve(name) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: denyMsg }),
       },
     });
-    let timer = null;
-    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), TIMEOUT_MS); });
     const pump = (async () => {
       for await (const m of q) {
         if (m.type === 'assistant') { for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text; }
@@ -147,12 +177,17 @@ async function runSend(job) {
       }
     })();
     pump.catch(() => {});
-    try { await Promise.race([pump, timeout]); }
-    finally { clearTimeout(timer); try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
+    try { await pump; }
+    finally { try { await Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
   }, {
     shouldRetry: () => !usedWriteTool,
     onRetry: ({ attempt }) => log(`429/overload en job ${job.id || id}: back-off, reintento ${attempt}.`),
+    sleep: (ms) => abortableSleep(ms, abortController.signal),
   });
+  operation.catch(() => {});
+  try { await Promise.race([operation, wallTimeout]); }
+  catch (error) { throw wallExpired ? timeoutError() : error; }
+  finally { clearTimeout(wallTimer); }
   // Parseo del acuse
   let sent = false; let err = null;
   const fence = out.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -174,7 +209,10 @@ async function main() {
     if (job.contactId) { try { appendManual({ contactId: job.contactId, text: `→ [${job.channel}] ${String(job.payload?.text || '').slice(0, 300)}`, direction: 'out', channel: job.channel }); } catch { /* noop */ } }
     log(`OK job ${id} (${job.channel}/${job.action}).`);
   } catch (e) {
-    writeSendJobRaw(id, { ...job, status: 'error', result: null, error: String(e?.message || e).slice(0, 300), updatedAt: Date.now() });
+    // El estado deja de ser running también en timeout: ese archivo es el lock
+    // durable del envío y así queda liberado para polling/reintento.
+    const status = e?.code === 'SEND_TIMEOUT' ? 'timeout' : 'error';
+    writeSendJobRaw(id, { ...job, status, result: null, error: String(e?.message || e).slice(0, 300), updatedAt: Date.now() });
     appendOutbox({ channel: job.channel, action: job.action, to: job.contactId || 'externo', contactId: job.contactId, text: job.payload?.text || '', actor: job.actor, ok: false, error: String(e?.message || e).slice(0, 300) });
     log(`FAIL job ${id}:`, e?.message || e);
   }

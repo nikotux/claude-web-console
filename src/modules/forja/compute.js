@@ -138,7 +138,7 @@ function bestBusinessStreak(prs, timeZone) {
 
 function currentBusinessStreak(prs, timeZone, today) {
   const days = new Set(prs.map((pr) => dateKey(new Date(pr.mergedAt), timeZone)));
-  let cursor = isBusinessDay(today) ? today : previousBusinessDay(today);
+  let cursor = isBusinessDay(today) && days.has(today) ? today : previousBusinessDay(today);
   let streak = 0;
   while (days.has(cursor)) {
     streak += 1;

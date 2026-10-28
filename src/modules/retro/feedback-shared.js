@@ -17,10 +17,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
-import { resolveDataDir } from '../../core/data-dir.js';
-import {
-  hostUser, readUserOauthToken, userDataDir, userRunnerEnv,
-} from '../../core/user-space.js';
+import { retroDataDirFor, retroRunnerEnvFor } from './owner-dirs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..');
@@ -28,22 +25,17 @@ const RUNNER = path.join(ROOT, 'bin', 'cwc-retro-feedback-runner.js');
 
 export const FEEDBACK_TIMEOUT_MS = 4 * 60 * 1000;
 export const FEEDBACK_STALE_MS = FEEDBACK_TIMEOUT_MS + 30 * 1000;
+export const FEEDBACK_JOB_ID_RE = /^[a-f0-9]{24}$/;
 
-function dataDirFor(owner = null) { return owner ? userDataDir(owner) : resolveDataDir(); }
+function dataDirFor(owner = null) { return retroDataDirFor(owner); }
 function ensureDir(owner = null) { fs.mkdirSync(dataDirFor(owner), { recursive: true, mode: 0o700 }); }
-function jobPath(id, owner = null) { return path.join(dataDirFor(owner), `retro-feedback-${id}.json`); }
-function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-feedback.log'); }
-function runnerEnvFor(owner) {
-  if (!owner || owner === hostUser()) return process.env;
-  const oauthToken = readUserOauthToken(owner);
-  if (!oauthToken) {
-    const error = new Error('Necesitás conectar tu cuenta de Claude para interpretar feedback.');
-    error.conflict = true;
-    throw error;
+function jobPath(id, owner = null) {
+  if (!FEEDBACK_JOB_ID_RE.test(String(id || ''))) {
+    throw Object.assign(new Error('Id de feedback inválido.'), { badRequest: true });
   }
-  return userRunnerEnv(owner, { oauthToken });
+  return path.join(dataDirFor(owner), `retro-feedback-${id}.json`);
 }
-
+function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-feedback.log'); }
 // id DETERMINÍSTICO por texto+ticket: reintentar el mismo pegado reusa el
 // MISMO job (no gasta tokens de nuevo), mismo patrón que tickets/learning.
 export function feedbackJobId(text, ticketRef) {
@@ -71,19 +63,24 @@ export function feedbackJobResult(job) {
 export function spawnRetroFeedbackRunner(id, owner) {
   ensureDir(owner);
   const logFile = logFileFor(owner);
-  const logFd = fs.openSync(logFile, 'a');
-  const child = spawn(process.execPath, [RUNNER, id], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: runnerEnvFor(owner),
-  });
-  child.on('error', (err) => {
-    try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL job ${id}: ${err?.message || err}\n`); } catch { /* noop */ }
-    try {
-      const job = readFeedbackJob(id, owner);
-      if (job && job.status === 'running') writeFeedbackJob(id, { ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de feedback.', updatedAt: Date.now() }, owner);
-    } catch { /* noop */ }
-  });
-  child.unref();
-  fs.closeSync(logFd);
+  let logFd = null;
+  try {
+    logFd = fs.openSync(logFile, 'a');
+    const child = spawn(process.execPath, [RUNNER, id], {
+      detached: true, stdio: ['ignore', logFd, logFd],
+      env: retroRunnerEnvFor(owner, { missingOauthMessage: 'Necesitás conectar tu cuenta de Claude para interpretar feedback.' }),
+    });
+    child.on('error', (err) => {
+      try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL job ${id}: ${err?.message || err}\n`); } catch { /* noop */ }
+      try {
+        const job = readFeedbackJob(id, owner);
+        if (job && job.status === 'running') writeFeedbackJob(id, { ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de feedback.', updatedAt: Date.now() }, owner);
+      } catch { /* noop */ }
+    });
+    child.unref();
+  } finally {
+    if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* noop */ } }
+  }
 }
 
 export function feedbackPrompt(job) {

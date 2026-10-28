@@ -15,7 +15,7 @@ Persiste las carpetas manuales con las que cada usuario organiza la barra de Ses
 
 El host guarda `session-folders.json` en `~/.cwc-data/`. Cada inquilino usa el mismo nombre dentro de su `userDataDir(owner)`, es decir, su espacio privado bajo `~/.cwc-users/<usuario>/.cwc-data/`.
 
-La forma persistida es `{ version: 1, folders: [...], items: { "<key>": "<folderId>" }, order: { "<container>": ["<key>", ...] } }`. Las claves de ítem distinguen `chat:<chatId>` y `tmux:<socket>:<nombre>`. Un contenedor es exactamente `world:<worldKey>`, con `worldKey` validado por `/^[a-z0-9_-]{1,40}$/i`, o `folder:<folderId>`, con `folderId` validado por `/^f_[0-9a-f]{10}$/` y existente para ese usuario. Todas las escrituras pasan por `writeJsonAtomic`; una lectura ausente o con JSON corrupto cae a un estado vacío, mientras que un documento parseable se sanea por ítem.
+La forma persistida es `{ version: 1, folders: [...], items: { "<key>": "<folderId>" }, order: { "<container>": ["<key>", ...] } }`. Las claves de ítem distinguen `chat:<chatId>` y `tmux:<socket>:<nombre>`. Un contenedor es exactamente `world:<worldKey>`, con `worldKey` validado por `/^[a-z0-9_-]{1,40}$/i`, o `folder:<folderId>`, con `folderId` validado por `/^f_[0-9a-f]{10}$/` y existente para ese usuario. Todas las escrituras pasan por `writeJsonAtomic`; una lectura ausente cae a un estado vacío, un JSON corrupto se mueve a `.corrupt-<ts>.bak` antes de devolver vacío y otros errores de lectura responden 500 sin sobrescribir el store.
 
 ## Endpoints
 
@@ -30,7 +30,7 @@ La forma persistida es `{ version: 1, folders: [...], items: { "<key>": "<folder
 
 ## Reglas que lo gobiernan
 
-- El dueño siempre es `principalOf(req).username || hostUser()`. No hay bypass ni vista global para administradores.
+- El dueño es el `username` explícito del principal; solo el principal `type: 'token'` cae al `hostUser()`. Un principal sin dueño válido recibe 401. No hay bypass ni vista global para administradores.
 - La ruta de datos se resuelve **por operación** con `storeFile(owner)`. Está prohibido calcularla en una constante de módulo: congelaría el espacio del host y cruzaría datos entre inquilinos (console:BUG-2185).
 - Las validaciones son allowlist y fail-closed para nombres, mundos, ids y claves. Hay un máximo de 50 carpetas y 2.000 asignaciones por usuario.
 - Solo se admite un nivel de subcarpetas: el padre debe existir, compartir `world` y ser raíz.

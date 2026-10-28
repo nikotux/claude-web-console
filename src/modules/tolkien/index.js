@@ -39,7 +39,7 @@ import {
 } from './sources-shared.js';
 import { ensureLocalUsers, resolveTolkienLoginEmail } from './local-users.js';
 import {
-  listEnvs, getEnv, getEnvByChat, saveEnv, envIdForChat, dbNameFor, allocatePort, atCap, isEnvAlive, MAX_ENVS, PORT_RANGE,
+  listEnvs, getEnv, getEnvByChat, saveEnv, patchEnv, envIdForChat, dbNameFor, allocatePort, atCap, isEnvAlive, MAX_ENVS, PORT_RANGE,
 } from './env-store.js';
 import { teardownEnv, reattachEnvs, spawnEnvProvision, unitActive } from './env-shared.js';
 import {
@@ -184,25 +184,47 @@ function maybeStartPostpull(cwd, moved, popConflict = false) {
 // persiste en DATA_DIR (CLAUDE.md regla 2: estado detectable tras reinicio
 // sin depender solo de variables en memoria) y se cachea acá para no pegarle
 // al disco en cada GET /status.
-function loadLastFetchAt() {
+function loadLastFetchByRepo() {
   try {
     const parsed = JSON.parse(fs.readFileSync(LASTFETCH_FILE, 'utf8'));
-    return typeof parsed.lastFetchAt === 'number' ? parsed.lastFetchAt : null;
+    if (parsed?.lastFetchByRepo && typeof parsed.lastFetchByRepo === 'object') {
+      return new Map(Object.entries(parsed.lastFetchByRepo)
+        .filter(([, ts]) => typeof ts === 'number'));
+    }
+    // Compatibilidad con el formato anterior, que pertenecía al clon host.
+    return typeof parsed?.lastFetchAt === 'number'
+      ? new Map([[path.resolve(config.projectDir), parsed.lastFetchAt]])
+      : new Map();
   } catch {
-    return null; // no existe todavía (primer arranque) o está corrupto
+    return new Map(); // no existe todavía (primer arranque) o está corrupto
   }
 }
 
-async function saveLastFetchAt(ts) {
+const lastFetchByRepo = loadLastFetchByRepo();
+let lastFetchSave = Promise.resolve();
+
+function lastFetchAtFor(cwd) {
+  return lastFetchByRepo.get(path.resolve(cwd)) ?? null;
+}
+
+async function saveLastFetchAt(cwd, ts) {
+  lastFetchByRepo.set(path.resolve(cwd), ts);
+  // Dos clones distintos pueden actualizarse en paralelo: serializar el archivo
+  // evita que sus escrituras se pisen aunque el lock git sea por cwd.
+  lastFetchSave = lastFetchSave.then(async () => {
+    try {
+      await fsp.mkdir(DATA_DIR, { recursive: true });
+      await fsp.writeFile(LASTFETCH_FILE, JSON.stringify({
+        lastFetchByRepo: Object.fromEntries(lastFetchByRepo),
+      }), 'utf8');
+    } catch (err) {
+      console.error('[tolkien] No se pudo persistir lastFetchAt:', err.message);
+    }
+  });
   try {
-    await fsp.mkdir(DATA_DIR, { recursive: true });
-    await fsp.writeFile(LASTFETCH_FILE, JSON.stringify({ lastFetchAt: ts }), 'utf8');
-  } catch (err) {
-    console.error('[tolkien] No se pudo persistir lastFetchAt:', err.message);
-  }
+    await lastFetchSave;
+  } catch { /* la cadena captura sus propios errores para seguir utilizable */ }
 }
-
-let lastFetchAt = loadLastFetchAt();
 
 export async function status(cwd = config.projectDir) {
   const git = gitFor(cwd);
@@ -283,12 +305,23 @@ export async function status(cwd = config.projectDir) {
     subject: subject || '', author: author || '', date: date || '',
     dirty: dirtyCount > 0, dirtyCount, behind, ahead, mainBehind,
     onMain: branch === 'main',
-    lastFetch: lastFetchAt,
+    lastFetch: lastFetchAtFor(cwd),
     pendingAutoStash,
   };
 }
 
-let busy = false;
+const busyRepos = new Set();
+
+function claimRepo(cwd) {
+  const key = path.resolve(cwd);
+  if (busyRepos.has(key)) return null;
+  busyRepos.add(key);
+  return key;
+}
+
+function releaseRepo(key) {
+  if (key) busyRepos.delete(key);
+}
 
 // Extraída de la ruta POST /refresh-data para que el módulo visado/ pueda
 // invocarla con la autoridad del aprobador sin volver a entrar por HTTP.
@@ -310,7 +343,18 @@ export function opRefreshData() {
 }
 
 export function opProvisionEnv({ chatId, base, packageRef }) {
-  if (!chatId) return { status: 400, body: { error: 'Falta chatId.' } };
+  if (typeof chatId !== 'string' || !chatId.trim()) {
+    return { status: 400, body: { error: 'Falta chatId válido.' } };
+  }
+  const baseRef = base === undefined || base === null || base === '' ? 'main' : base;
+  if (
+    typeof baseRef !== 'string'
+    || baseRef.startsWith('-')
+    || baseRef.includes('..')
+    || !/^[A-Za-z0-9._\/-]+$/.test(baseRef)
+  ) {
+    return { status: 400, body: { error: 'Referencia base inválida.' } };
+  }
   const id = envIdForChat(chatId);
   const rec = getEnv(id);
   if (rec && isEnvAlive(rec)) return { status: 200, body: { id, already: true, status: rec.status } };
@@ -321,7 +365,7 @@ export function opProvisionEnv({ chatId, base, packageRef }) {
     id,
     chatId,
     packageRef: packageRef || null,
-    base: base || 'main',
+    base: baseRef,
     port,
     db: dbNameFor(id),
     branch: `cwc-env/${id}`,
@@ -333,7 +377,12 @@ export function opProvisionEnv({ chatId, base, packageRef }) {
     updatedAt: Date.now(),
     heartbeatAt: Date.now(),
   });
-  spawnEnvProvision(id);
+  try {
+    spawnEnvProvision(id);
+  } catch (err) {
+    patchEnv(id, { status: 'error', error: String(err?.message || err).slice(0, 500) });
+    throw err;
+  }
   return { status: 200, body: { id, status: 'provisioning', port } };
 }
 
@@ -350,7 +399,7 @@ export async function opTeardownEnv(id, force) {
       },
     };
   }
-  return { status: 200, body: r2 };
+  return { status: r2.ok === false ? 500 : 200, body: r2 };
 }
 
 // Publica exclusivamente la rama nominal de un entorno en el origin de Tolkien
@@ -369,9 +418,9 @@ export async function opPushEnvBranch(id) {
   if (rec.branch !== expectedBranch) {
     return { status: 409, body: { error: `La rama registrada no es ${expectedBranch}.` } };
   }
-  if (busy) return { status: 409, body: { error: 'Ya hay una operación git en curso.' } };
+  const busyKey = claimRepo(rec.worktree);
+  if (!busyKey) return { status: 409, body: { error: 'Ya hay una operación git en curso.' } };
 
-  busy = true;
   const git = gitFor(rec.worktree);
   try {
     const current = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
@@ -457,7 +506,7 @@ export async function opPushEnvBranch(id) {
   } catch (err) {
     return { status: 500, body: { error: String(err?.message || err) } };
   } finally {
-    busy = false;
+    releaseRepo(busyKey);
   }
 }
 
@@ -465,16 +514,18 @@ export async function opFetch(cwd = config.projectDir) {
   const git = gitFor(cwd);
   // Comparte el flag `busy` con /update: un fetch y un pull simultáneos
   // sobre el mismo .git contienden por locks de git y fallan espurio.
-  if (busy) return { status: 409, body: { error: 'Ya hay una operación git en curso.' } };
-  busy = true;
+  const busyKey = claimRepo(cwd);
+  if (!busyKey) return { status: 409, body: { error: 'Ya hay una operación git en curso.' } };
   try {
     const f = await git(['fetch', '--prune', 'origin']);
-    if (f.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); }
+    if (f.code === 0) await saveLastFetchAt(cwd, Date.now());
     return { status: 200, body: { ok: f.code === 0, error: f.code === 0 ? undefined : (f.stderr || 'fetch falló'), status: await status(cwd) } };
-  } catch {
-    return { status: 500, body: { error: 'No se pudo leer el estado del repo.' } };
+  } catch (err) {
+    const message = String(err?.message || err);
+    console.error(`[tolkien] fetch falló en ${cwd}:`, message);
+    return { status: 500, body: { error: `No se pudo leer el estado del repo: ${message}` } };
   } finally {
-    busy = false;
+    releaseRepo(busyKey);
   }
 }
 
@@ -517,15 +568,17 @@ export async function opBranches(cwd = config.projectDir) {
 
 export async function opUpdate(cwd = config.projectDir) {
   const git = gitFor(cwd);
-  if (busy) return { status: 409, body: { error: 'Ya hay una actualización en curso.' } };
-  busy = true;
+  const busyKey = claimRepo(cwd);
+  if (!busyKey) return { status: 409, body: { error: 'Ya hay una actualización en curso.' } };
   const log = [];
+  let stashed = false;
+  let stashPending = false;
   try {
     // 0) Refrescar SIEMPRE las remote-tracking refs (origin/main incluido).
     //    Así el ff de main y el mainBehind del status ven lo último de Chris.
     const fetch = await git(['fetch', '--prune', 'origin']);
     log.push({ step: 'fetch', code: fetch.code, out: fetch.stdout || fetch.stderr || '(ok)' });
-    if (fetch.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); }
+    if (fetch.code === 0) await saveLastFetchAt(cwd, Date.now());
 
     const branchRes = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
     // Igual que status(): si no se pudo determinar la rama, abortar explícito
@@ -578,7 +631,6 @@ export async function opUpdate(cwd = config.projectDir) {
     if (dirtyRes.code !== 0) throw new Error(`git status falló: ${dirtyRes.stderr || 'código ' + dirtyRes.code}`);
     const dirty = dirtyRes.stdout.length > 0;
 
-    let stashed = false;
     if (dirty) {
       const s = await git(['stash', 'push', '-u', '-m', AUTO_STASH_MSG]);
       log.push({ step: 'stash', code: s.code, out: s.stdout || s.stderr });
@@ -600,6 +652,7 @@ export async function opUpdate(cwd = config.projectDir) {
         };
       }
       stashed = s.code === 0 && !noLocalChanges;
+      stashPending = stashed;
     }
 
     // SHA de HEAD ANTES del pull: si después hay que revertir, se vuelve a
@@ -612,13 +665,14 @@ export async function opUpdate(cwd = config.projectDir) {
 
     const pull = await git(['pull', '--ff-only', 'origin']);
     log.push({ step: 'pull', code: pull.code, out: pull.stdout || pull.stderr });
-    if (pull.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); } // pull incluye fetch
+    if (pull.code === 0) await saveLastFetchAt(cwd, Date.now()); // pull incluye fetch
 
     let popConflict = false;
     if (stashed) {
       const pop = await git(['stash', 'pop']);
       log.push({ step: 'stash-pop', code: pop.code, out: pop.stdout || pop.stderr });
       popConflict = pop.code !== 0; // conflicto al reaplicar: queda en el stash
+      if (!popConflict) stashPending = false;
       if (popConflict) {
         // El stash no se pudo reaplicar limpio. Revertir el avance del
         // pull SOLO si el pull fue exitoso Y movió HEAD de verdad: con
@@ -668,10 +722,33 @@ export async function opUpdate(cwd = config.projectDir) {
       && headBefore.stdout && headBefore.stdout !== headAfter.stdout;
     const postBuild = maybeStartPostpull(cwd, pullMovedHead, popConflict);
     return { status: 200, body: { ok, onMain: true, popConflict, stashed, log, status: st, envs, postBuild } };
-  } catch {
-    return { status: 500, body: { error: 'Falló la actualización.', log } };
+  } catch (err) {
+    const message = String(err?.message || err);
+    let stashRecovered = null;
+    if (stashPending) {
+      try {
+        const pop = await git(['stash', 'pop']);
+        stashRecovered = pop.code === 0;
+        log.push({ step: 'stash-pop-recovery', code: pop.code, out: pop.stdout || pop.stderr });
+        if (stashRecovered) stashPending = false;
+      } catch (popErr) {
+        const popMessage = String(popErr?.message || popErr);
+        log.push({ step: 'stash-pop-recovery', code: null, out: popMessage });
+        stashRecovered = false;
+      }
+    }
+    console.error(`[tolkien] update falló en ${cwd}: ${message}; stashed=${stashed}; stashRecovered=${stashRecovered}`);
+    return {
+      status: 500,
+      body: {
+        error: `Falló la actualización: ${message}`,
+        stashed,
+        stashRecovered,
+        log,
+      },
+    };
   } finally {
-    busy = false;
+    releaseRepo(busyKey);
   }
 }
 
@@ -684,12 +761,12 @@ export async function opUpdate(cwd = config.projectDir) {
 // Tras un rebase exitoso el PR necesita force-push al re-enviarlo (se avisa).
 export async function opRebaseBranch(branch, cwd = config.projectDir) {
   const git = gitFor(cwd);
-  if (busy) return { status: 409, body: { error: 'Ya hay una operación git en curso.' } };
   // Validación estricta del nombre de rama (nunca texto arbitrario a git).
   if (!branch || branch.includes('..') || !/^[A-Za-z0-9._/-]+$/.test(branch)) {
     return { status: 400, body: { error: 'Nombre de rama inválido.' } };
   }
-  busy = true;
+  const busyKey = claimRepo(cwd);
+  if (!busyKey) return { status: 409, body: { error: 'Ya hay una operación git en curso.' } };
   const log = [];
   try {
     const cur = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout || '';
@@ -702,7 +779,7 @@ export async function opRebaseBranch(branch, cwd = config.projectDir) {
 
     const f = await git(['fetch', '--prune', 'origin']);
     log.push({ step: 'fetch', code: f.code, out: f.stdout || f.stderr || '(ok)' });
-    if (f.code === 0) { lastFetchAt = Date.now(); await saveLastFetchAt(lastFetchAt); }
+    if (f.code === 0) await saveLastFetchAt(cwd, Date.now());
 
     // ¿Hace falta? Si la rama ya tiene todo main, no hay nada que rebasar.
     const bh = await git(['rev-list', '--count', 'HEAD..origin/main']);
@@ -779,10 +856,12 @@ export async function opRebaseBranch(branch, cwd = config.projectDir) {
           : 'Rama rebasada sobre main. El PR va a necesitar force-push cuando lo re-envíes.',
       },
     };
-  } catch {
-    return { status: 500, body: { error: 'Falló el rebase.', log } };
+  } catch (err) {
+    const message = String(err?.message || err);
+    console.error(`[tolkien] rebase falló en ${cwd}:`, message);
+    return { status: 500, body: { error: `Falló el rebase: ${message}`, log } };
   } finally {
-    busy = false;
+    releaseRepo(busyKey);
   }
 }
 
@@ -821,8 +900,11 @@ export default {
         });
       } catch (err) {
         const message = String(err?.message || err);
-        const conflict = /sesión .*no está confirmada|GUARD DURO|puertos/i.test(message);
-        return res.status(conflict ? 409 : 500).json({ error: message });
+        const fallbackConflict = /sesión .*no está confirmada|GUARD DURO|puertos/i.test(message);
+        const statusCode = Number.isInteger(err?.statusCode)
+          ? err.statusCode
+          : (fallbackConflict ? 409 : 500);
+        return res.status(statusCode).json({ error: message });
       }
     });
 
@@ -929,20 +1011,35 @@ export default {
 
     r.post('/envs/provision', (req, res) => {
       if (!isHostAdmin(req)) return res.status(403).json({ error: HOST_ONLY_MSG });
-      const r2 = opProvisionEnv({ chatId: req.body?.chatId, base: req.body?.base, packageRef: req.body?.packageRef });
-      res.status(r2.status).json(r2.body);
+      try {
+        const r2 = opProvisionEnv({ chatId: req.body?.chatId, base: req.body?.base, packageRef: req.body?.packageRef });
+        res.status(r2.status).json(r2.body);
+      } catch (err) {
+        console.error('[tolkien] No se pudo provisionar el entorno:', err?.message || err);
+        res.status(500).json({ error: String(err?.message || err) });
+      }
     });
 
     r.post('/envs/:id/teardown', async (req, res) => {
       if (!isHostAdmin(req)) return res.status(403).json({ error: HOST_ONLY_MSG });
-      const r2 = await opTeardownEnv(String(req.params.id || ''), req.body?.force === true);
-      res.status(r2.status).json(r2.body);
+      try {
+        const r2 = await opTeardownEnv(String(req.params.id || ''), req.body?.force === true);
+        res.status(r2.status).json(r2.body);
+      } catch (err) {
+        console.error('[tolkien] No se pudo desmontar el entorno:', err?.message || err);
+        res.status(500).json({ error: String(err?.message || err) });
+      }
     });
 
     r.post('/envs/:id/push', async (req, res) => {
       if (!isHostAdmin(req)) return res.status(403).json({ error: HOST_ONLY_MSG });
-      const r2 = await opPushEnvBranch(String(req.params.id || ''));
-      res.status(r2.status).json(r2.body);
+      try {
+        const r2 = await opPushEnvBranch(String(req.params.id || ''));
+        res.status(r2.status).json(r2.body);
+      } catch (err) {
+        console.error('[tolkien] No se pudo publicar el entorno:', err?.message || err);
+        res.status(500).json({ error: String(err?.message || err) });
+      }
     });
 
     // Operaciones sobre el clon propio del usuario → cualquier usuario autenticado;
@@ -1003,12 +1100,23 @@ export default {
     // sala admite además al host-admin o a un participante de ESA sala y usa el
     // worktree del record. La identidad siempre se resuelve por principal.
     r.get('/local-enter', async (req, res) => {
-      const envs = listEnvs();
       const requestedPort = (typeof req.query.port === 'string' ? req.query.port.trim() : '');
-      const envRec = envs
-        .filter(isEnvAlive)
-        .find((env) => String(env.port) === requestedPort);
-      const sala = envRec ? salaChat(envRec.chatId) : null;
+      let envs;
+      let envRec;
+      let sala;
+      try {
+        envs = listEnvs();
+        envRec = envs
+          .filter(isEnvAlive)
+          .find((env) => String(env.port) === requestedPort);
+        sala = envRec ? salaChat(envRec.chatId) : null;
+      } catch (err) {
+        console.error('[tolkien] No se pudo preparar local-enter:', err?.message || err);
+        return res.status(500).type('html').send(localEnterErrPage(
+          'No se pudo entrar al Tolkien local',
+          String(err?.message || err),
+        ));
+      }
       const principal = principalOf(req);
       const user = principal?.username || hostUser();
       const puedeEntrarASala = !!principal && !!sala

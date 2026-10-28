@@ -218,10 +218,12 @@ run().then(() => finish(0)).catch((err) => {
   log('FALLÓ:', err?.message || err);
   try {
     const prev = readVerifyState();
+    const errorAt = Date.now();
     writeVerifyState({
       ...prev,
       status: 'error',
       error: String(err?.message || err).slice(0, 300),
+      errorAt,
       scannedAt: prev.scannedAt || 0,
     });
   } catch { /* noop */ }

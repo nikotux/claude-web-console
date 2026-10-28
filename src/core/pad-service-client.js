@@ -16,6 +16,7 @@
 // { ok:false, error } en vez de tirar una excepción sin control — un módulo que
 // use este cliente debe degradar con gracia (cache/último estado bueno), nunca
 // tumbar el resto de Consola.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -148,14 +149,22 @@ function release(key) {
 }
 function signal429(key) { gateFor(key).pauseUntil = Date.now() + BACKOFF_MS; }
 
-// --- Caché de lectura: urlPath -> { data, ts }. Solo GET. --------------------
+// --- Caché de lectura: url + tokenTag + urlPath. Solo GET. ------------------
 const readCache = new Map();
-function cacheGet(urlPath) {
-  const hit = readCache.get(urlPath);
+function tokenTag(token) {
+  return crypto.createHash('sha256').update(token).digest('hex').slice(0, 16);
+}
+function cacheKey(url, token, urlPath) {
+  return `${url}::${tokenTag(token)}::${urlPath}`;
+}
+function cacheGet(key) {
+  const hit = readCache.get(key);
   if (hit && (Date.now() - hit.ts) < CACHE_TTL_MS) return hit.data;
   return undefined;
 }
-function cacheSet(urlPath, data) { readCache.set(urlPath, { data, ts: Date.now() }); }
+function cacheSet(key, data, url, tag, urlPath) {
+  readCache.set(key, { data, ts: Date.now(), url, tag, urlPath });
+}
 // Un write invalida TODAS las lecturas cacheadas de ese workspace (coarse pero
 // correcto: los writes son raros vs. los reads, y así jamás servimos algo viejo
 // tras editar). Si no se puede parsear el workspace, se limpia todo por las dudas.
@@ -222,8 +231,9 @@ async function doFetch(method, urlPath, { body, url, token } = {}) {
 // invalidan. La forma del retorno ({ ok, data } / { ok:false, error }) no cambia.
 async function request(method, urlPath, { body, url = DEFAULT_URL, token } = {}) {
   const isGet = method === 'GET';
-  if (isGet && CACHE_ENABLED) {
-    const cached = cacheGet(urlPath);
+  const key = isGet && token ? cacheKey(url, token, urlPath) : null;
+  if (isGet && token && CACHE_ENABLED) {
+    const cached = cacheGet(key);
     // Clon defensivo: el caché guarda una sola referencia; sin copiar, un caller
     // que mute el resultado (p.ej. `.sort()` in-place) corrompería a los demás.
     if (cached !== undefined) {
@@ -232,7 +242,7 @@ async function request(method, urlPath, { body, url = DEFAULT_URL, token } = {})
   }
   const r = await doFetch(method, urlPath, { body, url, token });
   if (isGet) {
-    if (CACHE_ENABLED && r.ok) cacheSet(urlPath, r.data);
+    if (token && CACHE_ENABLED && r.ok) cacheSet(key, r.data, url, tokenTag(token), urlPath);
   } else if (r.ok && CACHE_ENABLED) {
     invalidateForWrite(urlPath);
   }
@@ -560,9 +570,16 @@ let sweepTimer = null;
 export function startCacheSweep({ intervalMs = 20_000 } = {}) {
   if (!CACHE_ENABLED || sweepTimer) return null;
   sweepTimer = setInterval(async () => {
-    for (const urlPath of [...readCache.keys()]) {
-      const r = await doFetch('GET', urlPath, { url: DEFAULT_URL, token: readSessionToken(DEFAULT_URL) });
-      if (r.ok) cacheSet(urlPath, r.data);
+    const hostToken = readSessionToken(DEFAULT_URL);
+    const hostTag = hostToken ? tokenTag(hostToken) : null;
+    for (const [key, entry] of [...readCache.entries()]) {
+      // Invariante C Pad per-usuario: nunca usar el token host para datos de un inquilino.
+      if (hostToken && entry.url === DEFAULT_URL && entry.tag === hostTag) {
+        const r = await doFetch('GET', entry.urlPath, { url: DEFAULT_URL, token: hostToken });
+        if (r.ok) cacheSet(key, r.data, entry.url, entry.tag, entry.urlPath);
+      } else if ((Date.now() - entry.ts) >= CACHE_TTL_MS) {
+        readCache.delete(key);
+      }
     }
   }, intervalMs);
   sweepTimer.unref?.();

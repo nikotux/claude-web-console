@@ -10,6 +10,7 @@ const DEFAULT_RAW_RETENTION_HOURS = 48;
 const ROLLUP_TABLES = new Set(['rollup_hourly', 'rollup_daily']);
 
 let database;
+let databasePath;
 const workerExistsStatements = new WeakMap();
 
 function moduleDataDir() {
@@ -118,11 +119,14 @@ function migrate(db) {
 }
 
 export function openDb() {
-  if (database?.open) return database;
-
   const dataDir = moduleDataDir();
+  const nextDatabasePath = path.join(dataDir, 'monitor.db');
+  if (database?.open && databasePath === nextDatabasePath) return database;
+  if (database?.open) database.close();
+
   fs.mkdirSync(dataDir, { recursive: true });
-  database = new Database(path.join(dataDir, 'monitor.db'), { timeout: 5_000 });
+  database = new Database(nextDatabasePath, { timeout: 5_000 });
+  databasePath = nextDatabasePath;
   database.pragma('journal_mode = WAL');
   database.pragma('synchronous = NORMAL');
   database.pragma('busy_timeout = 5000');
@@ -153,10 +157,10 @@ export function upsertWorker(worker) {
       COALESCE(@active, 1), @firstSeen, @lastSeen
     )
     ON CONFLICT(wg_public_key) DO UPDATE SET
-      peer_name = excluded.peer_name,
-      display_name = excluded.display_name,
-      ip = excluded.ip,
-      leader_id = excluded.leader_id,
+      peer_name = COALESCE(excluded.peer_name, workers.peer_name),
+      display_name = COALESCE(excluded.display_name, workers.display_name),
+      ip = COALESCE(excluded.ip, workers.ip),
+      leader_id = COALESCE(excluded.leader_id, workers.leader_id),
       active = COALESCE(@active, workers.active),
       last_seen = excluded.last_seen
   `).run({
@@ -195,6 +199,9 @@ function assertWorkerExists(db, workerId, { nullable = false } = {}) {
 
 function insertSampleWithDb(db, sample) {
   const workerId = value(sample, 'workerId', 'worker_id');
+  const rawTs = value(sample, 'ts') ?? Date.now();
+  const parsedTs = new Date(rawTs);
+  if (Number.isNaN(parsedTs.getTime())) throw new TypeError('ts inválido');
   // Las bases existentes no se recrean para sumar la FK; esta capa también las protege.
   assertWorkerExists(db, workerId);
 
@@ -208,7 +215,7 @@ function insertSampleWithDb(db, sample) {
     )
   `).run({
     workerId,
-    ts: value(sample, 'ts') ?? new Date().toISOString(),
+    ts: parsedTs.toISOString(),
     status: value(sample, 'status'),
     rttAvg: value(sample, 'rttAvg', 'rtt_avg'),
     rttMin: value(sample, 'rttMin', 'rtt_min'),
@@ -393,11 +400,22 @@ export function pruneRaw(retentionHours = DEFAULT_RAW_RETENTION_HOURS) {
   if (!Number.isFinite(retentionHours) || retentionHours < 0) {
     throw new TypeError('retentionHours debe ser un número no negativo');
   }
-  const cutoff = new Date(Date.now() - retentionHours * 60 * 60 * 1_000).toISOString();
-  return openDb().prepare('DELETE FROM samples WHERE ts < ?').run(cutoff).changes;
+  const db = openDb();
+  const safeRetentionHours = Math.max(1, retentionHours);
+  const retentionCutoff = new Date(
+    Date.now() - safeRetentionHours * 60 * 60 * 1_000,
+  ).toISOString();
+  const lastRollup = db.prepare(
+    'SELECT MAX(bucket) AS bucket FROM rollup_hourly',
+  ).get()?.bucket;
+  if (!lastRollup) return 0;
+
+  const cutoff = retentionCutoff < lastRollup ? retentionCutoff : lastRollup;
+  return db.prepare('DELETE FROM samples WHERE ts < ?').run(cutoff).changes;
 }
 
 export function closeDb() {
   if (database?.open) database.close();
   database = undefined;
+  databasePath = undefined;
 }

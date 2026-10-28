@@ -108,9 +108,16 @@ switch (cmd) {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const runner = path.join(here, 'cwc-comms-runner.js');
     const child = spawn(process.execPath, [runner], { detached: true, stdio: 'ignore', env: process.env });
-    C.writeLock(child.pid);
-    child.unref();
-    out({ ok: true, running: true, started: true });
+    child.on('error', (err) => {
+      try { console.error('[comms] no se pudo lanzar el runner:', String(err?.message || err)); } catch { /* noop */ }
+    });
+    if (child.pid) {
+      C.writeLock(child.pid);
+      child.unref();
+      out({ ok: true, running: true, started: true });
+    } else {
+      out({ ok: false, running: false, started: false, error: 'No se pudo lanzar el runner.' });
+    }
     break;
   }
   case 'send': {
@@ -119,7 +126,7 @@ switch (cmd) {
     const { flags, rest } = parseFlags(process.argv.slice(3));
     const channel = rest[0]; const action = rest[1];
     const who = rest[2] ? resolveContact(rest[2]) : null;
-    const text = rest.slice(3).join(' ').trim();
+    const text = rest.slice(who ? 3 : 2).join(' ').trim();
     if (!channel || !action) { console.error('Uso: cwc-comms send <github|desk|teams> <action> [contacto] [--pr N] [--ticket N] [--dry] -- <texto>'); process.exit(1); }
     const GW = await import('../src/modules/comms/gateway-shared.js');
     const payload = { text };

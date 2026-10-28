@@ -82,7 +82,7 @@ import { appendHistorico, extractSessionWork, setTicketClaudeDirResolver } from 
 setTicketClaudeDirResolver((owner) => userClaudeDir(owner || hostUser()));
 import { appendChatContext as appendLearningChatContext } from '../learning/store.js';
 import { projectsFor } from '../projects/index.js';
-import { queueRetroDistill } from '../retro/shared.js';
+import { queueRetroDistill } from '../retro/server-shared.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
 import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, readTurnMetrics, analyzeCalibration, learnedSignalBias, MODEL_LEVELS, FORBIDDEN_AUTO, EFFORT_LEVELS, effortForModel, effortForLevel, effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, readWindowPressure, WINDOW_PRESSURE_CONSERVE, levelsFor } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
@@ -2318,7 +2318,7 @@ class Chat {
     // APRENDIDAS (minadas de los logs reales, alternativa determinística al #6)
     // ANTES de gastar el clasificador Haiku — si un patrón de "up" aprendido
     // matchea, subimos sin llamar al modelo. Vacío hasta tener datos ⇒ sin efecto.
-    if (kind === 'ambiguous' && learnedSignalBias(text, Date.now()) === 'up') kind = 'up';
+    if (kind === 'ambiguous' && learnedSignalBias(text, Date.now(), { dataDir: userDataDir(this.owner || hostUser()) }) === 'up') kind = 'up';
 
     // Movimiento del NIVEL BASE (uno por turno). Prioridad: corrección > código/
     // largo > bajada (ack/goahead) > bajada por inactividad (solo si ambiguo).
@@ -2357,7 +2357,7 @@ class Chat {
       this._overrideRestore = levels[base];
       if (this.model !== 'haiku') {
         this.setModel('haiku', { auto: true });
-        logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'override', from: levels[base], to: 'haiku', text: text.slice(0, 150) });
+        logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'override', from: levels[base], to: 'haiku', text: text.slice(0, 150) }, { dataDir: userDataDir(this.owner || hostUser()) });
       }
       // El logTurn se difiere al evento `result` (donde llega el usage/caché,
       // los tool counts reales y el modelo REAL del turno) — acá solo guardamos
@@ -2375,7 +2375,7 @@ class Chat {
         const source = kind === 'strong_up' ? 'correction'
           : (kind === 'ambiguous' || kind === 'none') ? 'idle' // el único cambio posible acá es idle-decay
             : 'heuristic';
-        logDecision({ chatId: this.id, sessionId: this.sessionId, source, from, to: next, text: text.slice(0, 150) });
+        logDecision({ chatId: this.id, sessionId: this.sessionId, source, from, to: next, text: text.slice(0, 150) }, { dataDir: userDataDir(this.owner || hostUser()) });
       }
     } else if (kind === 'ambiguous' && this._routerClassifyThrottle === 0) {
       // Heurística sin opinión: clasificador RELATIVO a Haiku EN SEGUNDO PLANO
@@ -2418,7 +2418,7 @@ class Chat {
         cacheRead: u ? (u.cacheRead || 0) : null,
         input: u ? (u.input || 0) : null,
         output: u ? (u.output || 0) : null,
-      });
+      }, { dataDir: userDataDir(this.owner || hostUser()) });
     } catch { /* best-effort: nunca romper el turno por logging */ }
     this._lastResultModel = model;
     // F1 (caché-aware): recordamos cuánto leyó del caché el último turno. Si es
@@ -2455,7 +2455,7 @@ class Chat {
         const to = levels[lvl + 1];
         // Banner pasivo de consentimiento: el usuario decide (Reintentar/Ignorar).
         this._push({ type: 'redo-suggest', from: this.model, to });
-        logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'judge', from: this.model, to, text: '(juez AutoMix: respuesta insuficiente, ofrezco subir)' });
+        logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'judge', from: this.model, to, text: '(juez AutoMix: respuesta insuficiente, ofrezco subir)' }, { dataDir: userDataDir(this.owner || hostUser()) });
       })
       .catch(() => { /* best-effort: nunca romper el turno por el juez */ })
       .finally(() => { this._judging = false; });
@@ -2498,7 +2498,7 @@ class Chat {
           const next = levels[r.level];
           if (next && next !== from) {
             this.setModel(next, { auto: true });
-            logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'classifier', from, to: next, text: text.slice(0, 150) });
+            logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'classifier', from, to: next, text: text.slice(0, 150) }, { dataDir: userDataDir(this.owner || hostUser()) });
           }
         }
       })
@@ -2544,7 +2544,7 @@ class Chat {
     const next = levels[dec.level];
     if (next && next !== from) {
       this.setModel(next, { auto: true });
-      logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'insufficiency', from, to: next, text: `(${this._turnToolCount} tools, ${this._turnToolErrors} errores)` });
+      logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'insufficiency', from, to: next, text: `(${this._turnToolCount} tools, ${this._turnToolErrors} errores)` }, { dataDir: userDataDir(this.owner || hostUser()) });
     }
   }
 
@@ -2603,7 +2603,7 @@ class Chat {
     // PLAN-519 F1: si el chat optó por el TECHO FABLE (fableCeiling), fable SÍ es
     // parte de la escala automática → el guard no lo bloquea.
     if (auto && FORBIDDEN_AUTO.has(model) && !this._fableCeiling) {
-      logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'guard', from: this.model, to: model, text: 'bloqueado: fable no es automático' });
+      logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'guard', from: this.model, to: model, text: 'bloqueado: fable no es automático' }, { dataDir: userDataDir(this.owner || hostUser()) });
       return;
     }
     // Eje thinking effort (PEND-391 #3): mantener el effort ALINEADO al tier del
@@ -2749,7 +2749,7 @@ class Chat {
     const to = EFFORT_LEVELS[next];
     this.effort = to;
     this._push({ type: 'effort', effort: to, auto: true });
-    logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'effort', from: EFFORT_LEVELS[cur], to, text: dir > 0 ? '(caché-aware: subo effort en vez de saltar de tier)' : '(bajo effort antes que bajar de tier)' });
+    logDecision({ chatId: this.id, sessionId: this.sessionId, source: 'effort', from: EFFORT_LEVELS[cur], to, text: dir > 0 ? '(caché-aware: subo effort en vez de saltar de tier)' : '(bajo effort antes que bajar de tier)' }, { dataDir: userDataDir(this.owner || hostUser()) });
     this.onUpdate?.();
     this._maybeReopenForEffort(); // F3: aplicar en vivo si el motor está ocioso
   }
@@ -2832,7 +2832,7 @@ class Chat {
       const owner = this.owner || null;
       setTimeout(async () => {
         try {
-          const work = extractSessionWork(cwd, sid);
+          const work = extractSessionWork(userClaudeDir(owner || hostUser()), cwd, sid);
           const ctx = padContextForUser(owner);
           if (work) await appendHistorico(key, { sessionId: sid, resumen: work.summary, files: work.files }, ctx);
         } catch (err) { console.error('[chat] no pude guardar histórico del ticket:', err?.message); }
@@ -2857,7 +2857,7 @@ class Chat {
       const owner = this.owner || null;
       setTimeout(async () => {
         try {
-          const work = extractSessionWork(cwd, sid);
+          const work = extractSessionWork(userClaudeDir(owner || hostUser()), cwd, sid);
           const ctx = padContextForUser(owner);
           if (work) await appendLearningChatContext(lid, { summary: work.summary, files: work.files }, ctx);
         } catch (err) { console.error('[chat] no pude guardar contexto de aprendizaje:', err?.message); }
@@ -4548,10 +4548,11 @@ El archivo donde se guardan mis preferencias está en ${preferencesPath}. Cuando
     // reales sin re-parsear transcripts.
     r.get('/router-metrics', (req, res) => {
       try {
-        const metrics = readTurnMetrics({ limit: Math.min(Number(req.query?.limit) || 4000, 20000) });
+        const dataDir = userDataDir(principalOf(req).username || hostUser());
+        const metrics = readTurnMetrics({ limit: Math.min(Number(req.query?.limit) || 4000, 20000), dataDir });
         // F5(b): sumamos el análisis de calibración (propuestas aprobables +
         // señales aprendidas gateadas por datos). 0 tokens, solo lee los jsonl.
-        const calibration = req.query?.calibrate === '0' ? undefined : analyzeCalibration();
+        const calibration = req.query?.calibrate === '0' ? undefined : analyzeCalibration({ dataDir });
         res.json(calibration ? { ...metrics, calibration } : metrics);
       } catch (e) { res.status(500).json({ error: String(e?.message || e) }); }
     });

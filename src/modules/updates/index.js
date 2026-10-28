@@ -26,11 +26,11 @@ import { resolveDataDir } from '../../core/data-dir.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import fs from 'node:fs';
 import {
-  buildUpdatesCensus, syntaxCheck, readPackageJson, run, ROOT,
+  buildUpdatesCensus, syntaxCheck, readPackageJson, run, ROOT, isCensusStale,
 } from './shared.js';
 import {
   readJob, writeJob, isRunning, effectiveStatus, spawnUpdatesRunner, applyAuditFix, spawnAnalyzeRunner,
-  buildPlan, planActionCount,
+  buildPlan, planActionCount, applyNpm, backupNpmState,
 } from './orchestrate-shared.js';
 import {
   readRisk, writeRisk, isRiskRunning, effectiveRisk,
@@ -64,7 +64,7 @@ async function census({ fresh }) {
     // Sin caché en memoria (reinicio del server) → servir el último snapshot en
     // disco si es fresco, sin re-correr los npm outdated/audit (lentos).
     const disk = readPersisted();
-    if (disk && Date.now() - (disk.generatedAt || 0) < CACHE_TTL_MS) { mem = disk; memAt = disk.generatedAt; return disk; }
+    if (disk && !isCensusStale(disk) && Date.now() - (disk.generatedAt || 0) < CACHE_TTL_MS) { mem = disk; memAt = disk.generatedAt; return disk; }
   }
   if (inFlight) return inFlight; // dedup de censos concurrentes
   inFlight = buildUpdatesCensus();
@@ -86,10 +86,16 @@ const PKG_NAME_RE = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const NEVER_UPDATE = new Set(['baileys']);
 
-function npmUpdatable(name) {
-  const pkg = readPackageJson();
+function npmUpdatable(name, pkg = readPackageJson()) {
   const declared = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
   return Object.prototype.hasOwnProperty.call(declared, name) && !NEVER_UPDATE.has(name);
+}
+
+function rejectWhileUpdateRuns(res) {
+  const job = readJob();
+  if (!isRunning(job)) return false;
+  res.status(409).json({ error: 'hay una actualización orquestada en curso', job: effectiveStatus(job) });
+  return true;
 }
 
 export default {
@@ -115,6 +121,7 @@ export default {
     // corre node --check; si la sintaxis falla, avisa (el usuario revierte).
     router.post('/updates/npm', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
+      if (rejectWhileUpdateRuns(res)) return;
       const { pkg, version } = req.body || {};
       const name = String(pkg || '').trim();
       const ver = String(version || '').trim();
@@ -122,10 +129,8 @@ export default {
       if (!VERSION_RE.test(ver)) return res.status(400).json({ error: 'versión inválida' });
       if (!npmUpdatable(name)) return res.status(400).json({ error: 'paquete no actualizable desde acá (no declarado o vigilado)' });
       try {
-        const inst = await run('npm', ['install', `${name}@${ver}`, '--save-exact=false'], { timeout: 180_000 });
-        if (inst.failed || (!inst.ok && /npm error|ERR!/.test(inst.stderr))) {
-          return res.status(500).json({ error: (inst.stderr || 'npm install falló').trim().slice(0, 400) });
-        }
+        const inst = await applyNpm(name, ver);
+        if (!inst.ok) return res.status(500).json({ error: inst.detail || 'npm install falló' });
         invalidate(); // el censo cambió — tirar memoria Y disco
         const syntax = await syntaxCheck();
         res.json({
@@ -144,6 +149,7 @@ export default {
     // Actualizar el Claude Code CLI con su propio updater (admin).
     router.post('/updates/claude-cli', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
+      if (rejectWhileUpdateRuns(res)) return;
       try {
         const r = await run('claude', ['update'], { timeout: 180_000 });
         invalidate();
@@ -187,19 +193,25 @@ export default {
       if (isRunning(existing)) return res.status(409).json({ error: 'ya hay una actualización en curso', job: effectiveStatus(existing) });
       // Alcance: apt incluido por decisión (PLAN-779). El body puede forzar
       // {apt:false} para el modo "solo app" a futuro.
-      const scope = { apt: req.body?.scope?.apt !== false };
+      const requestedApt = req.body?.scope?.apt;
+      if (requestedApt !== undefined && typeof requestedApt !== 'boolean') return res.status(400).json({ error: 'scope.apt debe ser booleano' });
+      const scope = { apt: requestedApt !== false };
       // Saltos MAYORES que el usuario tildó para forzar (opt-in). Validados:
       // nombre válido + declarado en package.json + no vigilado (baileys).
-      const includeMajors = Array.isArray(req.body?.includeMajors)
-        ? req.body.includeMajors.map(String).filter((n) => PKG_NAME_RE.test(n) && npmUpdatable(n)).slice(0, 40)
-        : [];
+      const requestedMajors = req.body?.includeMajors;
+      if (requestedMajors !== undefined && (!Array.isArray(requestedMajors) || requestedMajors.length > 40)) {
+        return res.status(400).json({ error: 'includeMajors debe ser un array de hasta 40 elementos' });
+      }
+      const packageJson = readPackageJson();
+      const includeMajors = (requestedMajors || []).map(String).filter((n) => PKG_NAME_RE.test(n) && npmUpdatable(n, packageJson));
       const job = { running: true, phase: 'queued', scope, includeMajors, startedAt: Date.now(), heartbeat: Date.now(), steps: [], plan: null, log: [], error: null };
-      writeJob(job);
       try {
+        const queuedJob = { ...job, npmBackupDir: backupNpmState(job) };
+        writeJob(queuedJob);
         spawnUpdatesRunner();
-        res.json({ ok: true, job });
+        res.json({ ok: true, job: queuedJob });
       } catch (e) {
-        writeJob({ ...job, running: false, phase: 'error', error: 'No se pudo iniciar el runner.' });
+        try { writeJob({ ...job, running: false, phase: 'error', error: 'No se pudo iniciar el runner.' }); } catch { /* conservar respuesta JSON */ }
         res.status(500).json({ error: String(e.message || e).slice(0, 300) });
       }
     });
@@ -216,9 +228,13 @@ export default {
       const existing = readRisk();
       if (isRiskRunning(existing)) return res.status(409).json({ error: 'ya hay un análisis en curso', risk: effectiveRisk(existing) });
       // Conservar veredictos previos como base (se re-analiza y sobreescribe).
-      writeRisk({ running: true, phase: 'queued', startedAt: Date.now(), heartbeat: Date.now(), verdicts: existing?.verdicts || {}, error: null });
-      try { spawnAnalyzeRunner(); res.json({ ok: true }); }
-      catch (e) { writeRisk({ running: false, phase: 'error', error: 'No se pudo iniciar el análisis.' }); res.status(500).json({ error: String(e.message || e).slice(0, 200) }); }
+      const queuedRisk = { running: true, phase: 'queued', startedAt: Date.now(), heartbeat: Date.now(), verdicts: existing?.verdicts || {}, error: null };
+      try { writeRisk(queuedRisk); spawnAnalyzeRunner(); res.json({ ok: true }); }
+      catch (e) {
+        const error = String(e.message || e).slice(0, 200);
+        try { writeRisk({ ...existing, running: false, phase: 'error', error }); } catch { /* conservar respuesta JSON */ }
+        res.status(500).json({ error });
+      }
     });
     // Veredictos de riesgo (0 tokens, solo lee disco).
     router.get('/updates/risk', (req, res) => {
@@ -230,9 +246,10 @@ export default {
     // Reversible con git. Corre node --check después.
     router.post('/updates/audit-fix', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
+      if (rejectWhileUpdateRuns(res)) return;
       try {
         const r = await applyAuditFix();
-        mem = null;
+        invalidate();
         const syntax = await syntaxCheck();
         res.json({ ok: r.ok, detail: r.detail, syntax, revertHint: 'git checkout -- package.json package-lock.json && npm install' });
       } catch (e) {
@@ -247,6 +264,7 @@ export default {
     // /api/health/checks cuando el server vuelva.
     router.post('/updates/restart', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
+      if (rejectWhileUpdateRuns(res)) return;
       res.json({ ok: true, restarting: true });
       // Diferido para que la respuesta salga antes de que systemd nos mate.
       setTimeout(() => {

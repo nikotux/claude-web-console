@@ -47,10 +47,10 @@ import { verifyEnvContext } from '../tolkien/env-shared.js';
 import { tmuxArgs } from '../terminal/sessions.js';
 import * as padLocal from '../../core/pad-service-client.js';
 import {
-  readOpt, writeOpt, isOptRunning, readOptLock, writeOptLock, OPT_LOG,
+  readOpt, writeOpt, isOptRunning, readOptLock, writeOptLock, clearOptLock, OPT_LOG,
 } from './optimize-shared.js';
 import {
-  readCoh, writeCoh, isCohRunning, readCohLock, writeCohLock, COH_LOG, evaluateCoherence,
+  readCoh, writeCoh, isCohRunning, readCohLock, writeCohLock, clearCohLock, COH_LOG, evaluateCoherence,
 } from './coherence-shared.js';
 import {
   readScan, writeScan, scanStatus, isScanRunning, writeScanLock, clearScanLock,
@@ -69,6 +69,8 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del proyecto
 const DATA_DIR = path.join(os.homedir(), '.cwc-data');
+const MAX_BATCH = 400;
+const inflightProposals = new Set();
 const DOCKER_HYGIENE_REPORT = path.join(DATA_DIR, 'docker-hygiene', 'report.json');
 const DOCKER_HYGIENE_FRESH_MS = 24 * 60 * 60 * 1000;
 const DOCKER_HYGIENE_VOLUME_WARN = 20;
@@ -685,6 +687,7 @@ const CROSS_WORLD_ALLOW = new Set([
   'src/modules/tolkien/refresh-shared.js',
   'src/modules/tolkien/build-shared.js',    // build serializado de packages/* del repo propio de Tolkien (pnpm install + turbo build con cwd config.projectDir, lock en ~/.cwc-data) antes de refresh/plantilla y tras un pull (console:BUG-3373); no enlaza los Pad
   'src/modules/tolkien/sources-shared.js',  // refresh completo de fuentes de la DB LOCAL de Tolkien (console:PLAN-3236 D): corre los importers del repo propio con cwd config.projectDir contra localhost:5435; el Pad cloud de Tolkien se LEE (pad-sync) y nunca se escribe; no enlaza los Pad
+  'src/modules/tolkien/template-shared.js', // construcción de la DB plantilla de entornos efímeros: corre `prisma migrate deploy` del repo propio de Tolkien con cwd config.projectDir (portable, hallazgo Salud #197); no enlaza los Pad
   'src/modules/skills/index.js',           // censo READ-ONLY de .claude/skills/ de Tolkien (pestaña Skills), no cruza datos
   'src/modules/mcps/login-shared.js',      // censo/estado READ-ONLY de MCP de Tolkien (pestaña Conexiones) + login OAuth guiado (claude mcp, vía CLI); no enlaza los Pad ni cruza datos
   'src/modules/mcps/infisical-shared.js',  // sonda de Infisical: corre el CLI con el cwd del proyecto externo y lee su .infisical.json (solo lectura, no cruza datos)
@@ -1522,14 +1525,22 @@ function spawnOrchestrator() {
   if (isRunning() || isFixing() || isBatchRunning()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   writeBatchLock(0); // placeholder; el runner lo pisa con su pid real (heartbeat)
-  const logFd = fss.openSync(ORCH_LOG, 'a');
-  const child = spawn(process.execPath, [ORCHESTRATOR], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
-  });
-  child.on('error', () => { try { clearBatchLock(); } catch { /* noop */ } }); // spawn falló → liberar la reserva (BUG-44)
-  child.unref();
-  fss.closeSync(logFd);
-  return true;
+  let logFd = null;
+  try {
+    logFd = fss.openSync(ORCH_LOG, 'a');
+    const child = spawn(process.execPath, [ORCHESTRATOR], {
+      detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    });
+    child.on('error', () => { try { clearBatchLock(); } catch { /* noop */ } }); // spawn falló → liberar la reserva (BUG-44)
+    child.unref();
+    fss.closeSync(logFd);
+    logFd = null;
+    return true;
+  } catch (err) {
+    if (logFd != null) try { fss.closeSync(logFd); } catch { /* noop */ }
+    try { clearBatchLock(); } catch { /* noop */ }
+    throw err;
+  }
 }
 
 // Lanza el runner de OPTIMIZACIÓN IA (bin/cwc-optimize-runner.js): censo de
@@ -1541,13 +1552,22 @@ function spawnOptimize() {
   if (isOptRunning()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   writeOptLock({ pid: 0, phase: 'arrancando…' }); // reserva; el runner la pisa con su pid real
-  const logFd = fss.openSync(OPT_LOG, 'a');
-  const child = spawn(process.execPath, [OPT_RUNNER], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
-  });
-  child.unref();
-  fss.closeSync(logFd);
-  return true;
+  let logFd = null;
+  try {
+    logFd = fss.openSync(OPT_LOG, 'a');
+    const child = spawn(process.execPath, [OPT_RUNNER], {
+      detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    });
+    child.on('error', () => { try { clearOptLock(); } catch { /* noop */ } });
+    child.unref();
+    fss.closeSync(logFd);
+    logFd = null;
+    return true;
+  } catch (err) {
+    if (logFd != null) try { fss.closeSync(logFd); } catch { /* noop */ }
+    try { clearOptLock(); } catch { /* noop */ }
+    throw err;
+  }
 }
 
 // Lanza el runner del MÓDULO DE COHERENCIA (bin/cwc-coherence-runner.js): grafo
@@ -1558,13 +1578,22 @@ function spawnCoherence() {
   if (isCohRunning()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   writeCohLock({ pid: 0, phase: 'arrancando…' }); // reserva; el runner la pisa con su pid real
-  const logFd = fss.openSync(COH_LOG, 'a');
-  const child = spawn(process.execPath, [COH_RUNNER], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
-  });
-  child.unref();
-  fss.closeSync(logFd);
-  return true;
+  let logFd = null;
+  try {
+    logFd = fss.openSync(COH_LOG, 'a');
+    const child = spawn(process.execPath, [COH_RUNNER], {
+      detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    });
+    child.on('error', () => { try { clearCohLock(); } catch { /* noop */ } });
+    child.unref();
+    fss.closeSync(logFd);
+    logFd = null;
+    return true;
+  } catch (err) {
+    if (logFd != null) try { fss.closeSync(logFd); } catch { /* noop */ }
+    try { clearCohLock(); } catch { /* noop */ }
+    throw err;
+  }
 }
 
 // Enriquece los hallazgos de review.json con id/sig (derivados del contenido) y
@@ -1755,7 +1784,7 @@ export default {
         try {
           appendLearnedInvariant({ match: p.match || (p.fromFinding?.file || '').split(':')[0], text: p.text });
         } catch (err) {
-          return res.status(400).json({ error: `No se pudo aprobar: ${String(err?.message || err).slice(0, 160)}` });
+          return res.status(err?.badRequest ? 400 : 500).json({ error: `No se pudo aprobar: ${String(err?.message || err).slice(0, 160)}` });
         }
       } else if (action !== 'reject') {
         return res.status(400).json({ error: 'Acción inválida (approve|reject).' });
@@ -1830,6 +1859,7 @@ export default {
     r.post('/finding-fix-batch', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+      if (ids.length > MAX_BATCH) return res.status(400).json({ error: `Demasiados hallazgos en un batch (máx ${MAX_BATCH}).` });
       if (!ids.length) return res.status(400).json({ error: 'Faltan ids de hallazgos.' });
       if (isRunning()) return res.status(409).json({ error: 'Hay una revisión en curso; esperá a que termine.' });
       if (isFixing() || isBatchRunning()) return res.status(409).json({ error: 'Ya hay una resolución en curso.' });
@@ -1868,6 +1898,7 @@ export default {
         }
         res.json({ ok: true, queued: items.length, rejected });
       } catch (err) {
+        writeBatch({ ...(readBatch() || {}), running: false, phase: 'error', error: String(err?.message || err).slice(0, 200), updatedAt: Date.now() });
         res.status(500).json({ error: `No se pudo lanzar el orquestador: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
@@ -1915,15 +1946,27 @@ export default {
       const st = readOpt();
       const p = (st.propuestas || []).find((x) => x.id === id);
       if (!p) return res.status(404).json({ error: 'Propuesta inexistente (¿se re-analizó?).' });
-      p.status = action === 'accept' ? 'accepted' : 'rejected';
-      p.decidedAt = Date.now();
+      if ((p.status && p.status !== 'pending') || p.padRef) return res.status(409).json({ error: 'La propuesta ya fue decidida.' });
+      const key = `optimize:${id}`;
+      if (inflightProposals.has(key)) return res.status(409).json({ error: 'La propuesta ya se está procesando.' });
+      inflightProposals.add(key);
       let padRef = null;
-      if (action === 'accept') {
-        try { padRef = await createTaskFromProposal(p, 'optimize'); p.padRef = padRef; }
-        catch (err) { console.error('[health] no pude crear tarea en Pad (optimize):', err?.message); }
+      try {
+        if (action === 'accept') {
+          try { padRef = await createTaskFromProposal(p, 'optimize'); }
+          catch (err) { console.error('[health] no pude crear tarea en Pad (optimize):', err?.message); }
+        }
+        const fresh = readOpt();
+        const freshProposal = (fresh.propuestas || []).find((x) => x.id === id);
+        if (!freshProposal) return res.status(409).json({ error: 'La propuesta cambió durante la decisión (¿se re-analizó?).', padRef });
+        freshProposal.status = action === 'accept' ? 'accepted' : 'rejected';
+        freshProposal.decidedAt = Date.now();
+        if (padRef) freshProposal.padRef = padRef;
+        writeOpt(fresh);
+        return res.json({ ok: true, padRef });
+      } finally {
+        inflightProposals.delete(key);
       }
-      writeOpt(st);
-      res.json({ ok: true, padRef });
     });
 
     // ===== Coherencia (grafo de dependencias + cableado entre motores) =====
@@ -1968,15 +2011,27 @@ export default {
       const st = readCoh();
       const p = (st.propuestas || []).find((x) => x.id === id);
       if (!p) return res.status(404).json({ error: 'Propuesta inexistente (¿se re-analizó?).' });
-      p.status = action === 'accept' ? 'accepted' : 'rejected';
-      p.decidedAt = Date.now();
+      if ((p.status && p.status !== 'pending') || p.padRef) return res.status(409).json({ error: 'La propuesta ya fue decidida.' });
+      const key = `coherence:${id}`;
+      if (inflightProposals.has(key)) return res.status(409).json({ error: 'La propuesta ya se está procesando.' });
+      inflightProposals.add(key);
       let padRef = null;
-      if (action === 'accept') {
-        try { padRef = await createTaskFromProposal(p, 'coherence'); p.padRef = padRef; }
-        catch (err) { console.error('[health] no pude crear tarea en Pad (coherence):', err?.message); }
+      try {
+        if (action === 'accept') {
+          try { padRef = await createTaskFromProposal(p, 'coherence'); }
+          catch (err) { console.error('[health] no pude crear tarea en Pad (coherence):', err?.message); }
+        }
+        const fresh = readCoh();
+        const freshProposal = (fresh.propuestas || []).find((x) => x.id === id);
+        if (!freshProposal) return res.status(409).json({ error: 'La propuesta cambió durante la decisión (¿se re-analizó?).', padRef });
+        freshProposal.status = action === 'accept' ? 'accepted' : 'rejected';
+        freshProposal.decidedAt = Date.now();
+        if (padRef) freshProposal.padRef = padRef;
+        writeCoh(fresh);
+        return res.json({ ok: true, padRef });
+      } finally {
+        inflightProposals.delete(key);
       }
-      writeCoh(st);
-      res.json({ ok: true, padRef });
     });
 
     // Lanza la revisión exhaustiva (runner detached, LENTA, consume tokens).
@@ -2046,11 +2101,17 @@ export default {
     // del humano en el front). 0 tokens (HTTP a Pad).
     r.post('/scan-pad-bug', async (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
+      const finding = req.body?.finding;
+      const validFinding = finding && typeof finding === 'object' && !Array.isArray(finding)
+        && ([finding.area, finding.detail].some((value) => typeof value === 'string' && value.trim()));
+      if (!validFinding) return res.status(400).json({ error: 'Falta un hallazgo válido (finding con area o detail).' });
       try {
-        const ref = await createBugFromFinding(req.body?.finding || {});
+        const ref = await createBugFromFinding(finding);
         res.json({ ok: true, ref });
       } catch (err) {
-        res.status(502).json({ error: `No se pudo crear el BUG en Pad: ${String(err?.message || err).slice(0, 200)}` });
+        const status = err?.upstream ? 502 : 500;
+        const prefix = err?.upstream ? 'No se pudo crear el BUG en Pad' : 'No se pudo crear el BUG';
+        res.status(status).json({ error: `${prefix}: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
 

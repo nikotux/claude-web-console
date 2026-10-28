@@ -80,6 +80,9 @@ async function persist(lessons, job, ctx, sharedCtx) {
       if (r?.created) created += 1; else merged += 1;
     } catch (err) { log('no pude guardar lección:', err?.message || err); }
   }
+  if (lessons.length && created + merged === 0) {
+    throw new Error(`Pad no guardó ninguna de las ${lessons.length} lecciones destiladas.`);
+  }
   return { created, merged, total: lessons.length };
 }
 

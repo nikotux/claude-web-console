@@ -69,32 +69,92 @@ function safeNotePath(projectDir, file, userId) {
   return path.join(memoryDirFor(projectDir, userId), file);
 }
 
+function readFileOrEmpty(filePath) {
+  try { return fs.readFileSync(filePath, 'utf8'); }
+  catch (e) {
+    if (e?.code === 'ENOENT') return '';
+    throw e;
+  }
+}
+
 export function readContext(projectDir) {
-  try { return fs.readFileSync(path.join(projectDir, 'CLAUDE.md'), 'utf8'); }
-  catch { return ''; }
+  return readFileOrEmpty(path.join(projectDir, 'CLAUDE.md'));
 }
 
 export function readTextFile(filePath) {
-  try { return fs.readFileSync(filePath, 'utf8'); }
-  catch { return ''; }
+  return readFileOrEmpty(filePath);
 }
 
-// `expectedHash` es OPCIONAL (a diferencia de writeContextSection, donde es
-// obligatorio): lo usa la ruta de archivo completo cuando el cliente lo abrió
-// vía GET /:key/context y quiere detectar que otra sesión (Claude Code, o el
-// editor por secciones) lo cambió mientras tanto. Si no lo manda, se conserva
-// el comportamiento histórico (pisa sin chequear) para no romper llamadores
-// programáticos existentes que ignoran el hash.
+// Resuelve symlinks del contenedor existente más cercano antes de mutar. La
+// comparación por segmentos evita que un enlace dentro del root redirija la
+// escritura afuera; el root permitido debe existir y también se canoniza.
+function assertSafeWriteTarget(filePath, allowedRoot) {
+  const target = path.resolve(filePath);
+  const root = path.resolve(allowedRoot);
+  const lexicalRel = path.relative(root, target);
+  if (lexicalRel === '..' || lexicalRel.startsWith(`..${path.sep}`) || path.isAbsolute(lexicalRel)) {
+    throw Object.assign(new Error('La ruta de escritura escapa del root permitido.'), { conflict: true });
+  }
+
+  let container = path.dirname(target);
+  while (!fs.existsSync(container)) {
+    const parent = path.dirname(container);
+    if (parent === container) break;
+    container = parent;
+  }
+  const rootReal = fs.realpathSync(root);
+  const containerReal = fs.realpathSync(container);
+  const realRel = path.relative(rootReal, containerReal);
+  if (realRel === '..' || realRel.startsWith(`..${path.sep}`) || path.isAbsolute(realRel)) {
+    throw Object.assign(new Error('La carpeta real de escritura escapa del root permitido.'), { conflict: true });
+  }
+}
+
+function managedBlocksOf(text, marker) {
+  const src = String(text ?? '');
+  const blocks = [];
+  let offset = 0;
+  while (offset < src.length) {
+    const start = src.indexOf(marker.start, offset);
+    if (start === -1) break;
+    const end = src.indexOf(marker.end, start + marker.start.length);
+    if (end === -1) {
+      blocks.push(src.slice(start));
+      break;
+    }
+    const blockEnd = end + marker.end.length;
+    blocks.push(src.slice(start, blockEnd));
+    offset = blockEnd;
+  }
+  return blocks;
+}
+
+function assertManagedBlocksUnchanged(current, next) {
+  for (const marker of MANAGED_MARKERS) {
+    const before = managedBlocksOf(current, marker);
+    if (!before.length) continue;
+    const after = managedBlocksOf(next, marker);
+    if (before.length !== after.length || before.some((block, i) => block !== after[i])) {
+      throw Object.assign(new Error(`El bloque gestionado por ${marker.managedBy} no se puede alterar desde el guardado completo.`), { conflict: true });
+    }
+  }
+}
+
+// `expectedHash` sigue opcional para llamadores internos; los POST HTTP lo
+// exigen antes de llegar acá. Si se recibe, detecta ediciones concurrentes.
 export function writeContext(projectDir, text, expectedHash) {
   const out = String(text ?? '');
   if (Buffer.byteLength(out) > MAX_SIZE) throw Object.assign(new Error('El contexto es demasiado grande (máximo 400 KB). Nada se guardó.'), { badRequest: true });
+  const current = readContext(projectDir);
   if (expectedHash) {
-    const current = readContext(projectDir);
     if (hashOf(current) !== String(expectedHash)) {
       throw Object.assign(new Error('El contexto cambió desde que lo abriste (otra sesión lo editó). Recargá y reintentá.'), { conflict: true });
     }
   }
-  writeFileAtomic(path.join(projectDir, 'CLAUDE.md'), out, { mode: 0o644 }); // atómico (fix B5): CLAUDE.md real que lee Claude Code; un write cortado lo trunca
+  assertManagedBlocksUnchanged(current, out);
+  const filePath = path.join(projectDir, 'CLAUDE.md');
+  assertSafeWriteTarget(filePath, projectDir);
+  writeFileAtomic(filePath, out, { mode: 0o644 }); // atómico (fix B5): CLAUDE.md real que lee Claude Code; un write cortado lo trunca
 }
 
 // ===== Contexto por SECCIONES (integridad: nunca se edita el archivo entero) =====
@@ -175,7 +235,7 @@ export function readSectionOfFile(filePath, i) {
 // Empalma `content` en la sección i. `expectedHash` = hash del texto que el
 // cliente ABRIÓ: si la sección ya no existe o cambió, error con .conflict
 // (la ruta lo mapea a 409) — nunca se pisa una edición ajena a ciegas.
-export function writeSectionOfFile(filePath, i, expectedHash, content) {
+export function writeSectionOfFile(filePath, i, expectedHash, content, allowedRoot) {
   const src = readTextFile(filePath);
   const sections = splitContextSections(src);
   const management = managementOfSections(sections);
@@ -205,6 +265,7 @@ export function writeSectionOfFile(filePath, i, expectedHash, content) {
   s.text = String(content ?? '');
   const out = sections.map((x) => x.text).join('\n');
   if (Buffer.byteLength(out) > MAX_SIZE) throw Object.assign(new Error('El contenido quedaría demasiado grande.'), { badRequest: true });
+  assertSafeWriteTarget(filePath, allowedRoot);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileAtomic(filePath, out, { mode: 0o644 });
 }
@@ -218,7 +279,7 @@ export function readContextSection(projectDir, i) {
 }
 
 export function writeContextSection(projectDir, i, expectedHash, content) {
-  return writeSectionOfFile(path.join(projectDir, 'CLAUDE.md'), i, expectedHash, content);
+  return writeSectionOfFile(path.join(projectDir, 'CLAUDE.md'), i, expectedHash, content, projectDir);
 }
 
 // Parsea "- [Título](archivo.md) — descripción" preservando el ORDEN del
@@ -286,8 +347,7 @@ export function readNote(projectDir, file, userId) {
 // no existe en disco vale '' (mismo criterio que readContext), así el chequeo
 // funciona igual para notas nuevas que para ediciones.
 function readNoteSafe(projectDir, file, userId) {
-  try { return fs.readFileSync(safeNotePath(projectDir, file, userId), 'utf8'); }
-  catch { return ''; }
+  return readFileOrEmpty(safeNotePath(projectDir, file, userId));
 }
 
 // `expectedHash` es OPCIONAL, mismo criterio que writeContext (ver comentario
@@ -306,13 +366,13 @@ export function writeNote(projectDir, file, text, expectedHash, userId) {
       throw Object.assign(new Error('La nota cambió desde que la abriste (otra sesión la editó). Recargá y reintentá.'), { conflict: true });
     }
   }
+  assertSafeWriteTarget(p, userClaudeDir(userId || hostUser()));
   fs.mkdirSync(path.dirname(p), { recursive: true });
   writeFileAtomic(p, out, { mode: 0o644 }); // atómico (fix B5): nota de memoria FUERA de git → pérdida irrecuperable si se trunca
 }
 
 export function readIndex(projectDir, userId) {
-  try { return fs.readFileSync(path.join(memoryDirFor(projectDir, userId), INDEX_FILE_NAME), 'utf8'); }
-  catch { return ''; }
+  return readFileOrEmpty(path.join(memoryDirFor(projectDir, userId), INDEX_FILE_NAME));
 }
 
 // `expectedHash` OPCIONAL, mismo patrón que writeContext/writeNote: MEMORY.md
@@ -329,6 +389,7 @@ export function writeIndex(projectDir, text, expectedHash, userId) {
       throw Object.assign(new Error('El índice de memorias cambió desde que lo abriste (otra sesión lo editó). Recargá y reintentá.'), { conflict: true });
     }
   }
+  assertSafeWriteTarget(path.join(dir, INDEX_FILE_NAME), userClaudeDir(userId || hostUser()));
   fs.mkdirSync(dir, { recursive: true });
   writeFileAtomic(path.join(dir, INDEX_FILE_NAME), out, { mode: 0o644 }); // atómico (fix B5): índice MEMORY.md fuera de git
 }

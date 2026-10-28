@@ -61,6 +61,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeFileAtomic } from '../../core/atomic-write.js';
 import { isAdmin } from '../../core/auth.js';
 import { PAD_DEFAULT_URL } from '../../core/pad-url.js';
 import {
@@ -73,6 +74,8 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.resolve(__dirname, '..', '..', '..');
+// Excepción deliberada al estado per-user: backup es admin/host-only y guarda
+// copias completas de la instancia, no datos de un inquilino lógico.
 const BACKUP_DIR = path.join(os.homedir(), '.cwc-backups');
 const NAME_RE = /^cwc-backup-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.tar\.gz$/;
 const PAD_NAME_RE = /^pad-backup-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.db$/;
@@ -186,10 +189,15 @@ async function securityGuards() {
 // que git YA lista como untracked no-ignorado; (2) re-validación anti-secretos;
 // (3) nada viaja sin selección humana explícita (la lista viene del diálogo).
 function selectUntracked(requested, untrackedNow) {
-  const req = Array.isArray(requested) ? requested.map(String).slice(0, 200) : [];
+  const req = Array.isArray(requested) ? requested.map(String) : [];
   const includable = req.filter((f) => untrackedNow.includes(f));
   const blockedSecrets = includable.filter(isSecretPath);
   return { includable, blockedSecrets };
+}
+
+const MAX_UNTRACKED_SELECTION = 200;
+function tooManyUntracked(requested) {
+  return Array.isArray(requested) && requested.length > MAX_UNTRACKED_SELECTION;
 }
 
 // Sanea el mensaje de commit: sin caracteres de control (salvo saltos de
@@ -298,7 +306,7 @@ function updateReadmeChangelog(entryText) {
     kept = entries.slice(0, MAX_CHANGELOG_ENTRIES);
     trimmedNote = '\n\n_(older entries trimmed — see `git log` for the full history)_';
   }
-  fs.writeFileSync(README_PATH, `${before}\n\n${kept.join('\n\n')}${trimmedNote}\n\n${after}`);
+  writeFileAtomic(README_PATH, `${before}\n\n${kept.join('\n\n')}${trimmedNote}\n\n${after}`, { mode: 0o644 });
   return true;
 }
 
@@ -518,6 +526,10 @@ export default {
       if (busy) return res.status(409).json({ error: 'Ya hay una operación en curso.' });
       busy = true;
       try {
+        const validation = await tar(['-tzf', file]);
+        if (validation.code !== 0) {
+          return res.status(400).json({ error: `El backup está corrupto o no es un tar.gz válido: ${validation.stderr || 'tar error'}` });
+        }
         const t = await tar(['-xzf', file, '-C', PROJECT_DIR]);
         if (t.code !== 0) return res.status(500).json({ error: `Falló la restauración: ${t.stderr || 'tar error'}` });
         res.json({ ok: true, restarting: true });
@@ -580,6 +592,9 @@ export default {
 
     r.post('/push', async (req, res) => {
       if (busy) return res.status(409).json({ error: 'Ya hay una operación en curso.' });
+      if (tooManyUntracked(req.body?.includeUntracked)) {
+        return res.status(400).json({ error: `includeUntracked admite como máximo ${MAX_UNTRACKED_SELECTION} elementos.` });
+      }
       busy = true;
       try {
         const g = await securityGuards();
@@ -631,7 +646,14 @@ export default {
               .map(describeFileStatus)
           : [];
         const entry = buildChangelogEntry({ branch, priorSubjects, fileStatuses, initial: !beforeRef });
-        const changelogUpdated = entry ? updateReadmeChangelog(entry) : false;
+        let changelogUpdated = false;
+        if (entry) {
+          try {
+            changelogUpdated = updateReadmeChangelog(entry);
+          } catch (e) {
+            console.error('[backup] changelog README: actualización best-effort omitida:', e?.message || e);
+          }
+        }
         if (changelogUpdated) {
           const addReadme = await git(['add', 'README.md']);
           if (addReadme.code !== 0) return res.status(500).json({ error: `No se pudo agregar README.md (changelog): ${addReadme.stderr || addReadme.out}` });
@@ -713,6 +735,10 @@ export default {
     // archivos) EN NODE, escribe el job y spawnea el runner desacoplado
     // (regla de oro — sobrevive a un reinicio); el GET solo lee disco.
     r.post('/commit-message', async (req, res) => {
+      if (busy) return res.status(409).json({ error: 'Ya hay una operación en curso.' });
+      if (tooManyUntracked(req.body?.includeUntracked)) {
+        return res.status(400).json({ error: `includeUntracked admite como máximo ${MAX_UNTRACKED_SELECTION} elementos.` });
+      }
       try {
         const g = await repoSecretGuards('Commit');
         if (!g.ok) return res.status(403).json({ error: g.error });
@@ -763,6 +789,9 @@ export default {
 
     r.post('/commit', async (req, res) => {
       if (busy) return res.status(409).json({ error: 'Ya hay una operación en curso.' });
+      if (tooManyUntracked(req.body?.includeUntracked)) {
+        return res.status(400).json({ error: `includeUntracked admite como máximo ${MAX_UNTRACKED_SELECTION} elementos.` });
+      }
       busy = true;
       try {
         const g = await repoSecretGuards('Commit');

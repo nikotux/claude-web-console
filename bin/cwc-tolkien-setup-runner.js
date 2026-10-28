@@ -45,7 +45,7 @@ const cloneDir = path.join(userWorkspace(USER), 'tolkien');
 // El store del host ya contiene las dependencias públicas de Tolkien: compartirlo
 // permite que el primer inquilino también use hardlinks y tenga costo marginal mínimo.
 const SHARED_STORE = process.env.CWC_PNPM_SHARED_STORE
-  || '/home/nmosquera/.local/share/pnpm/store';
+  || path.join(HOST_HOME, '.local', 'share', 'pnpm', 'store');
 const configuredTimeout = Number(process.env.CWC_TOLKIEN_INSTALL_TIMEOUT_MS);
 const INSTALL_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeout > 0
   ? configuredTimeout

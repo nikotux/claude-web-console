@@ -24,8 +24,9 @@ import {
   blockingFor,
   CAPABILITIES,
   capabilityStatus,
+  githubAuthStatus,
   hasClaudeAccountCreds,
-  hasGithubAuth,
+  invalidateGithubAuth,
   pendingFor,
   requiredFor,
 } from './capabilities.js';
@@ -37,6 +38,7 @@ import { mailScanRouter } from './mail-scan.js';
 import { runSmokeChecks } from './smoke.js';
 
 const DEFAULT_TTL_H = 24;
+const MAX_TTL_H = 720;
 
 // Rate-limit por IP para la superficie PÚBLICA: las acciones conservan el tope
 // anti fuerza-bruta, mientras los *-status tienen un bucket separado y más
@@ -106,7 +108,7 @@ function stepUser(token) {
   };
 }
 
-publicRouter.post('/validate', (req, res) => {
+publicRouter.post('/validate', async (req, res) => {
   try {
     const token = req.body?.token;
     const v = validateInvite(token);
@@ -120,14 +122,14 @@ publicRouter.post('/validate', (req, res) => {
     }
     const lockedTo = meta.lockedTo || null;
     const status = meta.status || null;
-    const capability = capabilityStatus(lockedTo);
+    const capability = await capabilityStatus(lockedTo);
     const hasToken = capability.claude;
     const hasClaudeAccount = capability.account;
     const hasCodex = capability.codex;
     const hasInfisical = capability.infisical;
     const hasGithub = capability.github;
     const hasTolkienMcp = !!(lockedTo && tolkienMcpStatus(lockedTo).registered);
-    const pending = pendingFor(lockedTo);
+    const pending = await pendingFor(lockedTo);
     const capabilities = [...CAPABILITIES]
       .sort((a, b) => a.order - b.order)
       .map((item) => ({
@@ -305,38 +307,39 @@ publicRouter.post('/creds-start', (req, res) => {
     // no pueden pasar los dos el dedup y lanzar dos runners para el mismo user
     // (antes el primer 'starting' lo escribía recién el runner hijo, async).
     fs.mkdirSync(JOBS_DIR, { recursive: true });
+    try { fs.unlinkSync(path.join(JOBS_DIR, `${user}.code`)); } catch (e) {
+      if (e?.code !== 'ENOENT') throw e;
+    }
     fs.writeFileSync(jobPath(user), JSON.stringify({ status: 'starting', user, ts: Date.now() }), { mode: 0o600 });
-    spawn(process.execPath, [ONBOARD_RUNNER, '--user', user, '--token', token], { detached: true, stdio: 'ignore' }).unref();
+    spawn(process.execPath, [ONBOARD_RUNNER, '--user', user], { detached: true, stdio: 'ignore' }).unref();
   } catch (e) {
     return res.status(500).json({ error: 'No pude lanzar el paso de credenciales: ' + e.message });
   }
   res.json({ ok: true });
 });
 
-// Estado del paso de credenciales (poll). Token-gated (peek resuelve el user aun
-// tras consumir, para mostrar 'done'). NO expone secretos.
+// Estado del paso de credenciales (poll). stepUser admite la reentrada consumida
+// segura y rechaza invitaciones revocadas/expiradas. NO expone secretos.
 publicRouter.get('/creds-status', (req, res) => {
-  const token = req.query?.token;
-  let p;
+  const step = stepUser(req.query?.token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
   try {
-    p = peekInvite(token);
+    const job = readJob(step.user) || { status: 'idle' };
+    const stale = job.ts && (Date.now() - job.ts) > 30000 && ['starting', 'exchanging'].includes(job.status);
+    // SP9-1 (TASK-664): check liviano — ¿el inquilino ya canjeó su suscripción Claude?
+    const hasToken = !!readUserOauthToken(step.user);
+    return res.json({
+      status: job.status,
+      url: job.url || null,
+      note: job.note || null,
+      done: !!job.done,
+      error: job.error || null,
+      stale: !!stale,
+      hasToken,
+    });
   } catch (e) {
-    return res.status(500).json({ error: 'No se pudo consultar la invitación: ' + (e.message || e) });
+    return res.status(500).json({ error: 'No se pudo consultar el estado de credenciales: ' + (e.message || e) });
   }
-  if (!p.found) return res.status(403).json({ error: 'Invitación inexistente.' });
-  const job = readJob(p.lockedTo) || { status: 'idle' };
-  const stale = job.ts && (Date.now() - job.ts) > 30000 && ['starting', 'exchanging'].includes(job.status);
-  // SP9-1 (TASK-664): check liviano — ¿el inquilino ya canjeó su suscripción Claude?
-  const hasToken = !!(p.lockedTo && readUserOauthToken(p.lockedTo));
-  res.json({
-    status: job.status,
-    url: job.url || null,
-    note: job.note || null,
-    done: !!job.done,
-    error: job.error || null,
-    stale: !!stale,
-    hasToken,
-  });
 });
 
 // Estado del provisioning posterior al alta (lo pollea el checklist final del
@@ -506,56 +509,55 @@ publicRouter.post('/codex-start', (req, res) => {
 });
 
 publicRouter.get('/codex-status', (req, res) => {
-  const token = req.query?.token;
-  let p;
+  const step = stepUser(req.query?.token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
   try {
-    p = peekInvite(token);
+    const job = readCodexJob(step.user) || { status: 'idle' };
+    const stale = job.status === 'starting' && !!job.ts && (Date.now() - job.ts) > 30000;
+    const connected = !!hasCodexCreds(step.user);
+    return res.json({
+      status: job.status,
+      url: job.url || null,
+      code: job.code || null,
+      done: !!job.done,
+      error: job.error || null,
+      stale: !!stale,
+      connected,
+    });
   } catch (e) {
-    return res.status(500).json({ error: 'No se pudo consultar la invitación: ' + (e.message || e) });
+    return res.status(500).json({ error: 'No se pudo consultar el estado de Codex: ' + (e.message || e) });
   }
-  if (!p.found) return res.status(403).json({ error: 'Invitación inexistente.' });
-  const job = readCodexJob(p.lockedTo) || { status: 'idle' };
-  const stale = job.status === 'starting' && !!job.ts && (Date.now() - job.ts) > 30000;
-  const connected = !!(p.lockedTo && hasCodexCreds(p.lockedTo));
-  res.json({
-    status: job.status,
-    url: job.url || null,
-    code: job.code || null,
-    done: !!job.done,
-    error: job.error || null,
-    stale: !!stale,
-    connected,
-  });
 });
 
 // GitHub usa el device flow del CLI: el runner publica el código de un solo
 // uso y corre siempre con el HOME aislado del usuario resuelto por el token.
-publicRouter.post('/github-start', (req, res) => {
-  const step = stepUser(req.body?.token);
-  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
-  const user = step.user;
-  if (hasGithubAuth(user)) {
-    return res.json({ ok: true, already: true, connected: true });
-  }
-  const job = readGhJob(user);
-  const reserved = job?.status === 'starting'
-    && !!job.ts
-    && (Date.now() - job.ts) < 30_000;
-  const alive = ghLoginRunnerAlive(job);
-  if (reserved || (
-    ['awaiting-auth', 'setup-git'].includes(job?.status)
-    && alive
-  ) || (
-    job?.status === 'starting'
-    && alive
-    && (Date.now() - (job.ts || 0)) <= 60_000
-  )) {
-    return res.json({ ok: true, already: true, status: job.status || 'starting' });
-  }
-  if (job?.status === 'starting' && alive) {
-    try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
-  }
+publicRouter.post('/github-start', async (req, res) => {
   try {
+    const step = stepUser(req.body?.token);
+    if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+    const user = step.user;
+    if (await githubAuthStatus(user)) {
+      return res.json({ ok: true, already: true, connected: true });
+    }
+    const job = readGhJob(user);
+    const reserved = job?.status === 'starting'
+      && !!job.ts
+      && (Date.now() - job.ts) < 30_000;
+    const alive = ghLoginRunnerAlive(job);
+    if (reserved || (
+      ['awaiting-auth', 'setup-git'].includes(job?.status)
+      && alive
+    ) || (
+      job?.status === 'starting'
+      && alive
+      && (Date.now() - (job.ts || 0)) <= 60_000
+    )) {
+      return res.json({ ok: true, already: true, status: job.status || 'starting' });
+    }
+    if (job?.status === 'starting' && alive) {
+      try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
+    }
+    invalidateGithubAuth(user);
     writeJsonAtomic(ghJobPath(user), {
       status: 'starting',
       user,
@@ -571,20 +573,24 @@ publicRouter.post('/github-start', (req, res) => {
   res.json({ ok: true, status: 'starting' });
 });
 
-publicRouter.get('/github-status', (req, res) => {
-  const step = stepUser(req.query?.token);
-  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
-  const job = readGhJob(step.user) || { status: 'idle' };
-  const stale = job.status === 'starting' && !!job.ts && (Date.now() - job.ts) > 30_000;
-  res.json({
-    status: job.status,
-    url: job.url || null,
-    code: job.code || null,
-    done: !!job.done,
-    error: job.error || null,
-    stale,
-    connected: hasGithubAuth(step.user),
-  });
+publicRouter.get('/github-status', async (req, res) => {
+  try {
+    const step = stepUser(req.query?.token);
+    if (!step.user) return res.status(step.statusCode).json({ error: step.error });
+    const job = readGhJob(step.user) || { status: 'idle' };
+    const stale = job.status === 'starting' && !!job.ts && (Date.now() - job.ts) > 30_000;
+    return res.json({
+      status: job.status,
+      url: job.url || null,
+      code: job.code || null,
+      done: !!job.done,
+      error: job.error || null,
+      stale,
+      connected: await githubAuthStatus(step.user, { notBefore: job.done ? (job.ts || 0) : 0 }),
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudo consultar el estado de GitHub: ' + (e.message || e) });
+  }
 });
 
 publicRouter.post('/infisical-start', (req, res) => {
@@ -622,25 +628,22 @@ publicRouter.post('/infisical-start', (req, res) => {
 });
 
 publicRouter.get('/infisical-status', (req, res) => {
-  const token = req.query?.token;
-  let p;
+  const step = stepUser(req.query?.token);
+  if (!step.user) return res.status(step.statusCode).json({ error: step.error });
   try {
-    p = peekInvite(token);
+    const state = readInfisicalJob(step.user) || { status: 'idle' };
+    const stale = state.status === 'starting' && !!state.ts && (Date.now() - state.ts) > 30000;
+    const hasInfisical = !!hasInfisicalCreds(step.user);
+    return res.json({
+      status: state.status,
+      url: state.url || null,
+      error: state.error || null,
+      stale: !!stale,
+      hasInfisical,
+    });
   } catch (e) {
-    return res.status(500).json({ error: 'No se pudo consultar la invitación: ' + (e.message || e) });
+    return res.status(500).json({ error: 'No se pudo consultar el estado de Infisical: ' + (e.message || e) });
   }
-  if (!p.found) return res.status(403).json({ error: 'Invitación inexistente.' });
-  const job = p.lockedTo ? readInfisicalJob(p.lockedTo) : null;
-  const state = job || { status: 'idle' };
-  const stale = state.status === 'starting' && !!state.ts && (Date.now() - state.ts) > 30000;
-  const hasInfisical = !!(p.lockedTo && hasInfisicalCreds(p.lockedTo));
-  res.json({
-    status: state.status,
-    url: state.url || null,
-    error: state.error || null,
-    stale: !!stale,
-    hasInfisical,
-  });
 });
 
 publicRouter.post('/infisical-token', (req, res) => {
@@ -663,7 +666,7 @@ publicRouter.post('/infisical-token', (req, res) => {
 // durante TODO el wizard. Si el usuario abandona antes, queda locked a SU
 // username hasta el TTL: es la misma ventana que ya existía entre registro y
 // credenciales.
-publicRouter.post('/finish', (req, res) => {
+publicRouter.post('/finish', async (req, res) => {
   const { token } = req.body || {};
   let v;
   try {
@@ -673,7 +676,12 @@ publicRouter.post('/finish', (req, res) => {
   }
   if (!v.valid) return res.status(403).json({ error: `Invitación ${v.reason || 'inválida'}.` });
   if (v.status !== 'locked' || !v.lockedTo) return res.status(409).json({ error: 'Registrate primero.' });
-  const blocking = blockingFor(v.lockedTo);
+  let blocking;
+  try {
+    blocking = await blockingFor(v.lockedTo);
+  } catch (e) {
+    return res.status(500).json({ error: 'No se pudieron verificar los pasos obligatorios: ' + (e.message || e) });
+  }
   if (blocking.length) {
     const labels = blocking.map((id) => (
       CAPABILITIES.find((capability) => capability.id === id)?.labelEs || id
@@ -726,8 +734,14 @@ export default {
       if (sponsor && !sponsorTokenReady(sponsor)) {
         return res.status(400).json({ error: `El sponsor ${sponsor} no tiene listo su token propio de patrocinio.` });
       }
+      const ttlInput = req.body?.ttlHours;
+      if (ttlInput !== undefined && ttlInput !== null
+        && (typeof ttlInput !== 'number' || !Number.isFinite(ttlInput)
+          || ttlInput <= 0 || ttlInput > MAX_TTL_H)) {
+        return res.status(400).json({ error: 'ttlHours debe ser un número mayor que 0 y como máximo 720.' });
+      }
       try {
-        const ttlH = Number(req.body?.ttlHours) > 0 ? Number(req.body.ttlHours) : DEFAULT_TTL_H;
+        const ttlH = ttlInput === undefined || ttlInput === null ? DEFAULT_TTL_H : ttlInput;
         const invite = generateInvite({ admin: !!req.body?.admin, sponsored: !!req.body?.sponsored, sponsor, createdBy: principalOf(req).username, ttlMs: ttlH * 3600 * 1000 });
         res.json({ invite }); // { id, token (crudo, una vez), admin, sponsored, sponsor, expiresAt }
       } catch (e) {

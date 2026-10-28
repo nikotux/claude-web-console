@@ -95,6 +95,36 @@ export function addModels(dst, src) {
   }
 }
 
+// Upsert monotónico por modelo: una poda parcial de transcripts nunca puede
+// reducir una métrica ya congelada en el histórico.
+function maxModels(dst, src) {
+  for (const [model, metrics] of Object.entries(src || {})) {
+    if (!metrics || typeof metrics !== 'object' || Array.isArray(metrics)) continue;
+    const saved = (dst[model] && typeof dst[model] === 'object' && !Array.isArray(dst[model]))
+      ? dst[model]
+      : (dst[model] = {});
+    for (const [metric, value] of Object.entries(metrics)) {
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+      const previous = saved[metric];
+      saved[metric] = typeof previous === 'number' && Number.isFinite(previous)
+        ? Math.max(previous, value)
+        : value;
+    }
+  }
+}
+
+function mergeProjectsMax(savedDay, newProjects) {
+  const merged = projectsOfDay(savedDay);
+  for (const [project, models] of Object.entries(newProjects || {})) {
+    if (!models || typeof models !== 'object' || Array.isArray(models)) continue;
+    const savedModels = (merged[project] && typeof merged[project] === 'object' && !Array.isArray(merged[project]))
+      ? merged[project]
+      : (merged[project] = {});
+    maxModels(savedModels, models);
+  }
+  return merged;
+}
+
 // Devuelve el desglose por proyecto de un día, normalizando el formato viejo
 // (flat = {modelKey:{tokens,cost}}) a {otros: ...}. Detección: en el nested el
 // primer valor es un mapa de modelos ({haiku:{tokens}}); en el flat es un bucket
@@ -124,11 +154,12 @@ export async function mergeDaily(daily, owner = hostUser()) {
   // hora de pared, más abajo, porque es un timestamp para mostrar.)
   const mono = Number(process.hrtime.bigint()) / 1e6;
   if (mono - lastWriteFor(owner) < WRITE_THROTTLE_MS) return;
+  setLastWrite(owner, mono);
 
   const store = await loadHistory(owner);
   for (const [day, projects] of Object.entries(daily)) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
-    store.days[day] = projects;
+    store.days[day] = mergeProjectsMax(store.days[day], projects);
   }
 
   // Poda: días > RETAIN_DAYS se compactan una vez en su mes (por proyecto) y se borran.
@@ -144,7 +175,6 @@ export async function mergeDaily(daily, owner = hostUser()) {
   }
 
   store.updatedAt = new Date().toISOString();
-  setLastWrite(owner, mono);
   await writeHistory(store, owner);
 }
 

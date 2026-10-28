@@ -185,7 +185,7 @@ export async function buildVoiceAudit() {
         });
       }
 
-      if (width != 20) {
+      if (width != null && Number(width) !== 20) {
         addFinding({
           id: `radio-24-width-${apRadio}`,
           sev: 'amarillo',

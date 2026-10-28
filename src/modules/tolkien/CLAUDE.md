@@ -106,6 +106,9 @@ tolkien_template: buildTemplate = migrate deploy + 3 importers Zoho,
 luego `local-users.js` siembra los usuarios locales antes de sellarla,
 luego IS_TEMPLATE true/ALLOW_CONNECTIONS false → clonable sin chocar con
 la restricción de 0 conexiones de CREATE DATABASE ... TEMPLATE;
+el build ocurre en `tolkien_template_new` y recién al terminar hace swap por
+rename, conservando/restaurando la plantilla anterior si el swap falla; no
+desconecta sesiones por la fuerza;
 cloneTemplateInto/dropEnvDb/recloneLiveEnvs) +
 bin/cwc-tolkien-template-build.js · src/modules/tolkien/env-store.js
 (registro ~/.cwc-data/tolkien-envs/<id>.json atómico, pool de puertos,

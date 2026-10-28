@@ -1,13 +1,13 @@
 // core/recents.js — carpetas recientes donde se crearon sesiones.
 //
-// Alimenta la sección "Recientes" del lanzador. Persistencia mínima en
-// recents.json (raíz del proyecto, gitignored; entra en los backups).
-// Se registra en cada POST /api/terminal/sessions con carpeta (no attach).
+// Alimenta la sección "Recientes" del lanzador del host. recents.json es un
+// registro GLOBAL: los inquilinos nunca escriben ni leen sus rutas acá.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveWithinHome } from './paths.js';
 import { writeJsonAtomic } from './atomic-write.js';
+import { hostUser } from './user-space.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FILE = path.join(__dirname, '..', '..', 'recents.json');
@@ -24,7 +24,9 @@ function save(recents) {
 
 // Registra una carpeta (ruta RELATIVA al home). El home ('') no se registra:
 // ya es atajo fijo del lanzador.
-export function recordRecent(relCwd) {
+export function recordRecent(relCwd, owner = null) {
+  // recents.json es un registro GLOBAL del host; un inquilino nunca escribe acá.
+  if (owner && owner !== hostUser()) return;
   const rel = String(relCwd || '').replace(/^\/+|\/+$/g, '');
   if (!rel) return;
   // INVARIANTE 1: nunca persistir una ruta sin validar que cae dentro del home.
@@ -41,6 +43,7 @@ export function recordRecent(relCwd) {
   save(recents.slice(0, MAX));
 }
 
-export function listRecents() {
-  return load();
+export function listRecents(principal) {
+  if (principal && (principal.oversight || principal.username === hostUser())) return load();
+  return [];
 }

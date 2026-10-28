@@ -13,6 +13,32 @@ const SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
 const CMD_FILE = path.join(os.homedir(), '.claude', 'commands', 'btw.md');
 const MARK = 'cwc-bus.js';
 
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function abortInvalidSettings(detail) {
+  console.error(`ERROR: ${SETTINGS} tiene una configuración inválida (${detail}).`);
+  console.error('Abortado antes de escribir. Corregila a mano y reintentá.');
+  process.exit(1);
+}
+
+function writeFileAtomic(file, contents) {
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
+  const mode = fs.existsSync(file) ? fs.statSync(file).mode & 0o777 : 0o600;
+  try {
+    fs.writeFileSync(tmp, contents, { flag: 'wx', mode });
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* no llegó a crearse o ya se renombró */ }
+    throw e;
+  }
+}
+
 let settings = {};
 let existed = false;
 try {
@@ -32,6 +58,16 @@ try {
   }
 }
 
+if (!isPlainObject(settings)) {
+  abortInvalidSettings('la raíz debe ser un objeto');
+}
+if (settings.hooks !== undefined && !isPlainObject(settings.hooks)) {
+  abortInvalidSettings('"hooks" debe ser un objeto');
+}
+for (const [event, entries] of Object.entries(settings.hooks || {})) {
+  if (!Array.isArray(entries)) abortInvalidSettings(`hooks.${event} debe ser un array`);
+}
+
 if (settings.hooks) {
   for (const event of Object.keys(settings.hooks)) {
     settings.hooks[event] = (settings.hooks[event] || []).filter(
@@ -42,8 +78,7 @@ if (settings.hooks) {
 }
 
 if (existed) {
-  fs.mkdirSync(path.dirname(SETTINGS), { recursive: true });
-  fs.writeFileSync(SETTINGS, JSON.stringify(settings, null, 2) + '\n');
+  writeFileAtomic(SETTINGS, JSON.stringify(settings, null, 2) + '\n');
   console.log(`hooks del Interfono removidos de ${SETTINGS}`);
 } else {
   console.log(`${SETTINGS} no existe; nada que quitar en hooks.`);

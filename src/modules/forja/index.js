@@ -14,6 +14,7 @@ import {
 
 const VALIDATION_WINDOW_MS = 60 * 1000;
 const VALIDATION_MAX_PER_WINDOW = 8;
+const MAX_FESTEJOS_IDS = 50;
 const AUTOMATIC_REFRESH_COOLDOWN_MS = 30 * 1000;
 const validationBuckets = new Map();
 const automaticRefreshByOwner = new Map();
@@ -60,6 +61,22 @@ function consumeValidation(owner, now = Date.now()) {
   return bucket.count <= VALIDATION_MAX_PER_WINDOW;
 }
 
+function handlerErrorStatus(error) {
+  if (error?.badRequest) return 400;
+  const marked = Number(error?.statusCode ?? error?.status);
+  return Number.isInteger(marked) && marked >= 400 && marked < 500 ? marked : 500;
+}
+
+function respondHandlerError(res, operation, error) {
+  const status = handlerErrorStatus(error);
+  console.warn(`[forja] ${operation}:`, error?.message || error);
+  return res.status(status).json({
+    error: status === 500
+      ? 'La Forja no pudo completar la operación.'
+      : String(error?.message || error),
+  });
+}
+
 export default {
   name: 'forja',
 
@@ -69,71 +86,103 @@ export default {
     const r = express.Router();
 
     r.get('/me', async (req, res) => {
-      const owner = ownerOf(req);
-      const player = configuredPlayer(owner);
-      if (!player) {
-        const status = githubLoginStatusForUsername(owner);
-        return res.json({
-          configured: false,
-          hint: status.configured && !status.valid ? 'identity.github.invalid' : 'identity.github',
-          invalidLogin: status.configured && !status.valid,
-          pendingFestejos: 0,
+      try {
+        const owner = ownerOf(req);
+        const player = configuredPlayer(owner);
+        if (!player) {
+          const status = githubLoginStatusForUsername(owner);
+          return res.json({
+            configured: false,
+            hint: status.configured && !status.valid ? 'identity.github.invalid' : 'identity.github',
+            invalidLogin: status.configured && !status.valid,
+            pendingFestejos: 0,
+          });
+        }
+        let snapshot = getMeSnapshot(owner);
+        const refreshing = refreshingSnapshotState({
+          owner,
+          player,
+          snapshot,
+          pending: pendingFestejos(owner),
         });
+        if (refreshing) return res.json(refreshing);
+        if (!snapshot) snapshot = (await refreshOwner(owner, { rateLimitMs: 0 })).snapshot;
+        if (!snapshot) return res.status(503).json({
+          configured: true,
+          stale: true,
+          pendingFestejos: pendingFestejos(owner),
+          error: 'La Forja todavía no tiene un snapshot.',
+        });
+        return res.json({ ...snapshot, pendingFestejos: pendingFestejos(owner) });
+      } catch (error) {
+        return respondHandlerError(res, 'no se pudo cargar la ficha', error);
       }
-      let snapshot = getMeSnapshot(owner);
-      const refreshing = refreshingSnapshotState({
-        owner,
-        player,
-        snapshot,
-        pending: pendingFestejos(owner),
-      });
-      if (refreshing) return res.json(refreshing);
-      if (!snapshot) snapshot = (await refreshOwner(owner, { rateLimitMs: 0 })).snapshot;
-      if (!snapshot) return res.status(503).json({
-        configured: true,
-        stale: true,
-        pendingFestejos: pendingFestejos(owner),
-        error: 'La Forja todavía no tiene un snapshot.',
-      });
-      return res.json({ ...snapshot, pendingFestejos: pendingFestejos(owner) });
     });
 
     r.get('/festejos', (req, res) => {
-      const owner = ownerOf(req);
-      return res.json({ pending: getFestejos(owner)?.pending || [] });
+      try {
+        const owner = ownerOf(req);
+        return res.json({ pending: getFestejos(owner)?.pending || [] });
+      } catch (error) {
+        return respondHandlerError(res, 'no se pudieron cargar los festejos', error);
+      }
     });
 
     r.post('/festejos/visto', (req, res) => {
-      const owner = ownerOf(req);
-      const numbers = req.body?.numbers ?? [];
-      const ids = req.body?.ids ?? [];
-      const validNumbers = Array.isArray(numbers)
-        && numbers.every((number) => Number.isSafeInteger(number) && number > 0);
-      const validIds = Array.isArray(ids)
-        && ids.every((id) => typeof id === 'string' && /^(?:merge:\d+|deploy:[0-9a-f]{40})$/i.test(id));
-      if (!validNumbers || !validIds || (!numbers.length && !ids.length)) {
-        return res.status(400).json({ error: 'ids o numbers debe identificar al menos un festejo válido.' });
+      try {
+        const owner = ownerOf(req);
+        const numbers = req.body?.numbers ?? [];
+        const ids = req.body?.ids ?? [];
+        if ((Array.isArray(numbers) && numbers.length > MAX_FESTEJOS_IDS)
+          || (Array.isArray(ids) && ids.length > MAX_FESTEJOS_IDS)) {
+          return res.status(400).json({ error: `ids y numbers admiten hasta ${MAX_FESTEJOS_IDS} elementos.` });
+        }
+        const validNumbers = Array.isArray(numbers)
+          && numbers.every((number) => Number.isSafeInteger(number) && number > 0);
+        const validIds = Array.isArray(ids)
+          && ids.every((id) => typeof id === 'string' && /^(?:merge:\d+|deploy:[0-9a-f]{40})$/i.test(id));
+        if (!validNumbers || !validIds || (!numbers.length && !ids.length)) {
+          return res.status(400).json({ error: 'ids o numbers debe identificar al menos un festejo válido.' });
+        }
+        const state = markFestejosSeen(owner, { ids, numbers });
+        return res.json({ ok: true, pending: state.pending, pendingFestejos: state.pending.length });
+      } catch (error) {
+        return respondHandlerError(res, 'no se pudo registrar el festejo visto', error);
       }
-      const state = markFestejosSeen(owner, { ids, numbers });
-      return res.json({ ok: true, pending: state.pending, pendingFestejos: state.pending.length });
     });
 
     r.post('/validate-login', async (req, res) => {
-      const owner = ownerOf(req);
-      if (!consumeValidation(owner)) {
-        return res.status(429).json({ ok: false, error: 'Demasiados intentos. Esperá un minuto y probá de nuevo.' });
-      }
-      const login = typeof req.body?.login === 'string' ? req.body.login.trim() : '';
-      if (!GITHUB_LOGIN_RE.test(login)) {
-        return res.status(400).json({
-          ok: false,
-          exists: false,
-          error: 'Es tu @usuario de GitHub, no tu nombre. Ej: rarboledaAtMordor',
-        });
-      }
       try {
-        const profile = await githubUserExists(login);
-        if (profile.exists) saveGithubProfile(owner, { login: profile.canonicalLogin, name: profile.name });
+        const owner = ownerOf(req);
+        if (!consumeValidation(owner)) {
+          return res.status(429).json({ ok: false, error: 'Demasiados intentos. Esperá un minuto y probá de nuevo.' });
+        }
+        const login = typeof req.body?.login === 'string' ? req.body.login.trim() : '';
+        if (!GITHUB_LOGIN_RE.test(login)) {
+          return res.status(400).json({
+            ok: false,
+            exists: false,
+            error: 'Es tu @usuario de GitHub, no tu nombre. Ej: rarboledaAtMordor',
+          });
+        }
+        let profile;
+        try {
+          profile = await githubUserExists(login);
+        } catch (error) {
+          console.warn(`[forja] no se pudo validar el login de ${owner}:`, error?.message || error);
+          return res.status(503).json({ ok: false, error: 'GitHub no respondió. Intentá de nuevo en un momento.' });
+        }
+        if (profile?._stale === true) {
+          return res.status(503).json({ ok: false, error: 'GitHub no respondió. Intentá de nuevo en un momento.' });
+        }
+        if (profile.exists) {
+          try {
+            saveGithubProfile(owner, { login: profile.canonicalLogin, name: profile.name });
+          } catch (error) {
+            console.warn(`[forja] no se pudo guardar el perfil GitHub de ${owner}:`, error?.message || error);
+            return res.status(500).json({ ok: false, error: 'No se pudo guardar el perfil de GitHub.' });
+          }
+        }
         return res.json({
           ok: true,
           exists: Boolean(profile.exists),
@@ -141,45 +190,52 @@ export default {
           name: profile.name || '',
         });
       } catch (error) {
-        console.warn(`[forja] no se pudo validar el login de ${owner}:`, error?.message || error);
-        return res.status(503).json({ ok: false, error: 'GitHub no respondió. Intentá de nuevo en un momento.' });
+        return respondHandlerError(res, 'no se pudo procesar la validación de GitHub', error);
       }
     });
 
     r.get('/arena', (req, res) => {
-      const owner = ownerOf(req);
-      const arena = getArenaSnapshot();
-      if (!arena) return res.status(503).json({ error: 'La arena todavía no tiene un snapshot.' });
-      const ownSnapshot = configuredPlayer(owner) ? getMeSnapshot(owner) : null;
-      return res.json({
-        generatedAt: arena.generatedAt,
-        dataAsOf: arena.dataAsOf || null,
-        stale: Boolean(arena.stale),
-        season: arena.season,
-        gaps: arena.gaps,
-        mvp: arena.mvp,
-        missions: ownSnapshot?.mission || null,
-        players: (arena.players || []).map((player) => ({
-          ...player,
-          isMe: player.playerId === playerIdFor(owner),
-        })),
-      });
+      try {
+        const owner = ownerOf(req);
+        const arena = getArenaSnapshot();
+        if (!arena) return res.status(503).json({ error: 'La arena todavía no tiene un snapshot.' });
+        const ownSnapshot = configuredPlayer(owner) ? getMeSnapshot(owner) : null;
+        return res.json({
+          generatedAt: arena.generatedAt,
+          dataAsOf: arena.dataAsOf || null,
+          stale: Boolean(arena.stale),
+          season: arena.season,
+          gaps: arena.gaps,
+          mvp: arena.mvp,
+          missions: ownSnapshot?.mission || null,
+          players: (arena.players || []).map((player) => ({
+            ...player,
+            isMe: player.playerId === playerIdFor(owner),
+          })),
+        });
+      } catch (error) {
+        return respondHandlerError(res, 'no se pudo cargar la arena', error);
+      }
     });
 
     r.post('/refresh', async (req, res) => {
-      const owner = ownerOf(req);
-      const player = configuredPlayer(owner);
-      if (!player) return res.json({ configured: false, hint: 'identity.github' });
-      const refreshing = refreshingSnapshotState({
-        owner,
-        player,
-        snapshot: getMeSnapshot(owner),
-        pending: pendingFestejos(owner),
-      });
-      if (refreshing) return res.json({ ok: true, ...refreshing });
-      const result = await refreshOwner(owner);
-      if (!result.snapshot) return res.status(503).json({ ok: false, error: result.error || 'No se pudo refrescar La Forja.' });
-      return res.json({ ok: true, ignored: result.ignored, snapshot: result.snapshot });
+      try {
+        const owner = ownerOf(req);
+        const player = configuredPlayer(owner);
+        if (!player) return res.json({ configured: false, hint: 'identity.github' });
+        const refreshing = refreshingSnapshotState({
+          owner,
+          player,
+          snapshot: getMeSnapshot(owner),
+          pending: pendingFestejos(owner),
+        });
+        if (refreshing) return res.json({ ok: true, ...refreshing });
+        const result = await refreshOwner(owner);
+        if (!result.snapshot) return res.status(503).json({ ok: false, error: result.error || 'No se pudo refrescar La Forja.' });
+        return res.json({ ok: true, ignored: result.ignored, snapshot: result.snapshot });
+      } catch (error) {
+        return respondHandlerError(res, 'no se pudo refrescar la ficha', error);
+      }
     });
 
     router.use('/forja', r);

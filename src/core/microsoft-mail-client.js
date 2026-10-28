@@ -5,6 +5,7 @@
 // metadatos; una segunda pasada acotada trae cuerpos solo de los mensajes más
 // representativos para dar contexto real al modelo sin agotar su ventana.
 import { getAccessToken } from './connections-store.js';
+import { runAdaptivePool } from './pool.js';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 const GRAPH_ORIGIN = new URL(GRAPH_BASE).origin;
@@ -251,15 +252,30 @@ export async function fetchMailSample(username, options = {}) {
     sent: 0,
   }));
 
-  for (let index = 0; index < strata.length; index++) {
-    const stratum = strata[index];
+  const results = new Array(strata.length);
+  let failed = false;
+  // Paralelo lo que LEE, serial lo que escribe; concurrencia baja por el throttling de Graph; el orden del resultado se conserva por índice.
+  await runAdaptivePool(strata.map((stratum, index) => ({ stratum, index })), async ({ stratum, index }, ctl) => {
+    if (failed) return;
     const result = await fetchWindow(username, {
       ...stratum,
       limit: limits[index],
       pageSize,
       timeoutMs,
     });
-    if (!result.ok) return result;
+    results[index] = result;
+    if (!result.ok) {
+      failed = true;
+      if (result.status === 429 || result.reason === 'rate-limited') ctl.backoff();
+    }
+  }, { max: 3, min: 1, start: 2 });
+
+  for (const result of results) {
+    if (result && !result.ok) return result;
+  }
+  for (let index = 0; index < results.length; index++) {
+    const stratum = strata[index];
+    const result = results[index];
     messages.push(...result.messages);
     buckets[Math.floor(index / 2)][stratum.direction] = result.messages.length;
   }
@@ -417,32 +433,52 @@ export async function fetchMailBodies(username, messages, options = {}) {
   const timeoutMs = clampInteger(options.timeoutMs, NETWORK_TIMEOUT_MS, 1_000, 60_000);
   const limit = clampInteger(options.limit, DEFAULT_MAIL_BODY_LIMIT, 0, DEFAULT_MAIL_BODY_LIMIT);
   const selected = Array.isArray(messages) ? messages.slice(0, limit) : [];
-  const enriched = [];
+  const ids = selected.map((message) => String(message?.id || '').trim());
+  if (ids.some((id) => !id)) {
+    return failure('unknown', 'La muestra de correo contiene un mensaje sin identificador de Microsoft Graph.');
+  }
 
-  for (const message of selected) {
-    const id = String(message?.id || '').trim();
-    if (!id) return failure('unknown', 'La muestra de correo contiene un mensaje sin identificador de Microsoft Graph.');
+  const results = new Array(selected.length);
+  let failed = false;
+  await runAdaptivePool(selected.map((message, index) => ({ message, index })), async ({ message, index }, ctl) => {
+    if (failed) return;
+    const id = ids[index];
     const qs = new URLSearchParams({ $select: 'id,body' });
     const result = await graphRequest(username, `/me/messages/${encodeURIComponent(id)}?${qs.toString()}`, {
       timeoutMs,
       headers: { Prefer: 'outlook.body-content-type="text"' },
     });
-    if (!result.ok) return result;
+    if (!result.ok) {
+      results[index] = result;
+      failed = true;
+      if (result.status === 429 || result.reason === 'rate-limited') ctl.backoff();
+      return;
+    }
     if (!result.data?.body || typeof result.data.body !== 'object') {
-      return failure('unknown', 'Microsoft Graph devolvió un cuerpo de correo inválido.');
+      results[index] = failure('unknown', 'Microsoft Graph devolvió un cuerpo de correo inválido.');
+      failed = true;
+      return;
     }
 
     const content = String(result.data.body.content || '');
-    enriched.push({
-      ...message,
-      body: {
-        contentType: String(result.data.body.contentType || 'text').toLowerCase(),
-        content: content.slice(0, MAX_MAIL_BODY_CHARS),
-        truncated: content.length > MAX_MAIL_BODY_CHARS,
+    results[index] = {
+      ok: true,
+      message: {
+        ...message,
+        body: {
+          contentType: String(result.data.body.contentType || 'text').toLowerCase(),
+          content: content.slice(0, MAX_MAIL_BODY_CHARS),
+          truncated: content.length > MAX_MAIL_BODY_CHARS,
+        },
       },
-    });
+    };
+  }, { max: 4, min: 1, start: 2 });
+
+  for (const result of results) {
+    if (result && !result.ok) return result;
   }
 
+  const enriched = results.map((result) => result.message);
   return { ok: true, messages: enriched };
 }
 

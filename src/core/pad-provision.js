@@ -4,6 +4,7 @@
 // queda en su espacio (~/.cwc-users/<u>/.pad), invisible para Niko a nivel app-Pad.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { config } from './config.js';
 import { MOLD, recordMoldVersion } from './pad-mold.js';
 import { PAD_DEFAULT_URL } from './pad-url.js';
@@ -72,10 +73,10 @@ export async function reloginUserPad(userId) {
   }
 }
 
-// Genera un password aleatorio (se guarda en el espacio del inquilino por si el
-// token vence y hay que re-loguear).
+// Genera un password criptográficamente seguro (se guarda en el espacio del
+// inquilino por si el token vence y hay que re-loguear).
 function randomPassword() {
-  return 'Cwc-' + Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 6).toUpperCase() + '9!';
+  return 'Cwc-' + crypto.randomBytes(24).toString('base64url') + '9!';
 }
 
 // Garantiza el workspace neutral y su colección canónica. Todo el flujo usa la
@@ -216,7 +217,12 @@ export async function provisionUserPad(userId, { name } = {}) {
 
     // 2) WORKSPACE del inquilino (idempotente): crear si no existe.
     const wsList = await padFetch('GET', '/api/v1/workspaces', { token });
-    const has = Array.isArray(wsList.data) && wsList.data.some((w) => w.slug === wsSlug);
+    if (wsList.status !== 200) {
+      return { ok: false, error: `listar workspaces falló: ${wsList.status} ${JSON.stringify(wsList.data).slice(0, 120)}` };
+    }
+    const d = wsList.data;
+    const workspaces = Array.isArray(d) ? d : (d?.workspaces || []);
+    const has = workspaces.some((w) => w.slug === wsSlug);
     if (!has) {
       const ws = await padFetch('POST', '/api/v1/workspaces', { token, body: { name: 'Espacio de ' + (name || userId), slug: wsSlug, template: 'blank' } });
       if (ws.status !== 201) return { ok: false, error: `workspace falló: ${ws.status} ${JSON.stringify(ws.data).slice(0, 120)}` };

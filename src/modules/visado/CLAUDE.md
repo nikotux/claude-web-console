@@ -52,7 +52,7 @@ verbo, argumento u orden ejecutable por fuera de ellos.
   su propio flag y rompería la exclusión.
 - El store **no importa `core/user-space.js` ni `core/config.js`**: todas sus
   funciones reciben el `dataDir` ya resuelto (`console:PLAN-2186`). También lo
-  consume un runner con env limpio; resolver identidad/config dentro del store
+  consume un runner desacoplado; resolver identidad/config dentro del store
   volvería a acoplarlo al server y a `CWC_TOKEN`.
 - Un expediente **nunca** vive bajo `~/.cwc-aduana/salas/`. Esa es la raíz
   escribible de la sala: guardar ahí la aprobación permitiría que un proceso de
@@ -72,13 +72,12 @@ verbo, argumento u orden ejecutable por fuera de ellos.
 - `transicionar(...)` hacia `aprobada` exige `aprobador.userId` Y
   `aprobador.nombre`, ambos strings no vacíos. El código
   `aprobador_requerido` no distingue cuál de los dos falta.
-- `caducarEjecutandoVencidas(dataDir, { maxMs = 20*60*1000, now })` recupera
-  runners muertos a mitad de `op.run()`: pasa `ejecutando` → `fallida` porque
-  no hay heartbeat ni PID persistido y el estado usado como lock no detectaba
-  abandono. Toma `iniciadoAt`, con fallback conservador a `decididoAt` y luego
-  `creadoAt`; sin timestamp usable NO caduca para no matar una operación viva.
-  La transición ya existía en `TRANSICIONES`. `GET /peticiones` la invoca junto
-  a `caducarVencidas()` tanto para una sala como para el listado agregado.
+- El runner renueva `latidoAt` y su lock `<id>.lock` cada 30 s; los listados
+  relanzan aprobaciones sin inicio tras 2 min y `caducarEjecutandoVencidas()`
+  solo falla una ejecución sin actividad durante 20 min. El hijo es
+  host-authority (Ley 3 bis) y recibe el entorno completo porque las operaciones
+  de Tolkien dependen de la configuración del `.env`; no introducir una
+  allowlist sin inventariar antes las variables que consume cada `op*`.
 - La IA de la sala NO tiene tool para emitir peticiones: las emite una persona
   desde el formulario. Darle esa tool permitiría que un aporte con instrucciones
   incrustadas generara peticiones pre-armadas.

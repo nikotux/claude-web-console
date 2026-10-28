@@ -14,7 +14,7 @@ import {
 } from './catalog.js';
 import {
   ESTADOS, crearPeticion, leerPeticion, listarPeticiones, transicionar,
-  caducarVencidas, caducarEjecutandoVencidas,
+  caducarVencidas, caducarEjecutandoVencidas, marcarRelanzamiento,
 } from './store.js';
 import { salaChat, salaVisiblePara } from './sala-access.js';
 
@@ -56,6 +56,13 @@ const RUNNER = path.resolve(
   'cwc-visado-runner.js',
 );
 
+function envVisadoRunner(dataDir) {
+  // El runner es host-authority: ejecuta con la autoridad del aprobador fuera
+  // de la sala (Ley 3 bis) y necesita el .env completo. Una allowlist exige
+  // inventariar antes todas las variables que consumen los op* de Tolkien.
+  return { ...process.env, CWC_DATA_DIR: dataDir };
+}
+
 // Dispara la ejecución en un proceso DESACOPLADO (regla dura 2): la operación
 // puede tardar minutos y debe sobrevivir a un reinicio de la web. Si el spawn
 // falla, la petición queda `aprobada` — nunca a medio ejecutar — y se puede
@@ -72,7 +79,7 @@ function spawnVisadoRunner(dataDir, id) {
       {
         detached: true,
         stdio: ['ignore', logFd, logFd],
-        env: process.env,
+        env: envVisadoRunner(dataDir),
       },
     );
     child.on('error', (err) => {
@@ -95,6 +102,30 @@ function spawnVisadoRunner(dataDir, id) {
     if (logFd !== undefined) {
       try { fs.closeSync(logFd); } catch { /* noop */ }
     }
+  }
+}
+
+// Recupera aprobaciones cuyo spawn no llegó a iniciar. Primero persiste la
+// marca del reintento y recién después lanza; el runner agrega el candado final
+// entre procesos para que dos relanzamientos nunca ejecuten dos veces.
+function relanzarAprobadas(dataDir, {
+  now = Date.now(),
+  ttlMs = 24 * 60 * 60 * 1000,
+} = {}) {
+  for (const peticion of listarPeticiones(dataDir, { estado: ESTADOS.APROBADA })) {
+    const creadoAt = Number(peticion.creadoAt);
+    if (Number.isFinite(creadoAt) && creadoAt > 0 && creadoAt + ttlMs < now) {
+      transicionar(
+        dataDir,
+        peticion.id,
+        [ESTADOS.APROBADA],
+        ESTADOS.CADUCADA,
+        { error: 'La petición aprobada venció antes de que el runner pudiera iniciarla.' },
+      );
+      continue;
+    }
+    const marcada = marcarRelanzamiento(dataDir, peticion.id, { now });
+    if (marcada.ok) spawnVisadoRunner(dataDir, peticion.id);
   }
 }
 
@@ -172,16 +203,16 @@ export default {
       return res.json(await tolkienStatus());
     }));
 
-    r.get('/lecturas/refresh', (req, res) => {
+    r.get('/lecturas/refresh', rutaAsync(async (req, res) => {
       const salaId = req.query.sala;
       const user = userOf(req);
       if (!salaVisiblePara(salaId, user)) {
         return responderError(res, 404, 'Sala no encontrada.', 'sala_no_existe');
       }
       return res.json(refreshStatus(readRefreshJob()));
-    });
+    }));
 
-    r.get('/lecturas/preview', (req, res) => {
+    r.get('/lecturas/preview', rutaAsync(async (req, res) => {
       const salaId = req.query.sala;
       const user = userOf(req);
       if (!salaVisiblePara(salaId, user)) {
@@ -199,9 +230,9 @@ export default {
           enterUrl: `/api/tolkien/local-enter?port=${encodeURIComponent(rec.port)}`,
         },
       });
-    });
+    }));
 
-    r.get('/lecturas/entornos', (req, res) => {
+    r.get('/lecturas/entornos', rutaAsync(async (req, res) => {
       const salaId = req.query.sala;
       const user = userOf(req);
       if (!salaVisiblePara(salaId, user)) {
@@ -211,10 +242,12 @@ export default {
       // el mapa de mi disco». El invitado necesita el id y algo que lo identifique
       // (puerto, estado) para elegir en un formulario; no necesita saber en qué
       // ruta vive el worktree ni cómo se llama la unidad systemd.
-      return res.json(listEnvs().map(resumenEntorno));
-    });
+      return res.json(listEnvs()
+        .filter((rec) => rec?.chatId === salaId)
+        .map(resumenEntorno));
+    }));
 
-    r.get('/lecturas/entornos/:id', (req, res) => {
+    r.get('/lecturas/entornos/:id', rutaAsync(async (req, res) => {
       const salaId = req.query.sala;
       const user = userOf(req);
       if (!salaVisiblePara(salaId, user)) {
@@ -225,11 +258,11 @@ export default {
         return responderError(res, 400, 'Id de entorno inválido.', 'id_invalido');
       }
       const env = getEnv(id);
-      if (!env) {
+      if (!env || env.chatId !== salaId) {
         return responderError(res, 404, 'Entorno no encontrado.', 'entorno_no_existe');
       }
       return res.json(resumenEntorno(env));
-    });
+    }));
 
     r.get('/lecturas/ramas', rutaAsync(async (req, res) => {
       const salaId = req.query.sala;
@@ -321,6 +354,7 @@ export default {
         const dataDir = dataDirDeLaSala(chat);
         caducarVencidas(dataDir);
         caducarEjecutandoVencidas(dataDir);
+        relanzarAprobadas(dataDir);
         return res.json(listarPeticiones(dataDir, { salaId }).map(conRender));
       }
 
@@ -338,6 +372,7 @@ export default {
       for (const [dataDir, salas] of salasPorDataDir) {
         caducarVencidas(dataDir);
         caducarEjecutandoVencidas(dataDir);
+        relanzarAprobadas(dataDir);
         peticiones.push(...listarPeticiones(dataDir).filter((peticion) => salas.has(peticion.salaId)));
       }
       peticiones.sort((a, b) => (Number(b.creadoAt) || 0) - (Number(a.creadoAt) || 0));
@@ -347,6 +382,7 @@ export default {
     r.post('/peticiones/:id/aprobar', rutaAsync(async (req, res) => {
       const user = userOf(req);
       const dataDir = userDataDir(user);
+      caducarVencidas(dataDir);
       const peticion = leerPeticion(dataDir, req.params.id);
       if (!peticion) {
         return responderError(res, 404, 'Petición no encontrada.', 'no_existe');
@@ -428,7 +464,7 @@ export default {
       return res.json(conRender(resultado.peticion));
     }));
 
-    r.post('/peticiones/:id/rechazar', (req, res) => {
+    r.post('/peticiones/:id/rechazar', rutaAsync(async (req, res) => {
       const user = userOf(req);
       const dataDir = userDataDir(user);
       const peticion = leerPeticion(dataDir, req.params.id);
@@ -444,7 +480,7 @@ export default {
         return responderError(res, 403, 'Solo el dueño de la sala puede decidir la petición.', 'no_sos_duenio');
       }
 
-      const motivo = typeof req.body?.motivo === 'string' ? req.body.motivo : '';
+      const motivo = typeof req.body?.motivo === 'string' ? req.body.motivo.slice(0, 2000) : '';
       const resultado = transicionar(
         dataDir,
         peticion.id,
@@ -460,9 +496,9 @@ export default {
         return responderError(res, 409, 'La petición ya no está pendiente.', 'estado_invalido');
       }
       return res.json(conRender(resultado.peticion));
-    });
+    }));
 
-    r.post('/peticiones/:id/cancelar', (req, res) => {
+    r.post('/peticiones/:id/cancelar', rutaAsync(async (req, res) => {
       const user = userOf(req);
       const encontrada = buscarPeticionParticipante(req.params.id, user);
       if (!encontrada) {
@@ -487,7 +523,7 @@ export default {
         return responderError(res, 409, 'La petición ya no está pendiente.', 'estado_invalido');
       }
       return res.json(conRender(resultado.peticion));
-    });
+    }));
 
     router.use('/visado', r);
   },

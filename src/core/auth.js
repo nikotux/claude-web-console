@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeJsonAtomic } from './atomic-write.js';
 import { config } from './config.js';
 import { adminFor, oversightFor } from './users.js';
 
@@ -28,7 +29,7 @@ const sessions = new Map(); // sessionId -> { username, admin, created, expires 
 function persistSessions() {
   const data = { sessions: [...sessions.entries()].map(([id, s]) => ({ id, ...s })) };
   try {
-    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(data), { mode: 0o600 });
+    writeJsonAtomic(SESSIONS_FILE, data, { mode: 0o600 });
     fs.chmodSync(SESSIONS_FILE, 0o600);
   } catch (err) {
     // La sesión sigue viva en RAM (el login no debe fallar por esto), pero el
@@ -46,7 +47,9 @@ function loadSessions() {
         sessions.set(s.id, { username: s.username, admin: !!s.admin, created: s.created, expires: s.expires });
       }
     }
-  } catch { /* sin archivo aún */ }
+  } catch (err) {
+    if (err?.code !== 'ENOENT') console.error('[auth] no se pudo leer sessions.json:', err?.message || err);
+  }
 }
 
 export function createSession({ username, admin }) {

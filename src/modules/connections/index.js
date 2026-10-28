@@ -15,7 +15,7 @@ import express from 'express';
 import { principalOf, isAdmin } from '../../core/auth.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
-import { listUsers } from '../../core/users.js';
+import { isValidUsername, listUsers } from '../../core/users.js';
 import {
   codexCredState,
   hostUser,
@@ -74,6 +74,9 @@ import { hasGithubAuth } from '../onboard/capabilities.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-codex-login-runner.js');
+// Excepción deliberada al data dir por usuario: los cinco runners vivos leen
+// estos dirs globales. Cada archivo queda aislado por username validado y el
+// directorio se fuerza a 0700; moverlos exige alinear todos los runners.
 const CODEX_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'codex-login-jobs');
 const GH_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-gh-login-runner.js');
 const GH_JOBS_DIR = path.join(config.home, '.cwc-data', 'gh-login-jobs');
@@ -83,23 +86,53 @@ const PAD_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-pad-
 const PAD_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'pad-login-jobs');
 const TOLKIEN_LOGIN_RUNNER = path.join(__dirname, '..', '..', '..', 'bin', 'cwc-tolkien-login-runner.js');
 const TOLKIEN_LOGIN_JOBS_DIR = path.join(config.home, '.cwc-data', 'tolkien-login-jobs');
-function codexLoginJobPath(user) { return path.join(CODEX_LOGIN_JOBS_DIR, `${user}.json`); }
+
+function loginJobPath(dir, user, suffix = '.json') {
+  if (!isValidUsername(user)) throw new Error('Usuario inválido para el job de login.');
+  return path.join(dir, `${user}${suffix}`);
+}
+function ensureLoginJobsDir(dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+}
+function runnerSpawnError(provider, user, writeErrorJob) {
+  return (error) => {
+    console.error(`[connections] no pude lanzar el runner de ${provider} para ${user}:`, error?.message || error);
+    try {
+      writeErrorJob();
+    } catch (writeError) {
+      console.error(`[connections] no pude guardar el error de ${provider} para ${user}:`, writeError?.message || writeError);
+    }
+  };
+}
+
+function codexLoginJobPath(user) { return loginJobPath(CODEX_LOGIN_JOBS_DIR, user); }
 function readCodexLoginJob(user) {
   try { return JSON.parse(fs.readFileSync(codexLoginJobPath(user), 'utf8')); } catch { return null; }
 }
 function writeCodexLoginJob(user, job) {
-  fs.mkdirSync(CODEX_LOGIN_JOBS_DIR, { recursive: true });
-  fs.writeFileSync(
-    codexLoginJobPath(user),
-    JSON.stringify({ ...job, user, ts: Date.now() }),
-    { mode: 0o600 },
-  );
+  ensureLoginJobsDir(CODEX_LOGIN_JOBS_DIR);
+  writeJsonAtomic(codexLoginJobPath(user), { ...job, user, ts: Date.now() }, { mode: 0o600 });
+}
+function codexLoginRunnerAlive(job) {
+  const pid = Number(job?.pid);
+  if (!pid) return false;
+  try { process.kill(pid, 0); } catch { return false; }
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('cwc-codex-login-runner.js');
+  } catch {
+    return false;
+  }
 }
 // Estos helpers duplican deliberadamente el contrato corto de onboarding:
 // mantener ambos módulos desacoplados evita que un refactor cambie los dos flujos.
-function ghJobPath(user) { return path.join(GH_JOBS_DIR, `${user}.json`); }
+function ghJobPath(user) { return loginJobPath(GH_JOBS_DIR, user); }
 function readGhJob(user) {
   try { return JSON.parse(fs.readFileSync(ghJobPath(user), 'utf8')); } catch { return null; }
+}
+function writeGhJob(user, job) {
+  ensureLoginJobsDir(GH_JOBS_DIR);
+  writeJsonAtomic(ghJobPath(user), { ...job, user, ts: Date.now() }, { mode: 0o600 });
 }
 function ghLoginRunnerAlive(job) {
   const pid = Number(job?.pid);
@@ -111,9 +144,9 @@ function ghLoginRunnerAlive(job) {
     return false;
   }
 }
-function claudeLoginJobPath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.json`); }
-function claudeLoginCodePath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.code`); }
-function claudeLoginLogPath(user) { return path.join(CLAUDE_LOGIN_JOBS_DIR, `${user}.log`); }
+function claudeLoginJobPath(user) { return loginJobPath(CLAUDE_LOGIN_JOBS_DIR, user); }
+function claudeLoginCodePath(user) { return loginJobPath(CLAUDE_LOGIN_JOBS_DIR, user, '.code'); }
+function claudeLoginLogPath(user) { return loginJobPath(CLAUDE_LOGIN_JOBS_DIR, user, '.log'); }
 const CLAUDE_LOGIN_TERMINAL_TTL_MS = 10 * 60 * 1000;
 function readClaudeLoginJob(user) {
   try { return JSON.parse(fs.readFileSync(claudeLoginJobPath(user), 'utf8')); } catch { return null; }
@@ -125,7 +158,7 @@ function claudeLoginJobIsStale(job) {
     && Date.now() - (job.ts || 0) > CLAUDE_LOGIN_TERMINAL_TTL_MS;
 }
 function writeClaudeLoginJob(user, job) {
-  fs.mkdirSync(CLAUDE_LOGIN_JOBS_DIR, { recursive: true, mode: 0o700 });
+  ensureLoginJobsDir(CLAUDE_LOGIN_JOBS_DIR);
   fs.writeFileSync(
     claudeLoginJobPath(user),
     JSON.stringify({ ...job, user, ts: Date.now() }),
@@ -153,13 +186,12 @@ function cleanClaudeLoginJob(user) {
     }
   }
 }
-function padLoginJobPath(user) { return path.join(PAD_LOGIN_JOBS_DIR, `${user}.json`); }
+function padLoginJobPath(user) { return loginJobPath(PAD_LOGIN_JOBS_DIR, user); }
 function readPadLoginJob(user) {
   try { return JSON.parse(fs.readFileSync(padLoginJobPath(user), 'utf8')); } catch { return null; }
 }
 function writePadLoginJob(user, job) {
-  fs.mkdirSync(PAD_LOGIN_JOBS_DIR, { recursive: true, mode: 0o700 });
-  fs.chmodSync(PAD_LOGIN_JOBS_DIR, 0o700);
+  ensureLoginJobsDir(PAD_LOGIN_JOBS_DIR);
   writeJsonAtomic(padLoginJobPath(user), {
     ...job,
     user,
@@ -176,13 +208,12 @@ function padLoginRunnerAlive(job) {
     return false;
   }
 }
-function tolkienLoginJobPath(user) { return path.join(TOLKIEN_LOGIN_JOBS_DIR, `${user}.json`); }
+function tolkienLoginJobPath(user) { return loginJobPath(TOLKIEN_LOGIN_JOBS_DIR, user); }
 function readTolkienLoginJob(user) {
   try { return JSON.parse(fs.readFileSync(tolkienLoginJobPath(user), 'utf8')); } catch { return null; }
 }
 function writeTolkienLoginJob(user, job) {
-  fs.mkdirSync(TOLKIEN_LOGIN_JOBS_DIR, { recursive: true, mode: 0o700 });
-  fs.chmodSync(TOLKIEN_LOGIN_JOBS_DIR, 0o700);
+  ensureLoginJobsDir(TOLKIEN_LOGIN_JOBS_DIR);
   writeJsonAtomic(tolkienLoginJobPath(user), {
     ...job,
     user,
@@ -219,6 +250,13 @@ function claudeCredentialSource(user) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const activePolls = new Set();
+const ZOHO_IDENTITY_HEAL_COOLDOWN_MS = 10 * 60 * 1000;
+const ZOHO_IDENTITY_HEAL_MAX_ENTRIES = 128;
+const zohoIdentityHeals = new Map();
+
+const CLIENT_ID_RE = /^[A-Za-z0-9._-]{1,512}$/;
+const MICROSOFT_TENANT_RE = /^(?:common|organizations|consumers|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?)$/i;
+const ZOHO_DCS = new Set(['com', 'eu', 'in', 'com.au', 'jp', 'ca']);
 
 function pollKey(username, jobId) {
   return `${username}:${jobId}`;
@@ -275,6 +313,38 @@ function reqProvider(req, res) {
 
 function isOAuthProvider(provider) {
   return PROVIDERS.some((p) => p.id === provider && p.kind === 'oauth');
+}
+
+function badRequest(message) {
+  throw Object.assign(new Error(message), { statusCode: 400 });
+}
+
+function validAppField(key, value) {
+  if (typeof value !== 'string') badRequest(`${key} debe ser texto.`);
+  const clean = value.trim();
+  if (!clean) badRequest(`Falta ${key}.`);
+
+  if (key === 'clientId' && !CLIENT_ID_RE.test(clean)) {
+    badRequest('El Client ID tiene un formato inválido.');
+  }
+  if (key === 'tenantId' && !MICROSOFT_TENANT_RE.test(clean)) {
+    badRequest('El Tenant ID tiene un formato inválido.');
+  }
+  if (key === 'dc' && !ZOHO_DCS.has(clean.toLowerCase())) {
+    badRequest('El data center de Zoho no es válido.');
+  }
+  if (key === 'clientSecret' && (clean.length > 2048 || /[\u0000-\u001f\u007f]/.test(clean))) {
+    badRequest('El Client Secret tiene un formato inválido.');
+  }
+  return key === 'dc' ? clean.toLowerCase() : clean;
+}
+
+function freshserviceFailureStatus(error) {
+  const message = String(error || '');
+  return message === 'Credenciales inválidas'
+    || message === 'Dominio de Freshservice inexistente'
+    ? 400
+    : 502;
 }
 
 function labelOf(provider) {
@@ -403,22 +473,50 @@ function appConfigResponse() {
 // re-hacer OAuth (el grant code de Zoho es de un solo uso). Best-effort: nunca
 // rompe la consulta de estado.
 async function healZohoIdentity(username) {
-  try {
-    const conn = readConnection(username, 'zoho');
-    if (!conn || !conn.refreshToken || conn.agentId) return;
-    const token = await getAccessToken(username, 'zoho');
-    if (!token) return;
-    const { dc } = effectiveAppConfig(username, 'zoho');
-    const me = await getZohoMe(token, dc, conn.orgId, config.instance?.identity?.email);
-    if (!me) return;
-    writeConnection(username, 'zoho', {
-      ...conn,
-      account: me.email || conn.account || null,
-      agentId: me.id || null,
-      agentName: me.name || null,
-    });
-  } catch {
-    // Si falla, la tarjeta simplemente sigue sin nombre; no se rompe nada.
+  const now = Date.now();
+  const existing = zohoIdentityHeals.get(username);
+  if (existing?.promise) return existing.promise;
+  if (existing?.retryAfter > now) return;
+
+  // Elimina cooldowns vencidos y no admite crecimiento ilimitado por usernames.
+  for (const [user, entry] of zohoIdentityHeals) {
+    if (!entry.promise && entry.retryAfter <= now) zohoIdentityHeals.delete(user);
+  }
+  if (!zohoIdentityHeals.has(username) && zohoIdentityHeals.size >= ZOHO_IDENTITY_HEAL_MAX_ENTRIES) return;
+
+  const promise = (async () => {
+    try {
+      const conn = readConnection(username, 'zoho');
+      if (!conn || !conn.refreshToken || conn.agentId) return true;
+      const token = await getAccessToken(username, 'zoho');
+      if (!token) return false;
+      const { dc } = effectiveAppConfig(username, 'zoho');
+      const me = await getZohoMe(token, dc, conn.orgId, config.instance?.identity?.email);
+      if (!me) return false;
+
+      // getAccessToken puede haber refrescado y persistido tokens: releer evita
+      // restaurar la copia vieja y sólo mezcla los campos de identidad.
+      const latest = readConnection(username, 'zoho');
+      if (!latest) return true;
+      writeConnection(username, 'zoho', {
+        ...latest,
+        account: me.email || latest.account || null,
+        agentId: me.id || latest.agentId || null,
+        agentName: me.name || latest.agentName || null,
+      });
+      return true;
+    } catch {
+      // Si falla, la tarjeta simplemente sigue sin nombre; no se rompe nada.
+      return false;
+    }
+  })();
+
+  zohoIdentityHeals.set(username, { promise, retryAfter: 0 });
+  const succeeded = await promise;
+  const current = zohoIdentityHeals.get(username);
+  if (current?.promise === promise) {
+    if (succeeded) zohoIdentityHeals.delete(username);
+    else zohoIdentityHeals.set(username, { promise: null, retryAfter: Date.now() + ZOHO_IDENTITY_HEAL_COOLDOWN_MS });
   }
 }
 
@@ -464,7 +562,7 @@ export default {
 
     r.post('/app', asyncHandler((req, res) => {
       if (!isAdmin(req)) {
-        return res.status(403).json({ error: 'Solo un administrador puede ver la configuración de la app OAuth.' });
+        return res.status(403).json({ error: 'Solo un administrador puede modificar la configuración de la app OAuth.' });
       }
 
       const body = req.body || {};
@@ -474,8 +572,9 @@ export default {
       const keys = provider === 'microsoft' ? ['clientId', 'tenantId'] : ['clientId', 'clientSecret', 'dc'];
       const patch = {};
       for (const key of keys) {
-        if (Object.hasOwn(body, key)) patch[key] = body[key];
+        if (Object.hasOwn(body, key)) patch[key] = validAppField(key, body[key]);
       }
+      if (!Object.keys(patch).length) return res.status(400).json({ error: 'No hay campos de configuración para guardar.' });
 
       try {
         writeAppConfig({ [provider]: patch });
@@ -526,20 +625,20 @@ export default {
       const { provider } = body;
       if (!isOAuthProvider(provider)) return res.status(400).json({ error: 'Proveedor desconocido.' });
 
-      const clientId = String(body.clientId || '').trim();
-      if (!clientId) return res.status(400).json({ error: 'Falta el Client ID.' });
+      if (!Object.hasOwn(body, 'clientId')) return res.status(400).json({ error: 'Falta el Client ID.' });
+      const clientId = validAppField('clientId', body.clientId);
 
       const patch = { clientId };
       if (provider === 'microsoft') {
-        if (Object.hasOwn(body, 'tenantId')) patch.tenantId = body.tenantId;
+        if (Object.hasOwn(body, 'tenantId')) patch.tenantId = validAppField('tenantId', body.tenantId);
       } else {
         const existing = readUserAppConfig(username).zoho;
-        const clientSecret = String(body.clientSecret || '').trim();
-        if (!clientSecret && !existing.clientSecret) {
+        const hasClientSecret = Object.hasOwn(body, 'clientSecret');
+        if (!hasClientSecret && !existing.clientSecret) {
           return res.status(400).json({ error: 'Falta el Client Secret.' });
         }
-        if (clientSecret) patch.clientSecret = clientSecret;
-        if (Object.hasOwn(body, 'dc')) patch.dc = body.dc;
+        if (hasClientSecret) patch.clientSecret = validAppField('clientSecret', body.clientSecret);
+        if (Object.hasOwn(body, 'dc')) patch.dc = validAppField('dc', body.dc);
       }
 
       writeUserAppConfig(username, { [provider]: patch });
@@ -562,7 +661,7 @@ export default {
     // Estas rutas deben registrarse ANTES de '/:provider/...': si no,
     // '/codex/status' matchea '/:provider/status' con provider='codex' y
     // reqProvider responde 400 "Proveedor desconocido".
-    r.post('/codex/start', (req, res) => {
+    r.post('/codex/start', asyncHandler((req, res) => {
       const user = userOf(req);
       const job = readCodexLoginJob(user);
       if (
@@ -585,17 +684,21 @@ export default {
         // (sin ningún await entre el read de arriba y este write): así dos POST
         // simultáneos no pueden pasar ambos el dedup y lanzar dos runners.
         writeCodexLoginJob(user, { status: 'starting' });
-        spawn(process.execPath, [CODEX_LOGIN_RUNNER, '--user', user], {
+        const child = spawn(process.execPath, [CODEX_LOGIN_RUNNER, '--user', user], {
           detached: true,
           stdio: 'ignore',
-        }).unref();
+        });
+        child.on('error', runnerSpawnError('Codex', user, () => {
+          writeCodexLoginJob(user, { status: 'error', error: 'No pude lanzar el login de Codex.', done: true });
+        }));
+        child.unref();
       } catch (e) {
         return res.status(500).json({ error: 'No pude lanzar el login de Codex: ' + e.message });
       }
       res.json({ ok: true });
-    });
+    }));
 
-    r.get('/codex/status', (req, res) => {
+    r.get('/codex/status', asyncHandler((req, res) => {
       const user = userOf(req);
       const cred = codexCredState(user);
       const connected = cred.present && !cred.expired;
@@ -622,12 +725,15 @@ export default {
         // ocurrido (el click que acaba de hacer el usuario) de uno viejo.
         ts: job.ts || null,
       });
-    });
+    }));
 
     r.post('/codex/cancel', (req, res) => {
       const user = userOf(req);
       const job = readCodexLoginJob(user);
       try {
+        if (codexLoginRunnerAlive(job)) {
+          try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
+        }
         if (job) writeCodexLoginJob(user, { ...job, status: 'cancelled' });
       } catch (e) {
         return res.status(500).json({ error: 'No pude cancelar el login de Codex: ' + e.message });
@@ -635,7 +741,7 @@ export default {
       res.json({ ok: true });
     });
 
-    r.post('/github/start', (req, res) => {
+    r.post('/github/start', asyncHandler((req, res) => {
       const user = userOf(req);
       if (hasGithubAuth(user)) {
         return res.json({ ok: true, already: true, connected: true });
@@ -663,20 +769,22 @@ export default {
       try {
         // Reserva síncrona antes del spawn para que dos POST simultáneos no
         // puedan lanzar dos runners para el mismo usuario.
-        writeJsonAtomic(ghJobPath(user), {
+        writeGhJob(user, {
           status: 'starting',
-          user,
-          ts: Date.now(),
-        }, { mode: 0o600 });
-        spawn(process.execPath, [GH_LOGIN_RUNNER, '--user', user], {
+        });
+        const child = spawn(process.execPath, [GH_LOGIN_RUNNER, '--user', user], {
           detached: true,
           stdio: 'ignore',
-        }).unref();
+        });
+        child.on('error', runnerSpawnError('GitHub', user, () => {
+          writeGhJob(user, { status: 'error', error: 'No pude lanzar el login de GitHub.', done: true });
+        }));
+        child.unref();
       } catch (e) {
         return res.status(500).json({ error: 'No pude lanzar el login de GitHub: ' + e.message });
       }
       res.json({ ok: true, status: 'starting' });
-    });
+    }));
 
     r.get('/github/status', (req, res) => {
       const user = userOf(req);
@@ -703,12 +811,10 @@ export default {
           try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
         }
         if (job) {
-          writeJsonAtomic(ghJobPath(user), {
+          writeGhJob(user, {
             ...job,
             status: 'cancelled',
-            user,
-            ts: Date.now(),
-          }, { mode: 0o600 });
+          });
         }
       } catch (e) {
         return res.status(500).json({ error: 'No pude cancelar el login de GitHub: ' + e.message });
@@ -734,10 +840,14 @@ export default {
         // Reserva síncrona antes del spawn: dos requests del mismo usuario no
         // pueden lanzar dos PTY antes de que el hijo publique su pid.
         writePadLoginJob(user, { status: 'starting', done: false });
-        spawn(process.execPath, [PAD_LOGIN_RUNNER, '--user', user], {
+        const child = spawn(process.execPath, [PAD_LOGIN_RUNNER, '--user', user], {
           detached: true,
           stdio: 'ignore',
-        }).unref();
+        });
+        child.on('error', runnerSpawnError('Pad', user, () => {
+          writePadLoginJob(user, { status: 'error', error: 'No pude lanzar el login de Pad.', done: true });
+        }));
+        child.unref();
       } catch (e) {
         try {
           writePadLoginJob(user, {
@@ -862,11 +972,11 @@ export default {
       res.json({ ok: true });
     });
 
-    r.get('/tolkien/status', (req, res) => {
+    r.get('/tolkien/status', asyncHandler((req, res) => {
       // El dato se resuelve por OPERACIÓN desde el principal de la request;
       // jamás desde os.homedir() ni desde una constante calculada al importar.
       res.json(tolkienStatus(userDataDir(userOf(req))));
-    });
+    }));
 
     r.post('/tolkien/disconnect', (req, res) => {
       // Borra la sesión local del usuario; no cierra su sesión remota en Tolkien.
@@ -899,10 +1009,14 @@ export default {
         try { fs.unlinkSync(claudeLoginCodePath(user)); } catch (e) {
           if (e?.code !== 'ENOENT') throw e;
         }
-        spawn(process.execPath, [CLAUDE_LOGIN_RUNNER, '--user', user], {
+        const child = spawn(process.execPath, [CLAUDE_LOGIN_RUNNER, '--user', user], {
           detached: true,
           stdio: 'ignore',
-        }).unref();
+        });
+        child.on('error', runnerSpawnError('Claude', user, () => {
+          writeClaudeLoginJob(user, { status: 'error', error: 'No pude lanzar el login de Claude.' });
+        }));
+        child.unref();
       } catch (e) {
         try { writeClaudeLoginJob(user, { status: 'error', error: 'No pude lanzar el login de Claude.' }); } catch { /* noop */ }
         return res.status(500).json({ error: 'No pude lanzar el login de Claude: ' + e.message });
@@ -979,7 +1093,9 @@ export default {
       if (!apiKey) return res.status(400).json({ error: 'Falta la API key de Freshservice.' });
 
       const verified = await verifyFreshservice({ domain, apiKey });
-      if (!verified.ok) return res.status(400).json({ error: verified.error });
+      if (!verified.ok) {
+        return res.status(freshserviceFailureStatus(verified.error)).json({ error: verified.error });
+      }
 
       writeConnection(username, 'freshservice', {
         provider: 'freshservice',
@@ -1098,6 +1214,9 @@ export default {
 
       const job = readJob(username, jobId);
       if (!job || job.provider !== provider) return res.status(404).json({ error: 'Job inexistente.' });
+      if (job.status !== 'pending') {
+        return res.status(409).json({ error: 'Este intento de autorización ya fue procesado.' });
+      }
       if (provider === 'microsoft') {
         return res.status(400).json({ error: 'Microsoft se conecta con el código del dispositivo, no hace falta pegar nada.' });
       }
@@ -1111,13 +1230,21 @@ export default {
         dc,
         source: appSource,
       } = effectiveAppConfig(username, 'zoho');
+      // Reserva síncrona antes del await: un segundo POST ve `exchanging` y no
+      // puede consumir el mismo grant code en paralelo.
+      writeJob(username, jobId, { ...job, status: 'exchanging', error: null });
       let tokens;
       try {
         tokens = await exchangeCode({ clientId, clientSecret, code: value, dc });
       } catch (e) {
         const rawError = e?.message || String(e);
         const error = explainZohoError(rawError);
-        patchJob(username, jobId, { status: 'error', error });
+        try {
+          const current = readJob(username, jobId);
+          if (current && current.status !== 'connected') {
+            writeJob(username, jobId, { ...current, status: 'error', error });
+          }
+        } catch { /* el error HTTP sigue siendo la respuesta principal */ }
         return res.status(502).json({
           error,
           ...(rawError.includes('invalid_code') ? { code: 'invalid_code' } : {}),
@@ -1164,6 +1291,9 @@ export default {
       const username = targetUserOf(req);
       auditExternalOperation(req, username, provider, 'status');
       const jobId = req.query.jobId;
+      if (typeof jobId !== 'string' || !JOB_ID_RE.test(jobId)) {
+        return res.status(400).json({ error: 'jobId inválido.' });
+      }
       const job = readJob(username, jobId);
       if (!job) {
         return res.status(404).json({

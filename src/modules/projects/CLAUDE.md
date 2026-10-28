@@ -9,7 +9,8 @@ uno nuevo es sumar una entrada al objeto, todas las funciones de
 memory.js toman `projectDir` como parámetro (nada hardcodeado).
 GET /api/projects = lista {key,name,dir}; GET/POST /:key/context =
 <projectDir>/CLAUDE.md real (POST entero: existe para uso
-programático, la UI NO lo usa); INTEGRIDAD — la UI edita el
+programático, la UI NO lo usa; exige `hash` y preserva sin cambios los bloques
+gestionados por mejora-continua/pad-index); INTEGRIDAD — la UI edita el
 contexto POR SECCIONES (riesgo señalado por el usuario: cargar el
 .md entero en un textarea permitía borrarlo completo de un
 descuido): GET /:key/context/sections = índice {i,title,level,
@@ -50,7 +51,7 @@ bloquea el trabajo. Guardar sin cambios NO dispara análisis.
 GET /:key/memory = índice MEMORY.md + notas resueltas contra
 disco (orden del índice, huérfanas al final); GET/POST
 /:key/memory/index = MEMORY.md crudo; GET/POST
-/:key/memory/note/:file = una nota (whitelist estricta
+/:key/memory/note/:file = una nota (ambos POST exigen `hash`; whitelist estricta
 `^[A-Za-z0-9_-]+\.md$`, sin path traversal; `:key` validado contra
 PROJECTS, 404 si no existe). GET abierto a autenticados, POST
 admin (mismo patrón que el contexto de bugfixes). La carpeta de

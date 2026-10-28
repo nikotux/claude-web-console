@@ -22,12 +22,16 @@ permite a cada principal autenticado conservar su propia marca de lectura.
 | GET | `/api/news/job/:id` | Admin | Lee el estado efectivo del job en disco. |
 
 La clave de lectura es el `username` para una sesión de usuario y `__host__`
-para el token maestro. Un no-admin nunca recibe entradas `hidden:true`.
+para el token maestro. Un no-admin nunca recibe entradas `hidden:true` ni el
+bloque interno `tech`.
 
 ## Archivos de runtime y retención
 
 - `~/.cwc-data/news.json`: `{ entries: [...] }`, escritura atómica. Conserva
-  como máximo las 200 entradas más recientes.
+  como máximo las 200 entradas más recientes. Sus read-modify-write se
+  serializan con `news.json.lock`, recuperable si supera 30 segundos.
+- `~/.cwc-data/news-cursor.json`: último SHA procesado; avanza en cada job
+  `done`, incluso cuando el redactor devuelve `[]`.
 - `<dataDir-del-principal>/news-seen.json`: mapa
   `{ "<principal>": <timestamp ms> }`, escritura atómica y sin poda; una clave
   por lector. El endpoint pasa `systemScopeFor(req).dataDir` por operación y el
@@ -69,12 +73,12 @@ por lo tanto no tiene Bash, Edit, Write, WebFetch ni MCP.
   (`findRunningNewsJob`). Si alguien vuelve a atar el indicador a una variable
   de memoria del front, cerrar el panel vuelve a hacer desaparecer una
   generación en curso.
-- `pending` sale de `git rev-list --count` contra el último commit de la última
-  entrada `auto`; ante cualquier error de git devuelve `0` a propósito — es un
-  dato cosmético y nunca puede romper el listado.
+- `pending` sale de `git rev-list --count` contra el marcador más nuevo entre
+  el cursor y la última entrada `auto`; si ese SHA ya no existe, usa la ventana
+  de 10 commits. Ante otro error de git devuelve `0` y no rompe el listado.
 - El origen de `files` depende del disparador. `POST /api/news/generate` lo
-  calcula con `generationInput()` como diff desde el último commit de la última
-  entrada `auto`; el push automático lo arma en `backup/index.js`. Ese segundo
+  calcula con `generationInput()` como diff desde el marcador más nuevo entre
+  cursor y última entrada `auto`; el push automático lo arma en `backup/index.js`. Ese segundo
   camino antes mandaba `staged`, es decir, solo los archivos del commit
   `cwc backup …`: si el trabajo ya venía commiteado quedaba en
   `["README.md"]`. Ahora manda el diff real de `beforeRef..HEAD`. Un `files`

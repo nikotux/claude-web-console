@@ -126,7 +126,11 @@ export async function sendComm({ channel, action, payload = {}, contactId = null
 // ===== Jobs de envío desk/teams (desacoplado) =====
 import fss from 'node:fs';
 const SEND_DIR = path.join(COMMS_DIR, 'send');
-function sendJobPath(id) { return path.join(SEND_DIR, `${id}.json`); }
+function sendJobPath(id) {
+  const safeId = String(id || '');
+  if (!/^s[a-z0-9]+$/.test(safeId)) throw new Error('Id de envío inválido');
+  return path.join(SEND_DIR, `${safeId}.json`);
+}
 export function readSendJob(id) { try { return JSON.parse(fss.readFileSync(sendJobPath(id), 'utf8')); } catch { return null; } }
 // Poda de send jobs viejos (BUG-32): son efímeros (el front encuesta y termina),
 // pero sin poda se acumulan para siempre. Se barre lo > 7 días en cada escritura.

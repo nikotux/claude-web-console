@@ -51,6 +51,9 @@ unifi_dispositivos/unifi_cliente/unifi_diagnosticar/unifi_salud/unifi_inventario
 + (PLAN-1795) unifi_radios/unifi_wan/unifi_auditoria. Rutas /api/unifi
 (index.js): GET /devices · /clients · /health · /client · /radios ·
 /wan · /audit + POST /scan (admin) · /audit-snapshot (admin).
+Errores UniFi: configuración ausente/inválida→503, upstream→502 e internos no marcados→500; los POST a Pad también responden 502 si su resultado trae `ok:false`.
+El inventario no retira categorías cuyo fetch falló, devuelve `failedCategories` + `errorDetails` y comparte una sola corrida `scanToPad` en vuelo dentro del proceso.
+TLS conserva compatibilidad self-signed sin pin por defecto; `UNIFI_CERT_SHA256` activa pinning opcional contra `fingerprint256` (hexadecimal, con o sin `:`).
 FRONTEND: panel en ⚙ Sistema → grupo Diagnóstico → '🛰️ UniFi'
 (public/js/modules/system/unifi-panel.js, mountUnifiPanel; molde de
 dashboard-panel.js) — semáforo de optimización para llamadas + tablas

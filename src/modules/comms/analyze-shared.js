@@ -26,7 +26,11 @@ export const ANALYZE_TIMEOUT_MS = 60 * 1000;
 export const ANALYZE_STALE_MS = ANALYZE_TIMEOUT_MS + 30 * 1000;
 
 function ensureDir() { fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); }
-function jobPath(id) { return path.join(DATA_DIR, `${id}.json`); }
+function jobPath(id) {
+  const safeId = String(id || '');
+  if (!/^[a-f0-9]{24}$/.test(safeId)) throw new Error('Id de análisis inválido');
+  return path.join(DATA_DIR, `${safeId}.json`);
+}
 
 // Texto plano del hilo para el prompt (más viejo → más nuevo).
 export function threadText(thread, contactName) {
@@ -83,9 +87,29 @@ export function spawnAnalyzeRunner(id) {
   ensureDir();
   fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true, mode: 0o700 });
   const logFd = fs.openSync(LOG_FILE, 'a');
-  const child = spawn(process.execPath, [RUNNER, id], { detached: true, stdio: ['ignore', logFd, logFd], env: process.env });
-  child.unref();
-  fs.closeSync(logFd);
+  const markSpawnError = (err) => {
+    try { console.error('[comms] no se pudo lanzar el analyze-runner:', String(err?.message || err)); } catch { /* noop */ }
+    const job = readAnalyzeJob(id);
+    if (job?.status === 'running') {
+      writeAnalyzeJob(id, {
+        ...job,
+        status: 'error',
+        analysis: null,
+        error: 'No se pudo lanzar el runner de análisis.',
+        updatedAt: Date.now(),
+      });
+    }
+  };
+  try {
+    const child = spawn(process.execPath, [RUNNER, id], { detached: true, stdio: ['ignore', logFd, logFd], env: process.env });
+    child.on('error', markSpawnError);
+    child.unref();
+  } catch (err) {
+    markSpawnError(err);
+    throw err;
+  } finally {
+    fs.closeSync(logFd);
+  }
 }
 
 export function analyzePrompt(text, contactName) {

@@ -42,10 +42,14 @@ async function envBaseOptions() {
   }
 }
 
-// Entornos que existen y están vivos: son los únicos que tiene sentido destruir.
-async function liveEnvOptions() {
+// Entornos de ESTA sala que existen y están vivos: son los únicos que tiene
+// sentido destruir desde una petición emitida en ella.
+async function liveEnvOptions(ctx) {
+  const salaId = String(ctx?.salaId || '');
+  if (!salaId) return [];
   try {
     return listEnvs()
+      .filter((rec) => String(rec?.chatId || '') === salaId)
       .filter((rec) => rec && isEnvAlive(rec))
       .map((rec) => ({ value: rec.id, label: `${rec.id} · puerto ${rec.port ?? '?'} · ${rec.status ?? 'desconocido'}` }));
   } catch {

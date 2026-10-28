@@ -15,10 +15,9 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { encodeCwd } from '../../core/claude-model.js';
-import { resolveDataDir } from '../../core/data-dir.js';
 import {
-  hostUser, readUserOauthToken, userClaudeDir, userDataDir, userRunnerEnv,
-} from '../../core/user-space.js';
+  retroClaudeDirFor, retroDataDirFor, retroHostUser, retroRunnerEnvFor,
+} from './owner-dirs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
@@ -42,7 +41,7 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 // ===== Job file-based (server escribe 'running', runner escribe 'done') =====
 function dataDirFor(owner = null) {
-  return owner ? userDataDir(owner) : resolveDataDir();
+  return retroDataDirFor(owner);
 }
 export function retroJobsDirFor(owner = null) {
   return path.join(dataDirFor(owner), 'retro');
@@ -50,17 +49,6 @@ export function retroJobsDirFor(owner = null) {
 function jobPath(id, owner = null) { return path.join(retroJobsDirFor(owner), `${id}.json`); }
 function ensureDir(owner = null) { fs.mkdirSync(retroJobsDirFor(owner), { recursive: true, mode: 0o700 }); }
 function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro.log'); }
-function runnerEnvFor(owner) {
-  if (!owner || owner === hostUser()) return process.env;
-  const oauthToken = readUserOauthToken(owner);
-  if (!oauthToken) {
-    const error = new Error('Necesitás conectar tu cuenta de Claude para destilar la sesión.');
-    error.conflict = true;
-    throw error;
-  }
-  return userRunnerEnv(owner, { oauthToken });
-}
-
 export function retroJobId(sessionId) {
   return crypto.createHash('sha1').update(String(sessionId || '')).digest('hex').slice(0, 24);
 }
@@ -105,22 +93,27 @@ export function spawnRetroRunner(id, owner = null) {
   ensureDir(owner);
   const logFile = logFileFor(owner);
   fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
-  const logFd = fs.openSync(logFile, 'a');
-  const child = spawn(process.execPath, [RUNNER, id], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: runnerEnvFor(owner),
-  });
-  child.on('error', (err) => {
-    try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL job ${id}: ${err?.message || err}\n`); }
-    catch { /* noop */ }
-    try {
-      const job = readRetroJob(id, owner);
-      if (job && job.status === 'running') {
-        writeRetroJob(id, { ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de mejora continua.', updatedAt: Date.now() }, owner);
-      }
-    } catch { /* noop */ }
-  });
-  child.unref();
-  fs.closeSync(logFd);
+  let logFd = null;
+  try {
+    logFd = fs.openSync(logFile, 'a');
+    const child = spawn(process.execPath, [RUNNER, id], {
+      detached: true, stdio: ['ignore', logFd, logFd],
+      env: retroRunnerEnvFor(owner, { missingOauthMessage: 'Necesitás conectar tu cuenta de Claude para destilar la sesión.' }),
+    });
+    child.on('error', (err) => {
+      try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL job ${id}: ${err?.message || err}\n`); }
+      catch { /* noop */ }
+      try {
+        const job = readRetroJob(id, owner);
+        if (job && job.status === 'running') {
+          writeRetroJob(id, { ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de mejora continua.', updatedAt: Date.now() }, owner);
+        }
+      } catch { /* noop */ }
+    });
+    child.unref();
+  } finally {
+    if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* noop */ } }
+  }
 }
 
 // ===== Lectura + condensado determinístico del transcript (0 tokens) =====
@@ -139,8 +132,8 @@ function clampMiddle(s, max) {
 // (usuario/asistente/marcadores de tool) para alimentar la destilación.
 export function readTranscript(cwd, sessionId, claudeDir = null, owner = null) {
   // En multi-tenant, el .claude es el del DUEÑO. El llamador puede pasarlo ya
-  // resuelto; si no, se deriva con userClaudeDir(owner).
-  const base = claudeDir || userClaudeDir(owner || hostUser());
+  // resuelto; si no, se deriva con el resolver aislado del dueño.
+  const base = claudeDir || retroClaudeDirFor(owner);
   const file = path.join(base, 'projects', encodeCwd(cwd), `${sessionId}.jsonl`);
   let raw;
   try { raw = fs.readFileSync(file, 'utf8'); } catch { return null; }
@@ -192,7 +185,7 @@ function classifyProject(cwd) {
 // Best-effort total: cualquier falla se traga (nunca bloquea el cierre del chat).
 export async function queueRetroDistill({ cwd, sessionId, title, ticketNumber, learningId, owner, claudeDir } = {}) {
   if (!cwd || !sessionId) return;
-  const effectiveOwner = owner || hostUser();
+  const effectiveOwner = owner || retroHostUser();
   const sig = readTranscript(cwd, sessionId, claudeDir, effectiveOwner);
   if (!sig) return;
   // FILTRO: solo destilamos chats con sustancia (tocó código, o conversación de
@@ -222,7 +215,21 @@ export async function queueRetroDistill({ cwd, sessionId, title, ticketNumber, l
     result: null,
     error: null,
   }, effectiveOwner);
-  spawnRetroRunner(id, effectiveOwner);
+  try {
+    spawnRetroRunner(id, effectiveOwner);
+  } catch (err) {
+    const job = readRetroJob(id, effectiveOwner);
+    if (job?.status === 'running') {
+      writeRetroJob(id, {
+        ...job,
+        status: 'error',
+        result: null,
+        error: String(err?.message || err).slice(0, 300),
+        updatedAt: Date.now(),
+      }, effectiveOwner);
+    }
+    throw err;
+  }
 }
 
 // ===== Prompt de destilación (texto puro, doble deny en el runner) =====

@@ -30,6 +30,7 @@ if (_resv && _resv.pid !== process.pid) { log('ya hay otro escaneo Teams (lock f
 
 const contacts = readContacts();
 const self = readSelf();
+const previousTeams = readTeams();
 let done = 0;
 const beat = () => writeTeamsLock({ pid: process.pid, done, total: contacts.length });
 beat();
@@ -72,7 +73,7 @@ async function fetchOne(contact) {
     try { await Promise.race([pump, timeout]); }
     finally { clearTimeout(timer); try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
   } catch (err) {
-    return { found: false, note: String(err?.message || err).slice(0, 160) };
+    return { found: false, error: true, note: String(err?.message || err).slice(0, 160) };
   }
   return parseTeamsResponse(out, contact, self);
 }
@@ -85,19 +86,28 @@ async function run() {
   // Node single-thread. start:3 porque cada query consume tokens. Los
   // resultados llegan FUERA DE ORDEN — la escritura incremental de writeTeams()
   // tras cada contacto sigue siendo válida (el array solo crece).
+  const previous = previousTeams;
+  const previousByContact = new Map((previous.threads || []).map((thread) => [thread.contactId, thread]));
+  const completedContacts = new Set();
   const threads = [];
   await runAdaptivePool(contacts, async (contact, ctl) => {
     log(`escaneando DMs de ${contact.name}…`);
     let res;
     try { res = await fetchOne(contact); }
-    catch (err) { res = { found: false, note: String(err?.message || err).slice(0, 160) }; }
+    catch (err) { res = { found: false, error: true, note: String(err?.message || err).slice(0, 160) }; }
     if (res.found && res.thread) { threads.push(res.thread); log(`${contact.name}: ${res.thread.messages.length} mensajes.`); }
-    else { log(`${contact.name}: descartado — ${res.note || 'no encontrado'}${res.rejected ? ' [RECHAZADO por atribución]' : ''}.`); }
+    else if (res.error && previousByContact.has(contact.id)) {
+      threads.push(previousByContact.get(contact.id));
+      log(`${contact.name}: error transitorio — conservo el hilo previo (${res.note || 'sin detalle'}).`);
+    } else { log(`${contact.name}: descartado — ${res.note || 'no encontrado'}${res.rejected ? ' [RECHAZADO por atribución]' : ''}.`); }
     // Rate-limit/overload del API ⇒ pedirle al pool que baje la concurrencia.
     if (!res.found && /429|overload|rate.?limit/i.test(res.note || '')) ctl.backoff();
+    completedContacts.add(contact.id);
     done += 1; beat();
-    // Escritura incremental (preserva DMs de otros contactos ya escaneados).
-    writeTeams({ threads, scannedAt: Date.now(), error: null });
+    // Escritura incremental completa: conserva los contactos que este lote
+    // todavía no terminó de revisar, para que un corte no trunque teams.json.
+    const pendingThreads = (previous.threads || []).filter((thread) => !completedContacts.has(thread.contactId));
+    writeTeams({ threads: [...threads, ...pendingThreads], scannedAt: Date.now(), error: null });
   }, { start: 3 });
   writeTeams({ threads, scannedAt: Date.now(), error: null });
   log(`listo: ${threads.length} hilo(s) de Teams.`);
@@ -107,6 +117,6 @@ log(`comms-teams arrancando (pid ${process.pid}, ${contacts.length} contacto(s))
 run().then(() => finish(0)).catch((err) => {
   log('FALLÓ:', err?.message || err);
   const prev = readTeams();
-  writeTeams({ threads: prev.threads || [], scannedAt: Date.now(), error: String(err?.message || err).slice(0, 200) });
+  writeTeams({ threads: prev.threads || [], scannedAt: previousTeams.scannedAt || null, error: String(err?.message || err).slice(0, 200) });
   finish(1);
 });

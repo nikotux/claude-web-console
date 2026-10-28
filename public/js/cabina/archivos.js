@@ -1,6 +1,7 @@
 import { openZoomViewer } from '../ui/zoom-viewer.js';
 import { icon } from '../ui/icons.js';
 import { t } from '../ui/i18n.js';
+import { confirmDialog, promptDialog } from '../ui/dialog.js';
 
 const FILES_API = '/api/files';
 const VIEW_STORAGE_KEY = 'cabina:files:view';
@@ -561,7 +562,7 @@ function downloadEntry(entry) {
 async function createFolder() {
   const mountedContext = context;
   const destination = currentPath;
-  const requested = window.prompt(t('cabina.archivos.newFolderPrompt', 'Nombre de la nueva carpeta:'));
+  const requested = await promptDialog({ title: t('cabina.archivos.newFolderPrompt', 'Nombre de la nueva carpeta:') });
   if (requested === null) return;
   const name = requested.trim();
   if (!name) {
@@ -581,7 +582,10 @@ async function renameEntry(entry) {
   if (!entry) return;
   const mountedContext = context;
   const sourceFolder = currentPath;
-  const requested = window.prompt(t('cabina.archivos.renamePrompt', 'Nuevo nombre para “{name}”:', { name: entry.name }), entry.name);
+  const requested = await promptDialog({
+    title: t('cabina.archivos.renamePrompt', 'Nuevo nombre para “{name}”:', { name: entry.name }),
+    value: entry.name,
+  });
   if (requested === null) return;
   const newName = requested.trim();
   if (!newName) {
@@ -603,7 +607,10 @@ async function renameEntry(entry) {
 
 async function trashEntry(entry) {
   if (!entry) return;
-  const confirmed = window.confirm(t('cabina.archivos.trashConfirm', '¿Mandar “{name}” a la papelera?', { name: entry.name }));
+  const confirmed = await confirmDialog({
+    message: t('cabina.archivos.trashConfirm', '¿Mandar “{name}” a la papelera?', { name: entry.name }),
+    danger: true,
+  });
   if (!confirmed) return;
   const mountedContext = context;
   const sourceFolder = currentPath;

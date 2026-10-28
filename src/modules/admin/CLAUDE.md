@@ -18,6 +18,7 @@ No mantiene un modelo propio: el CRUD delega en `core/users.js` y el reciclado b
 | POST | `/api/admin/users/:username/identity` | Sanea y persiste `name`/`email`/`github`/`signature` en el `userDataDir` de esa cuenta. |
 | POST | `/api/admin/users` | Crea una cuenta desde `{ username, password, admin? }`; `admin`, si viene, debe ser boolean, y el username del host está reservado (`409`). |
 | PUT | `/api/admin/users/:username` | Cambia `password`, `admin` y/o `oversight`; los flags deben ser booleanos, exige al menos un cambio válido y rechaza tanto la autoedición como el username del host (`409`). |
+| POST | `/api/admin/users/:username/sponsor` | Revoca el sponsor o deja la cuenta en espera; rechaza al host y la autoedición (`409`). |
 | DELETE | `/api/admin/users/:username` | Elimina una cuenta, invalida sus sesiones web y ejecuta la baja recuperable de sus recursos; rechaza la autoeliminación. |
 | POST | `/api/admin/restart-runners` | Envía `SIGTERM` a cada `cwc-chat-runner.js` vivo y devuelve PIDs terminados y fallos individuales. |
 
@@ -96,7 +97,7 @@ El CRUD escribe indirectamente `users.json` en la raíz del repo, mediante `core
   `oversightFor()` / `adminFor()` en cada request: apagar el primero o degradar
   el segundo vale desde el request siguiente. La revocación conservada al
   degradar no es el mecanismo que hace efectiva la democión.
-- La autoedición y la autoeliminación devuelven `409`. No quitar esas guardas: evitan que el admin conectado se deje sin acceso desde este router.
+- La autoedición (incluido sponsor) y la autoeliminación devuelven `409`. No quitar esas guardas: evitan que el admin conectado se deje sin acceso desde este router.
 - POST y PUT tampoco permiten administrar una cuenta cuyo username coincida con
   `hostUser()`: `userSpace()`/`userFileRoot()` resuelven por string y esa cuenta
   obtendría el HOME REAL aunque su fila dijera `admin:false`, saltándose todo el
@@ -106,4 +107,4 @@ El CRUD escribe indirectamente `users.json` en la raíz del repo, mediante `core
   (el PUT compara el parámetro de ruta ya validado con `hostUser()`).
 - Las reglas de username, la contraseña mínima de 10 caracteres y el hash no están acá sino en `core/users.js`; no dupliques validaciones con criterios distintos.
 - `restart-runners` reconoce hijos por el texto `cwc-chat-runner.js` en su línea de comando. Cambiar el nombre o la forma de lanzamiento sin actualizar este patrón vuelve el reciclado inefectivo.
-- `pgrep` con exit 1 significa “no hay runners” y no es un error. Los fallos al señalar un PID se acumulan sin abortar los demás; este endpoint nunca debe matar `src/server.js` ni reemplazar un reinicio real del servicio.
+- `pgrep` tiene timeout de 5 s; exit 1 significa “no hay runners”, pero timeout/señal son errores. Los fallos al señalar un PID se acumulan sin abortar los demás; este endpoint nunca debe matar `src/server.js` ni reemplazar un reinicio real del servicio.

@@ -5,6 +5,7 @@
 // de Microsoft por username y traduce URLs pegadas desde el navegador a rutas
 // de drive de Graph, donde la biblioteca por defecto ya es la raíz.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { getAccessToken } from './connections-store.js';
 
@@ -259,10 +260,82 @@ export async function listFolder(username, site, folderPath = '', { top = 200 } 
   return items;
 }
 
-export async function downloadFile(username, site, filePath, destAbs) {
+function confineLocalPath(absPath, root, { mustExist }) {
+  // El llamador debería pasar su raíz; sin ella, un inquilino queda confinado a su propio espacio
+  // y el host conserva el comportamiento histórico.
+  if (root == null) {
+    const processHome = process.env.HOME || os.homedir();
+    const usersRoots = new Set();
+    try {
+      usersRoots.add(path.join(os.userInfo().homedir, '.cwc-users'));
+    } catch {
+      // Sin una raíz candidata confiable, el host conserva el comportamiento histórico.
+    }
+
+    for (const usersRoot of usersRoots) {
+      const relativeHome = path.relative(usersRoot, processHome);
+      const firstSegment = relativeHome.split(path.sep)[0];
+      if (relativeHome && !path.isAbsolute(relativeHome) && firstSegment !== '..') {
+        root = path.join(usersRoot, firstSegment);
+        break;
+      }
+    }
+    if (root == null) return;
+  }
+
+  const confinementError = new Error('La ruta local queda fuera de la carpeta permitida.');
+  try {
+    const rootResolved = path.resolve(root);
+    const rootReal = fs.realpathSync(rootResolved);
+    const absResolved = path.resolve(absPath);
+    const lexicalRelative = path.relative(rootResolved, absResolved);
+    if (lexicalRelative.startsWith('..') || path.isAbsolute(lexicalRelative)) throw confinementError;
+
+    if (mustExist) {
+      const absReal = fs.realpathSync(absResolved);
+      const realRelative = path.relative(rootReal, absReal);
+      if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) throw confinementError;
+      return;
+    }
+
+    let existingAncestor = absResolved;
+    let destinationExists = false;
+    try {
+      fs.lstatSync(absResolved);
+      destinationExists = true;
+    } catch {
+      destinationExists = false;
+    }
+    while (true) {
+      try {
+        fs.lstatSync(existingAncestor);
+        break;
+      } catch {
+        const parent = path.dirname(existingAncestor);
+        if (parent === existingAncestor) throw confinementError;
+        existingAncestor = parent;
+      }
+    }
+
+    const ancestorReal = fs.realpathSync(existingAncestor);
+    const ancestorRelative = path.relative(rootReal, ancestorReal);
+    if (ancestorRelative.startsWith('..') || path.isAbsolute(ancestorRelative)) throw confinementError;
+
+    if (destinationExists) {
+      const destinationReal = fs.realpathSync(absResolved);
+      const destinationRelative = path.relative(rootReal, destinationReal);
+      if (destinationRelative.startsWith('..') || path.isAbsolute(destinationRelative)) throw confinementError;
+    }
+  } catch {
+    throw confinementError;
+  }
+}
+
+export async function downloadFile(username, site, filePath, destAbs, { root } = {}) {
   const siteId = requireSite(site);
   if (!filePath) throw new Error('Falta la ruta del archivo en SharePoint.');
   if (!path.isAbsolute(destAbs)) throw new Error('downloadFile exige destAbs absoluto.');
+  confineLocalPath(destAbs, root, { mustExist: false });
 
   const itemPath = drivePath(filePath);
   if (!itemPath) throw new Error('Falta la ruta del archivo en SharePoint.');
@@ -276,9 +349,10 @@ export async function downloadFile(username, site, filePath, destAbs) {
   };
 }
 
-export async function uploadFile(username, site, folderPath, srcAbs, { as = null } = {}) {
+export async function uploadFile(username, site, folderPath, srcAbs, { as = null, root } = {}) {
   const siteId = requireSite(site);
   if (!path.isAbsolute(srcAbs)) throw new Error('uploadFile exige srcAbs absoluto.');
+  confineLocalPath(srcAbs, root, { mustExist: true });
 
   const stat = await fs.promises.stat(srcAbs);
   if (!stat.isFile()) throw new Error('La ruta local no es un archivo: ' + srcAbs);

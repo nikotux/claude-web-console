@@ -23,8 +23,12 @@ function sessionUser(req, res) {
   return null;
 }
 
-function configStatus(user) {
-  const status = capabilityStatus(user);
+async function configStatus(user) {
+  const [status, pending, blocking] = await Promise.all([
+    capabilityStatus(user),
+    pendingFor(user),
+    blockingFor(user),
+  ]);
   const capabilities = [...CAPABILITIES]
     .sort((a, b) => a.order - b.order)
     .map((capability) => ({
@@ -39,29 +43,37 @@ function configStatus(user) {
 
   return {
     capabilities,
-    pending: pendingFor(user),
-    blocking: blockingFor(user),
+    pending,
+    blocking,
     // Para el host el provisioning de alta no aplica: nunca corrió y no debe correr.
     hostExempt: isHostUser(user),
     provisioning: readProvisionState(user),
   };
 }
 
-myConfigRouter.get('/my-config', (req, res) => {
+myConfigRouter.get('/my-config', async (req, res) => {
   const user = sessionUser(req, res);
   if (!user) return;
-  res.json(configStatus(user));
+  try {
+    res.json(await configStatus(user));
+  } catch {
+    res.status(500).json({ error: 'No se pudo leer tu configuración.' });
+  }
 });
 
-myConfigRouter.post('/my-config/retry', (req, res) => {
+myConfigRouter.post('/my-config/retry', async (req, res) => {
   const user = sessionUser(req, res);
   if (!user) return;
-  if (isHostUser(user)) {
-    return res.status(409).json({
-      error: 'El provisioning de alta no aplica al host: su espacio ya existe. Reintentarlo crearía un workspace de Pad fantasma y pisaría sus skills.',
-      ...configStatus(user),
-    });
+  try {
+    if (isHostUser(user)) {
+      return res.status(409).json({
+        error: 'El provisioning de alta no aplica al host: su espacio ya existe. Reintentarlo crearía un workspace de Pad fantasma y pisaría sus skills.',
+        ...await configStatus(user),
+      });
+    }
+    provisionNewUser(user);
+    return res.json(await configStatus(user));
+  } catch {
+    return res.status(500).json({ error: 'No se pudo leer tu configuración.' });
   }
-  provisionNewUser(user);
-  res.json(configStatus(user));
 });

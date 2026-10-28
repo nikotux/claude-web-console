@@ -74,6 +74,9 @@ login y la restaura ante cualquier salida fallida o cancelada. Ninguna ruta
 de credenciales de desarrollo —Claude, Codex, GitHub, Infisical, Pad o
 Tolkien— acepta un usuario por query/body/header ni permite que un admin opere
 el job ajeno.
+Los jobs de login son estado efímero en dirs globales porque los cinco runners vivos esperan esas rutas: se aíslan como `<user>.json`, con username validado y directorio 0700.
+La config OAuth rechaza campos mal formados con 400; cada grant code se reclama una sola vez.
+Freshservice distingue credenciales inválidas (400) de fallos de red o upstream (502).
 OPERACIÓN ADMINISTRATIVA SOBRE PROVEEDORES EXTERNOS: `targetUserOf(req)` hace
 que el estado general, las rutas OAuth de Microsoft/Zoho y las rutas de
 Freshservice acepten `user` (`query` en GET, `body` en POST). Sin el parámetro

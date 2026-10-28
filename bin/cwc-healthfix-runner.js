@@ -27,7 +27,8 @@ import { withRateLimitRetry } from '../src/core/query-retry.js';
 import {
   ROOT, readReview, writeReview, recordSolved, markFindingDismissed, findingId, addProposal,
   writeFixLock, clearFixLock, readFixLock, isFixing, isRunning, fixPrompt,
-  FIX_TIMEOUT_MS, FIX_MAX_TURNS, HEARTBEAT_MS, fixToolAllowed, fixToolAllowedTandem,
+  FIX_TIMEOUT_MS, HEARTBEAT_MS, fixToolAllowed, fixToolAllowedTandem,
+  fixQueryOptions,
 } from '../src/modules/health/shared.js';
 import { createCodexToolServer } from '../src/modules/chat/codex-tool.js';
 
@@ -74,12 +75,6 @@ async function main() {
   const denyReason = TANDEM
     ? 'Auto-fix Tándem: no editás vos — delegá con delegate_to_codex.'
     : 'Auto-fix: solo lectura/edición + node --check.';
-  const deny = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse', permissionDecision: 'deny',
-      permissionDecisionReason: denyReason,
-    },
-  };
   const allowed = TANDEM ? fixToolAllowedTandem : fixToolAllowed;
   // Prompt COMPARTIDO con el orquestador de batch (fixPrompt de shared.js):
   // misma rama FIXNONE de falso positivo — antes el runner tenía una copia
@@ -94,20 +89,16 @@ async function main() {
   let out = '';
   try {
     await withRateLimitRetry(async () => {
+      // Opciones del SDK — fuente única fixQueryOptions() de health/shared.js (regla 6):
+      // model: 'sonnet', maxTurns: FIX_MAX_TURNS, permissionMode: 'default', settingSources: [], (en Tándem suma el MCP codex)
+      // dos capas con el MISMO predicado y root: hook PreToolUse + canUseTool. (El censo de
+      // motores de core/inventory.js lee estas opciones por regex del propio archivo.)
       const q = query({
         prompt,
-        options: {
-          cwd: ROOT,
-          model: 'sonnet',
-          maxTurns: FIX_MAX_TURNS,
-          permissionMode: 'default',
-          settingSources: [],
+        options: fixQueryOptions({
+          cwd: ROOT, allowed, denyReason,
           ...(TANDEM ? { mcpServers: { codex: createCodexToolServer({ cwd: ROOT }) } } : {}),
-          hooks: { PreToolUse: [{ hooks: [async (input) => (allowed(input.tool_name, input.tool_input) ? {} : deny)] }] },
-          canUseTool: async (name, input) => (allowed(name, input)
-            ? { behavior: 'allow', updatedInput: input }
-            : { behavior: 'deny', message: denyReason }),
-        },
+        }),
       });
       let timer = null;
       const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), FIX_TIMEOUT_MS); });
@@ -118,6 +109,9 @@ async function main() {
           } else if (m.type === 'result') break;
         }
       })();
+      // Si gana el timeout, q.close() rechaza el for-await: absorber ese rechazo
+      // evita que el runner muera por un unhandled rejection.
+      pump.catch(() => {});
       try { await Promise.race([pump, timeout]); }
       finally { clearTimeout(timer); try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
     }, {

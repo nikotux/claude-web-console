@@ -22,10 +22,15 @@ export const ROOT = path.join(__dirname, '..', '..', '..');
 // lectura user-scoped NO usa esta constante: recibe su dataDir por operación.
 const DATA_DIR = resolveDataDir();
 const NEWS_FILE = path.join(DATA_DIR, 'news.json');
+const NEWS_LOCK_FILE = `${NEWS_FILE}.lock`;
+const NEWS_CURSOR_FILE = path.join(DATA_DIR, 'news-cursor.json');
 const JOBS_DIR = path.join(DATA_DIR, 'news');
 export const NEWS_LOG_FILE = path.join(DATA_DIR, 'news.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-news-runner.js');
 const MAX_ENTRIES = 200;
+const NEWS_LOCK_RETRY_MS = 40;
+const NEWS_LOCK_WAIT_MS = 2_000;
+const NEWS_LOCK_STALE_MS = 30_000;
 // El prompt no puede listar cientos de archivos, y `git diff --name-only` los
 // devuelve en orden alfabético: en un push grande el corte se comía enteras las
 // rutas de la superficie que el usuario toca y dejaba solo `bin/`. Se ordena por
@@ -139,6 +144,22 @@ export function readNews() {
   return Array.isArray(store.entries) ? store.entries : [];
 }
 
+export function readNewsCursor() {
+  const cursor = readObject(NEWS_CURSOR_FILE, {});
+  const sha = String(cursor.sha || '').trim();
+  return /^[a-f0-9]{7,40}$/i.test(sha)
+    ? { sha, updatedAt: Number(cursor.updatedAt) || 0 }
+    : null;
+}
+
+export function writeNewsCursor(sha) {
+  const clean = String(sha || '').trim();
+  if (!/^[a-f0-9]{7,40}$/i.test(clean)) throw new Error('SHA de cursor de Novedades inválido.');
+  const cursor = { sha: clean, updatedAt: Date.now() };
+  writeJsonAtomic(NEWS_CURSOR_FILE, cursor);
+  return cursor;
+}
+
 export function writeNews(list) {
   const entries = (Array.isArray(list) ? list : [])
     .filter((entry) => entry && typeof entry === 'object')
@@ -148,25 +169,76 @@ export function writeNews(list) {
   return entries;
 }
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function acquireNewsLock() {
+  fs.mkdirSync(path.dirname(NEWS_LOCK_FILE), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + NEWS_LOCK_WAIT_MS;
+
+  while (Date.now() < deadline) {
+    const token = crypto.randomBytes(12).toString('hex');
+    let fd;
+    try {
+      fd = fs.openSync(NEWS_LOCK_FILE, 'wx', 0o600);
+      fs.writeFileSync(fd, JSON.stringify({ token, ts: Date.now() }));
+      return token;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      const stale = readObject(NEWS_LOCK_FILE, null);
+      let staleByAge = false;
+      try { staleByAge = Date.now() - fs.statSync(NEWS_LOCK_FILE).mtimeMs > NEWS_LOCK_STALE_MS; } catch { /* reintentar */ }
+      if (staleByAge) {
+        const current = readObject(NEWS_LOCK_FILE, null);
+        try {
+          if (current?.token === stale?.token && current?.ts === stale?.ts) fs.unlinkSync(NEWS_LOCK_FILE);
+        } catch { /* otro proceso ganó la carrera */ }
+      }
+      await wait(NEWS_LOCK_RETRY_MS);
+    } finally {
+      if (fd !== undefined) try { fs.closeSync(fd); } catch { /* noop */ }
+    }
+  }
+
+  const error = new Error('Otra escritura de Novedades sigue en curso. Reintentá.');
+  error.conflict = true;
+  throw error;
+}
+
+async function withNewsLock(operation) {
+  const token = await acquireNewsLock();
+  try {
+    return await operation();
+  } finally {
+    const current = readObject(NEWS_LOCK_FILE, null);
+    if (current?.token === token) {
+      try { fs.unlinkSync(NEWS_LOCK_FILE); } catch { /* noop */ }
+    }
+  }
+}
+
 export function appendEntries(arr) {
-  return writeNews([...(Array.isArray(arr) ? arr : []), ...readNews()]);
+  return withNewsLock(() => writeNews([...(Array.isArray(arr) ? arr : []), ...readNews()]));
 }
 
 export function updateEntry(id, patch) {
-  const entries = readNews();
-  const index = entries.findIndex((entry) => entry.id === id);
-  if (index === -1) return null;
-  entries[index] = { ...entries[index], ...patch, id: entries[index].id };
-  writeNews(entries);
-  return entries[index];
+  return withNewsLock(() => {
+    const entries = readNews();
+    const index = entries.findIndex((entry) => entry.id === id);
+    if (index === -1) return null;
+    entries[index] = { ...entries[index], ...patch, id: entries[index].id };
+    writeNews(entries);
+    return entries[index];
+  });
 }
 
 export function deleteEntry(id) {
-  const entries = readNews();
-  const next = entries.filter((entry) => entry.id !== id);
-  if (next.length === entries.length) return false;
-  writeNews(next);
-  return true;
+  return withNewsLock(() => {
+    const entries = readNews();
+    const next = entries.filter((entry) => entry.id !== id);
+    if (next.length === entries.length) return false;
+    writeNews(next);
+    return true;
+  });
 }
 
 function seenFile(dataDir = resolveDataDir()) {
@@ -270,13 +342,39 @@ export function spawnNewsRunner(jobId) {
   ensureJobsDir();
   fs.mkdirSync(path.dirname(NEWS_LOG_FILE), { recursive: true, mode: 0o700 });
   const logFd = fs.openSync(NEWS_LOG_FILE, 'a');
-  const child = spawn(process.execPath, [RUNNER, jobId], {
-    detached: true,
-    stdio: ['ignore', logFd, logFd],
-    env: process.env,
-  });
-  child.unref();
-  fs.closeSync(logFd);
+  const markSpawnError = (error) => {
+    const message = `No se pudo iniciar el runner: ${error?.message || error}`.slice(0, 300);
+    try {
+      fs.appendFileSync(NEWS_LOG_FILE, `[${new Date().toISOString()}] FAIL spawn job ${jobId}: ${message}\n`);
+      const job = readNewsJob(jobId);
+      if (job?.status === 'running') {
+        writeNewsJob(jobId, {
+          ...job,
+          status: 'error',
+          count: null,
+          error: message,
+          updatedAt: Date.now(),
+        });
+      }
+    } catch (markError) {
+      console.error('[news] no se pudo persistir el fallo del runner:', markError?.message || markError);
+    }
+  };
+
+  try {
+    const child = spawn(process.execPath, [RUNNER, jobId], {
+      detached: true,
+      stdio: ['ignore', logFd, logFd],
+      env: process.env,
+    });
+    child.on('error', markSpawnError);
+    child.unref();
+  } catch (error) {
+    markSpawnError(error);
+    throw error;
+  } finally {
+    fs.closeSync(logFd);
+  }
 }
 
 // Parsea el formato pedido para git log. Las líneas posteriores al encabezado

@@ -26,7 +26,7 @@ Consume `manager` desde `modules/chat`, helpers de espacios desde `core/user-spa
 
 Este módulo **no escribe en `~/.cwc-data/` ni en otro archivo** y no tiene política de poda.
 
-Lee `~/.cwc-data/chats/<chatId>.spawnlock` para obtener el PID del runner y medir su RSS desde `/proc/<pid>/status`. Mantiene únicamente `prevCpu` en memoria de proceso (`{ idle, total }`) para calcular el delta de CPU; se pierde al reiniciar.
+Lee `~/.cwc-data/chats/<chatId>.spawnlock` para obtener el PID del runner y medir su RSS desde `/proc/<pid>/status`. Mantiene en memoria el delta de CPU (ventana mínima de 1 s) y una caché acotada de disco por inquilino con TTL de 5 min y promesa en vuelo compartida; ambas se pierden al reiniciar.
 
 ## Lo que más duele
 

@@ -120,11 +120,13 @@ async function runFetchPool(tasks, concurrency = FETCH_CONCURRENCY) {
   return results;
 }
 
-export function __nextDataAsOfForTests(previous, direct, bot, attemptedAt) {
+function nextDataAsOf(previous, direct, bot, attemptedAt) {
   return direct.ok && !direct.value.stale && bot.ok && !bot.value.stale
     ? attemptedAt
     : previous;
 }
+
+export const __nextDataAsOfForTests = nextDataAsOf;
 
 export function __runFetchPoolForTests(tasks) {
   return runFetchPool(tasks);
@@ -466,8 +468,8 @@ async function runCycle({ onlyOwner = null } = {}) {
     const nextFetchedAt = direct.ok && !direct.value.stale ? attemptedAt : previousFetchedAt;
     if (nextFetchedAt) fetchedAtByUsername.set(player.username, nextFetchedAt);
     const previousDataAsOf = state.loginMatches ? state.snapshot?.dataAsOf : null;
-    const nextDataAsOf = __nextDataAsOfForTests(previousDataAsOf, direct, bot, attemptedAt);
-    if (nextDataAsOf) dataAsOfByUsername.set(player.username, nextDataAsOf);
+    const dataAsOf = nextDataAsOf(previousDataAsOf, direct, bot, attemptedAt);
+    if (dataAsOf) dataAsOfByUsername.set(player.username, dataAsOf);
     lastAttemptAtByUsername.set(player.username, attemptedAt);
   }
 
@@ -510,7 +512,27 @@ async function runCycle({ onlyOwner = null } = {}) {
           statesByUsername,
           production,
         });
-        for (const [owner, state] of deployStep.states) saveFestejos(owner, state);
+        for (const [owner, state] of deployStep.states) {
+          const previous = statesByUsername.get(owner);
+          const fresh = getFestejos(owner) || previous || state;
+          const previousDeployed = new Set(Array.isArray(previous?.deployed) ? previous.deployed : []);
+          const deployed = new Set(Array.isArray(fresh?.deployed) ? fresh.deployed : []);
+          for (const number of Array.isArray(state.deployed) ? state.deployed : []) {
+            if (!previousDeployed.has(number)) deployed.add(number);
+          }
+          const previousPendingIds = new Set((previous?.pending || []).map((item) => item?.id).filter(Boolean));
+          const freshPendingIds = new Set((fresh?.pending || []).map((item) => item?.id).filter(Boolean));
+          const addedPending = (state.pending || []).filter((item) => (
+            item?.kind === 'deploy' && item.id && !previousPendingIds.has(item.id)
+              && !freshPendingIds.has(item.id)
+          ));
+          saveFestejos(owner, {
+            ...fresh,
+            deployed: [...deployed],
+            prodSha: state.prodSha !== previous?.prodSha ? state.prodSha : fresh.prodSha,
+            pending: [...(fresh.pending || []), ...addedPending],
+          });
+        }
       }
     } catch (error) {
       console.warn('[forja] no se pudo leer el estado de producción:', error?.message || error);

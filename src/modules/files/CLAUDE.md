@@ -8,19 +8,19 @@
 Backend del explorador y gestor de archivos: lista, previsualiza, descarga, comprime, sube, crea, renombra y mueve ítems a una papelera recuperable.
 
 No es admin-gated. Trabaja con el root derivado del principal autenticado: el usuario host conserva su home completo; un inquilino queda confinado a su workspace mediante `userFileRoot()`.
-`reqOwner(req)` obtiene el principal (con fallback a `hostUser()`) y
-`reqFileRoot(req)` deriva ahora de ese helper, evitando que identidad y root se
-calculen por caminos distintos.
+`reqOwner(req)` obtiene el principal una sola vez por request; solo el token
+maestro sin username mapea a `hostUser()`, y cualquier identidad degradada
+falla cerrada con 401 antes de entrar a los endpoints.
 
 ## Endpoints
 
 | Método | Ruta | Contrato actual |
 |---|---|---|
-| GET | `/api/files/list` | Lista una carpeta; `hidden=1` incluye dotfiles, salvo `node_modules`, `.git`, `dist` y `.cwc-trash`, que siempre se ocultan. Cada directorio real suma `childCount` (0..200) y `childCountCapped` (`true` si hay más de 200); en symlinks o si no se pudo contar, ambos son `null`. |
+| GET | `/api/files/list` | Lista una carpeta; `hidden=1` incluye dotfiles, salvo `node_modules`, `.git`, `dist` y `.cwc-trash`, que siempre se ocultan. Cada directorio real suma `childCount` (0..200) y `childCountCapped` (`true` si hay más de 200); en symlinks o si no se pudo contar, ambos son `null`. Los conteos usan I/O async con concurrencia máxima de 16. |
 | GET | `/api/files/read` | Lee texto hasta 2 MiB; para archivos mayores o detectados como binarios devuelve metadatos sin contenido. |
 | GET | `/api/files/raw` | Previsualiza imágenes/PDF de una allowlist y texto; contenido activo o binario se fuerza como attachment. |
 | GET | `/api/files/download` | Descarga forzada de un archivo. |
-| GET | `/api/files/download-zip` | Genera en streaming el zip de una carpeta, sin seguir symlinks y omitiendo `.git`, `node_modules`, `dist` y la papelera. |
+| GET | `/api/files/download-zip` | Genera en streaming el zip de una carpeta, sin seguir symlinks y omitiendo `.git`, `node_modules`, `dist` y la papelera; aborta si el cliente corta o si supera 20.000 entradas. |
 | POST | `/api/files/zip` | Genera el zip de una selección de hasta 1000 rutas, deduplicando nombres en el archivo final. |
 | POST | `/api/files/upload` | Sube hasta 100 archivos multipart bajo el campo `files`, con máximo de 5 GiB por archivo y nombre único en destino. |
 | POST | `/api/files/mkdir` | Crea `{ path, name }`; valida nombre simple y responde `409` si ya existe. |
@@ -66,5 +66,5 @@ cada inquilino usa la `.cwc-trash/` de su workspace.
 - El rename de archivos regulares usa `linkSync` + `unlinkSync` para que una carrera contra el destino produzca `EEXIST`; si falla el unlink intenta revertir el hardlink. Directorios y symlinks usan `renameSync` y solo reducen, no eliminan, la ventana TOCTOU.
 - Ausencia de `id` en `/trash/purge` significa “purgar todo”; un `id` presente pero vacío/inválido debe seguir siendo `400`, nunca coercionarse a vaciado total.
 - Los errores internos de disco (`ENOSPC`, `EACCES`, `EMFILE`, etc.) son `500`. Solo errores marcados `badRequest`/`conflict` o límites de Multer deben degradarse a 4xx.
-- Para contar hijos, `countDirChildren()` usa `opendirSync`/`readSync` y corta tras leer la entrada 201: así distingue exactamente 200 de “más de 200” sin materializar el resto. Un `readdirSync` completo POR CADA carpeta haría que listar el home tarde segundos apenas aparece un árbol enorme como `node_modules`. Conservá la diferencia semántica: `0` significa “verifiqué que está vacía”; `null`, “no sé” (error o symlink, que no se sigue). Nunca los colapses con coerciones falsy.
+- Para contar hijos, `countDirChildren()` usa `fs.promises.opendir()` y corta tras leer la entrada 201: así distingue exactamente 200 de “más de 200” sin materializar el resto. `listDir()` limita esos conteos a 16 operaciones concurrentes. Conservá la diferencia semántica: `0` significa “verifiqué que está vacía”; `null`, “no sé” (error o symlink, que no se sigue). Nunca los colapses con coerciones falsy.
 - El listado no pagina y los zips son streaming: no agregues buffers completos de árboles grandes. La selección zip sí tiene el límite explícito de 1000 entradas.

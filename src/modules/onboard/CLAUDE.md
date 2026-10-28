@@ -58,10 +58,15 @@ silenciosamente todos esos casos en obligatorios.
 `/validate` deriva del catálogo tanto los booleanos de estado como `pending`,
 siempre en el orden declarado. `/finish` hace cumplir la obligatoriedad resuelta
 con `blockingFor(user)`: un cliente viejo o un `curl` no pueden saltear el gate.
-GitHub ocupa `order:5` y se detecta con `hasGithubAuth(user)`, que corre
-`gh auth status` con HOME y entorno aislados del usuario. Para agregar un paso
-nuevo se modifica esa tabla; el frontend recibe orden, etiqueta y obligatoriedad
-ya resuelta desde `/validate`.
+`capabilityStatus`, `pendingFor` y `blockingFor` son async y evalúan los
+detectores en paralelo sin alterar el orden del catálogo. GitHub ocupa `order:5`
+y se detecta por identidad con `gh auth status --json hosts`: la variante async
+cachea 30 s y deduplica la promesa en vuelo por usuario. Un inquilino con el
+mismo login que el host —comparado sin distinguir mayúsculas— o con una lectura
+ilegible falla cerrado. `hasGithubAuth(user)` sigue sync únicamente por
+compatibilidad con `connections`; onboard usa `githubAuthStatus`. Para agregar
+un paso nuevo se modifica esa tabla; el frontend recibe orden, etiqueta y
+obligatoriedad ya resuelta desde `/validate`.
 
 El host no pasa por el wizard: para él solamente, `claude` también acepta la
 credencial real del CLI en `.credentials.json`. Un inquilino estándar sigue
@@ -71,6 +76,9 @@ sponsor adoptante, que debe tener credencial propia pero no necesita ser admin.
 Mientras siga `awaiting-sponsor`, no hay token que resolver. Aceptar la cuenta
 completa o inventar otro fallback rompería el
 blindaje anticonsumo con un falso positivo.
+La capacidad opcional `account` también falla cerrado para un inquilino si su
+`.credentials.json` es un symlink al archivo del host o comparte con él el
+`accessToken` o un `refreshToken` no vacío (`console:BUG-2338`).
 `/my-config` expone `hostExempt` para reflejar que el alta no aplica y
 `POST /my-config/retry` responde 409 al host.
 
@@ -90,7 +98,8 @@ rutas salen bajo `/api/onboard`:
   principal de tipo `user`; no acepta `username`, ni por body ni por query, y
   un admin tampoco puede escanear el correo de otra persona. Devuelve
   `{portrait,count,range,sampling}`; `portrait` es el agregado de
-  `summarizeMailSample`, pasado por una allowlist y redacción adicional.
+  `summarizeMailSample`, pasado por una allowlist y redacción adicional. Los
+  barridos concurrentes del mismo usuario comparten una única promesa en vuelo.
 - `GET /mail-scan/last` devuelve el último resultado guardado o `null`, sin
   repetir la consulta a Microsoft.
 
@@ -204,14 +213,15 @@ indefinidamente un `awaiting-code` vivo y protege `starting`/`exchanging` solo
 durante su primer minuto. Un job huérfano no bloquea el reintento; si hay un
 runner vivo fuera de esa protección, le manda SIGTERM antes de relanzar.
 Después escribe sincrónicamente un estado `starting` mode 600 ANTES de spawnear
-`bin/cwc-onboard-runner.js --user <user> --token <token>` detached.
+`bin/cwc-onboard-runner.js --user <user>` detached y borra primero cualquier
+`.code` viejo. El runner solo escribe estados mientras el job conserva su PID;
+si otra corrida reservó el archivo, ignora la escritura tardía.
 
-`GET /api/onboard/public/creds-status?token=...` usa `peekInvite(token)`, no
-`validateInvite`. Eso es deliberado: `peekInvite` es leniente y puede resolver
-metadata aunque la invitación ya esté consumida/expirada, para que el wizard
-pueda mostrar `done`. Lee el job de `lockedTo` o reporta `idle`, marca `stale`
+`GET /api/onboard/public/creds-status?token=...` usa `stepUser(token)`: admite
+la reentrada consumida segura, pero una invitación revocada o expirada responde
+403. Lee el job del usuario resuelto o reporta `idle`, marca `stale`
 si `starting`/`exchanging` tiene más de 30 s, y calcula `hasToken` con
-`readUserOauthToken(lockedTo)`. NO expone secretos: devuelve estado, URL OAuth,
+`readUserOauthToken(user)`. NO expone secretos: devuelve estado, URL OAuth,
 `note` diagnóstico, done/error/stale y booleano `hasToken`; el `pid` queda
 exclusivamente del lado servidor.
 
@@ -289,8 +299,9 @@ aplica la misma validación que `connections`: string, `trim()`, no vacío, hast
 device-auth (el callback localhost del login normal no sirve en el server);
 deduplica y persiste el job en
 `~/.cwc-data/codex-login-jobs/<user>.json`. `GET
-/api/onboard/public/codex-status?token=...` usa `peekInvite`, lee ese job y
-devuelve URL, código y estado sin exponer credenciales.
+/api/onboard/public/codex-status?token=...` usa `stepUser`, por lo que una
+invitación revocada o expirada responde 403; lee ese job y devuelve URL, código
+y estado sin exponer credenciales.
 
 `POST /api/onboard/public/github-start` y `GET
 /api/onboard/public/github-status?token=...` resuelven el usuario
@@ -318,9 +329,10 @@ mode 600 antes de lanzar detached
 https://app.infisical.com`. Los jobs viven siempre en el HOME del host:
 `~/.cwc-data/infisical-login/<user>.json`.
 
-`GET /api/onboard/public/infisical-status?token=...` usa `peekInvite` y devuelve
-únicamente `{status, url, error, stale, hasInfisical}`; el último booleano sale
-de `hasInfisicalCreds(user)`. El endpoint termina en `-status`, así entra
+`GET /api/onboard/public/infisical-status?token=...` usa `stepUser` —una
+invitación revocada o expirada responde 403— y devuelve únicamente
+`{status, url, error, stale, hasInfisical}`; el último booleano sale de
+`hasInfisicalCreds(user)`. El endpoint termina en `-status`, así entra
 automáticamente al bucket amplio de polling. Nunca devuelve el token pegado ni
 otros campos del job.
 
@@ -351,7 +363,8 @@ patrocinada, debe nombrar un usuario existente con
 `sponsorshipState(sponsor) === 'none'` y exige `sponsorTokenReady(sponsor)`;
 cada incumplimiento responde 400 con un mensaje explícito. El store sólo guarda
 `sponsor` cuando `sponsored` es true y rechaza recibirlo en cualquier otro caso.
-`ttlHours` positivo define TTL y si falta usa `DEFAULT_TTL_H = 24`. La respuesta
+`ttlHours`, si viene, debe ser un number finito mayor que 0 y como máximo 720;
+otro valor responde 400, y si falta usa `DEFAULT_TTL_H = 24`. La respuesta
 incluye el token CRUDO una sola vez:
 `{id, token, admin, sponsored, sponsor, expiresAt}`.
 
@@ -414,8 +427,8 @@ dato user-scoped del inquilino. Cada registro vive en
 `~/.cwc-data/onboard-provisioning/<user>.json`, mode 600 y con escritura
 atómica, con forma
 `{user, startedAt, ts, status, steps:{pad,workspace,skills,tolkien-mcp}}`.
-`provisionTolkienMcp` marca siempre su resultado `ok|failed`, igual que los
-otros pasos. `listProvisionStates()` descarta registros cuyo usuario ya no
+`provisionTolkienMcp` marca su resultado `ok|failed` para inquilinos; el host
+salta el paso sin crear estado parcial. `listProvisionStates()` descarta registros cuyo usuario ya no
 existe para que Salud no conserve fantasmas; `deleteProvisionState(user)`
 expone la limpieza idempotente para el flujo de baja.
 
@@ -475,9 +488,12 @@ con HOME/cwd aislados para que el CLI escriba
 scope local en su `~/.claude.json`, bajo `infisical run`, que pisa el `.mcp.json`.
 El inquilino usa el MCP hosteado por HTTP: `tolkien-mcp-shared.js` acuña un token
 per-dev con la credencial admin del host, lo guarda mode 600 en SU `.claude/` y
-registra el override local en SU `.claude.json`. El flujo es idempotente: si la
-entrada ya existe no acuña otro token. Un runner vivo no toma el MCP nuevo hasta
-reabrirse. Al entrar al checklist final, el front llama best-effort a
+registra el override local en SU `.claude.json`. El mint hereda solo
+`userRunnerEnv(host)` más variables `INFISICAL_*`; la API key viaja por stdin a
+`curl -H @-`, nunca en su argv. `provisionTolkienBestEffort` deduplica por
+usuario las corridas en vuelo y el host se saltea sin dejar un estado parcial.
+El flujo es idempotente: si la entrada ya existe no acuña otro token. Un runner
+vivo no toma el MCP nuevo hasta reabrirse. Al entrar al checklist final, el front llama best-effort a
 `POST /public/finish`, que dispara otro intento de provisioning y consume la
 invitación solo si `blockingFor` queda vacío. Así queda `locked` durante
 registro y las capacidades obligatorias resueltas para su tier,
@@ -543,7 +559,7 @@ capacidades aplicables al tier → cierre) y pasa a
 `consumed` recién en
 `POST /public/finish`; si el usuario abandona antes, queda locked a SU username
 hasta morir por TTL. Tras el consumo, los status siguen consultables por
-`peekInvite` y los starts de pasos pendientes pueden reingresar por `stepUser`.
+`stepUser`, y los starts de pasos pendientes usan el mismo gate de reentrada.
 
 El `<user>.log` del runner es la ÚNICA forma de diagnosticar por qué falló un
 canje de código en vivo: el host tiene `ptrace_scope=1`, así que no se puede

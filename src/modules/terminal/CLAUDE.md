@@ -49,9 +49,15 @@
   inquilinos deben pasar explícitamente con `-e` la allowlist crítica y las
   variables runtime `CWC_*`/`TOLKIEN_*` presentes en su propio env
   (`console:BUG-2350`). Solo los inquilinos neutralizan además con `-e CLAVE=`
-  los secretos y `CWC_*` encontrados en el entorno global de tmux. Con `-A`,
-  tmux ignora los `-e` si la sesión ya existe: una sesión creada con el entorno
-  viejo debe matarse y recrearse; no se corrige en caliente al rehidratar.
+  los secretos y `CWC_*` encontrados en el entorno global de tmux. El entorno
+  (`-e`, incluidos los secretos) ya NO viaja por argv: el `new-session -d`
+  completo se escribe en un archivo de comandos tmux `0600` dentro de
+  `userDataDir(owner)/terminal-spawn/` (`0700`), se ejecuta sincrónicamente con
+  `start-server ; source-file` y se borra en `finally`; el PTY solo ejecuta
+  `attach-session -t =<name>`. Si la sesión ya existe no se escribe el archivo,
+  equivalente a que `-A` ignoraba los `-e`; para cambiar su entorno hay que
+  matarla y recrearla. Residual: el environ del cliente tmux sigue siendo
+  legible por procesos del mismo uid; no hay aislamiento de SO.
   El PTY inyecta además `CWC_CONSOLE_ROOT` para resolver CLIs de `bin/` desde
   skills compartidas; llega al pane por el filtro existente de claves
   `CWC_`/`TOLKIEN_`, sin agregarla a `TMUX_ENV_KEYS`.
@@ -66,3 +72,13 @@
   sobrevive pero su dueño no-admin deja de verla, porque `list(principal)`
   filtra por `owner`. FAIL-CLOSED: sin entrada en el mapa, `owner=null` ⇒ solo
   quien tiene `oversight` la ve; nunca se adivina un dueño.
+- Recientes es un registro global exclusivo del host: solo host/oversight lo
+  leen y un inquilino nunca escribe rutas allí (hallazgos de Salud #110/#144, `console:PLAN-3490`).
+- La falta de credencial Claude responde `409` con `publicMessage`; cualquier
+  error no reconocido conserva el `500` genérico (hallazgo #111, `console:PLAN-3490`).
+- Si no se persiste el owner, crear una sesión de inquilino se aborta y su tmux
+  se mata; para el host solo se registra el error (hallazgo #112, `console:PLAN-3490`).
+- El WS acepta `input.data` solo string y dimensiones enteras `1..1000`; la
+  defensa se repite en `Session.resize()` (hallazgo #113, `console:PLAN-3490`).
+- `POST /sessions` acepta `title` string de hasta 120 caracteres y `attach`
+  objeto con `socket` y `session` string (hallazgo #114, `console:PLAN-3490`).

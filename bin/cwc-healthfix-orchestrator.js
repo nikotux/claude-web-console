@@ -22,8 +22,8 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { isRateLimit } from '../src/core/query-retry.js';
 import {
   ROOT, readBatch, writeBatch, writeBatchLock, clearBatchLock, otherBatchAlive,
-  fixPrompt, fixToolAllowed, readReview, writeReview, recordSolved, markFindingDismissed, findingId, addProposal,
-  FIX_TIMEOUT_MS, FIX_MAX_TURNS, HEARTBEAT_MS,
+  fixPrompt, fixQueryOptions, readReview, writeReview, recordSolved, markFindingDismissed, findingId, addProposal,
+  FIX_TIMEOUT_MS, HEARTBEAT_MS,
 } from '../src/modules/health/shared.js';
 import { createSandbox, extractPatch, removeSandbox, integratePatch, pruneSandboxes, WT_BASE } from '../src/modules/health/worktree.js';
 import { runAdaptivePool } from '../src/modules/health/pool.js';
@@ -52,22 +52,24 @@ async function runFix(item, wt) {
     try { fss.appendFileSync(path.join(wt, rel), `\n// healthfix-mock ${item.id}\n`); } catch { /* noop */ }
     return `FIXOK mock: comentario en ${rel}\nNO-INVARIANT`;
   }
-  const deny = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Auto-fix: solo lectura/edición + node --check.' } };
   let out = '';
   let attempt = 0;
   for (;;) {
     try {
+      // Opciones del SDK — fuente única fixQueryOptions() de health/shared.js (regla 6):
+      // model: 'sonnet', maxTurns: FIX_MAX_TURNS, permissionMode: 'default', settingSources: [],
+      // dos capas con el MISMO predicado y root: hook PreToolUse + canUseTool. (El censo de
+      // motores de core/inventory.js lee estas opciones por regex del propio archivo.)
       const q = query({
         prompt: fixPrompt(item),
-        options: {
-          cwd: wt, model: 'sonnet', maxTurns: FIX_MAX_TURNS, permissionMode: 'default', settingSources: [],
-          hooks: { PreToolUse: [{ hooks: [async (input) => (fixToolAllowed(input.tool_name, input.tool_input) ? {} : deny)] }] },
-          canUseTool: async (name, input) => (fixToolAllowed(name, input) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'Auto-fix: solo lectura/edición + node --check.' }),
-        },
+        options: fixQueryOptions({ cwd: wt }),
       });
       let timer = null;
       const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), FIX_TIMEOUT_MS); });
       const pump = (async () => { for await (const m of q) { if (m.type === 'assistant') { for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += `${b.text}\n`; } else if (m.type === 'result') break; } })();
+      // Si gana el timeout, q.close() rechaza el for-await: absorber ese rechazo
+      // evita que el runner muera por un unhandled rejection.
+      pump.catch(() => {});
       try { await Promise.race([pump, timeout]); } finally { clearTimeout(timer); try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
       return out;
     } catch (err) {

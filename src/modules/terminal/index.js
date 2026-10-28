@@ -113,10 +113,19 @@ export default {
         if (req.body?.agent != null) {
           return res.status(400).json({ error: 'Agente inválido.' });
         }
+        if (title != null && (typeof title !== 'string' || title.length > 120)) {
+          console.warn('[terminal] Título rechazado — owner:', String(owner).slice(0, 200), '· título:', String(title).slice(0, 200));
+          return res.status(400).json({ error: 'El título de la sesión debe ser un texto de hasta 120 caracteres.' });
+        }
 
         // Adjuntado a una sesión tmux existente: validamos socket + nombre para
         // no ejecutar tmux con argumentos arbitrarios; luego aplicamos ownership.
         if (attach) {
+          if (typeof attach !== 'object' || Array.isArray(attach)
+            || typeof attach.socket !== 'string' || typeof attach.session !== 'string') {
+            console.warn('[terminal] Adjuntado rechazado — owner:', String(owner).slice(0, 200), '· destino:', String(attach).slice(0, 200));
+            return res.status(400).json({ error: 'Destino de adjuntado inválido.' });
+          }
           const socketPath = validateSocketPath(attach.socket);
           if (!socketPath || !isValidSessionName(attach.session)) {
             console.warn('[terminal] Adjuntado rechazado — owner:', String(owner).slice(0, 200), '· socket:', String(attach.socket).slice(0, 200), '· sesión:', String(attach.session).slice(0, 200));
@@ -202,12 +211,11 @@ export default {
         if (cardName !== baseName) {
           const titles = loadTitles();
           titles[titleKey(config.tmuxSocket, session.tmuxName)] = cardName;
-          saveTitles(titles);
+          if (!saveTitles(titles)) console.warn('[terminal] No se pudo persistir el título único de la sesión', session.id, '· título:', cardName);
         }
-        // Alimenta "Recientes" del lanzador (el home no se registra: es atajo fijo).
-        // Solo el host: el cwd de un inquilino (~/.cwc-users/<u>/workspace) cae
-        // dentro de home y se filtraría al launcher del host (recents es global).
-        if (!owner) recordRecent(path.relative(config.home, cwdAbs));
+        // Alimenta el registro global de recientes solo para el host; el host
+        // autenticado por cookie trae owner explícito y también debe registrar.
+        if (!owner || owner === hostUser()) recordRecent(path.relative(config.home, cwdAbs), owner);
         res.json({ session: session.info() });
       } catch (err) {
         console.error('[terminal] Error creando sesión:', err);
@@ -219,14 +227,20 @@ export default {
           try { orphan?.kill(); } catch { /* noop */ }
           sessionManager.remove(createdId);
         }
-        if (!res.headersSent) res.status(500).json({ error: 'No se pudo crear la sesión.' });
+        const status = Number.isInteger(err?.statusCode) && err.statusCode >= 400 && err.statusCode < 500
+          ? err.statusCode
+          : 500;
+        const error = status !== 500 && typeof err.publicMessage === 'string'
+          ? err.publicMessage
+          : 'No se pudo crear la sesión.';
+        if (!res.headersSent) res.status(status).json({ error });
       }
     });
 
     // Carpetas recientes donde se crearon sesiones (para el lanzador).
     r.get('/recents', (req, res) => {
       try {
-        res.json({ recents: listRecents() });
+        res.json({ recents: listRecents(principalOf(req)) });
       } catch (e) {
         res.status(500).json({ error: e.message });
       }
@@ -277,8 +291,11 @@ export default {
           }
           if (!msg || typeof msg !== 'object') return; // null, número, string suelto…
           if (msg.type === 'input') {
+            if (typeof msg.data !== 'string') return;
             session.write(msg.data);
           } else if (msg.type === 'resize') {
+            if (!Number.isInteger(msg.cols) || !Number.isInteger(msg.rows)
+              || msg.cols < 1 || msg.cols > 1000 || msg.rows < 1 || msg.rows > 1000) return;
             session.resize(msg.cols, msg.rows);
           }
         } catch (e) {

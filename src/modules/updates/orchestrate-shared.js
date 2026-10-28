@@ -32,6 +32,7 @@ import { isPrerelease, riskKey } from './analyze-shared.js';
 
 const DATA_DIR = path.join(config.home, '.cwc-data');
 const JOB_FILE = path.join(DATA_DIR, 'updates-job.json');
+const JOB_DATA_DIR = path.join(DATA_DIR, 'updates-jobs');
 const LOG_FILE = path.join(DATA_DIR, 'updates-orchestrate.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-updates-runner.js');
 
@@ -50,6 +51,16 @@ export function readJob() {
 export function writeJob(data) {
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   writeJsonAtomic(JOB_FILE, data);
+}
+export function backupNpmState(job) {
+  const jobId = String(job?.startedAt || '');
+  if (!/^\d{10,}$/.test(jobId)) throw new Error('El job no tiene un identificador válido para el respaldo npm.');
+  const backupDir = path.join(JOB_DATA_DIR, jobId);
+  fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+  for (const file of ['package.json', 'package-lock.json']) {
+    fs.copyFileSync(path.join(ROOT, file), path.join(backupDir, file));
+  }
+  return backupDir;
 }
 export function isRunning(job) {
   return !!job && job.running === true && (Date.now() - (job.heartbeat || job.startedAt || 0)) <= UPDATES_STALE_MS;
@@ -87,7 +98,7 @@ export function buildPlan(census, scope = { apt: true }, includeMajors = [], ver
     .filter((l) => l.risk !== 'watch' && l.latest && l.wanted && l.latest !== l.wanted)
     .map((l) => ({ name: l.name, current: l.current, wanted: l.wanted, latest: l.latest }));
   const majorCandidates = libs
-    .filter((l) => l.risk !== 'watch' && l.latest && l.current && l.latest !== l.current && !isPrerelease(l.latest))
+    .filter((l) => l.risk !== 'watch' && l.latest && l.wanted && l.current && l.latest !== l.wanted && !isPrerelease(l.latest))
     .map((l) => {
       const v = verdicts[riskKey(l.name, l.current, l.latest)];
       let blockedReason = null;
@@ -153,7 +164,7 @@ export function notifyInterfono(text, kind = 'note') {
 // ───────── Aplicado ─────────
 export async function applyNpm(name, version) {
   const r = await run('npm', ['install', `${name}@${version}`, '--save-exact=false'], { timeout: 180_000 });
-  const ok = !r.failed && !(/npm error|ERR!/.test(r.stderr) && !r.ok);
+  const ok = r.ok && !r.failed;
   if (!ok) return { ok, detail: (r.stderr || r.stdout || 'npm install falló').trim().slice(0, 300) };
   const real = installedVersion(name);
   if (real !== version) {
@@ -172,20 +183,42 @@ export async function applyAuditFix() {
   const r = await run('npm', ['audit', 'fix'], { timeout: 180_000 });
   // npm audit fix sale con código ≠0 si quedan vulns sin fix seguro; eso NO es
   // un fallo del comando (aplicó lo que pudo). Solo es fallo si murió/no corrió.
-  return { ok: !r.failed, detail: (r.stdout || r.stderr || '').trim().slice(-300) };
+  const commandError = r.failed || (!r.ok && /npm error|ERR!/i.test(`${r.stderr}\n${r.stdout}`));
+  return { ok: !commandError, detail: (r.stdout || r.stderr || '').trim().slice(-300) };
 }
+
+function heartbeatJob() {
+  try {
+    const job = readJob();
+    if (job?.running) writeJob({ ...job, heartbeat: now() });
+  } catch { /* el heartbeat es best-effort; la operación conserva su resultado */ }
+}
+
+async function withJobHeartbeat(operation) {
+  const timer = setInterval(heartbeatJob, 30_000);
+  timer.unref();
+  try {
+    return await operation();
+  } finally {
+    clearInterval(timer);
+    heartbeatJob();
+  }
+}
+
 // apt necesita sudo. `sudo -n` = falla limpio si NO es passwordless (en vez de
 // colgarse pidiendo contraseña). DEBIAN_FRONTEND=noninteractive evita prompts.
 export async function applyApt() {
-  const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
-  const upd = await run('sudo', ['-n', 'apt-get', 'update'], { timeout: 120_000, env });
-  if (upd.failed || /a password is required|sudo:/i.test(upd.stderr)) {
-    return { ok: false, detail: 'sudo no es passwordless o apt-get update falló: ' + (upd.stderr || '').trim().slice(0, 200), rebootRequired: false };
-  }
-  const up = await run('sudo', ['-n', 'apt-get', '-y', 'upgrade'], { timeout: 600_000, env });
-  const ok = !up.failed && up.ok;
-  const rebootRequired = fs.existsSync('/var/run/reboot-required');
-  return { ok, detail: ok ? 'apt upgrade OK' : (up.stderr || up.stdout || 'apt upgrade falló').trim().slice(0, 300), rebootRequired };
+  return withJobHeartbeat(async () => {
+    const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' };
+    const upd = await run('sudo', ['-n', 'apt-get', 'update'], { timeout: 120_000, env });
+    if (upd.failed || /a password is required|sudo:/i.test(upd.stderr)) {
+      return { ok: false, detail: 'sudo no es passwordless o apt-get update falló: ' + (upd.stderr || '').trim().slice(0, 200), rebootRequired: false };
+    }
+    const up = await run('sudo', ['-n', 'apt-get', '-y', 'upgrade'], { timeout: 600_000, env });
+    const ok = !up.failed && up.ok;
+    const rebootRequired = fs.existsSync('/var/run/reboot-required');
+    return { ok, detail: ok ? 'apt upgrade OK' : (up.stderr || up.stdout || 'apt upgrade falló').trim().slice(0, 300), rebootRequired };
+  });
 }
 
 // ───────── node --check (verificación) ─────────
@@ -277,11 +310,31 @@ export async function serviceRestartCount() {
 }
 
 export async function revertNpmChanges() {
-  const co = await run('git', ['checkout', '--', 'package.json', 'package-lock.json'], { timeout: 30_000 });
-  if (!co.ok) return { ok: false, detail: (co.stderr || co.stdout || 'git checkout falló').trim().slice(0, 300) };
-  const inst = await run('npm', ['install'], { timeout: 600_000 });
-  const ok = !inst.failed && inst.ok;
-  return { ok, detail: ok ? 'package.json/package-lock.json revertidos y npm install OK' : (inst.stderr || inst.stdout || 'npm install falló').trim().slice(0, 300) };
+  return withJobHeartbeat(async () => {
+    const backupDir = readJob()?.npmBackupDir;
+    const relative = backupDir ? path.relative(JOB_DATA_DIR, backupDir) : '';
+    const validBackup = backupDir && relative && !relative.startsWith('..') && !path.isAbsolute(relative)
+      && ['package.json', 'package-lock.json'].every((file) => fs.existsSync(path.join(backupDir, file)));
+
+    if (validBackup) {
+      try {
+        for (const file of ['package.json', 'package-lock.json']) {
+          fs.copyFileSync(path.join(backupDir, file), path.join(ROOT, file));
+        }
+      } catch (err) {
+        return { ok: false, detail: `No se pudo restaurar el respaldo npm del job: ${String(err?.message || err).slice(0, 220)}` };
+      }
+    } else {
+      console.warn('[updates] No hay respaldo npm completo del job; uso fallback git checkout.');
+      const co = await run('git', ['checkout', '--', 'package.json', 'package-lock.json'], { timeout: 30_000 });
+      if (!co.ok) return { ok: false, detail: (co.stderr || co.stdout || 'git checkout falló').trim().slice(0, 300) };
+    }
+
+    const inst = await run('npm', ['install'], { timeout: 600_000 });
+    const ok = !inst.failed && inst.ok;
+    const source = validBackup ? 'respaldo del job' : 'fallback git checkout';
+    return { ok, detail: ok ? `package.json/package-lock.json restaurados desde ${source} y npm install OK` : (inst.stderr || inst.stdout || 'npm install falló').trim().slice(0, 300) };
+  });
 }
 
 // Revert QUIRÚRGICO: reinstala SOLO los paquetes indicados a su versión previa,
@@ -326,6 +379,8 @@ export function spawnUpdatesRunner() {
     const j = readJob();
     if (j && j.running) writeJob({ ...j, running: false, phase: 'error', error: 'No se pudo iniciar el runner de actualización.', finishedAt: now() });
     throw err;
+  } finally {
+    try { fs.closeSync(logFd); } catch { /* noop */ }
   }
 }
 
@@ -342,6 +397,8 @@ export function spawnAnalyzeRunner() {
   } catch (err) {
     try { fs.appendFileSync(ANALYZE_LOG, `[${new Date().toISOString()}] spawn THROW: ${err?.message || err}\n`); } catch { /* noop */ }
     throw err;
+  } finally {
+    try { fs.closeSync(logFd); } catch { /* noop */ }
   }
 }
 

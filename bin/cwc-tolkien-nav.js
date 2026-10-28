@@ -10,18 +10,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { resolveDataDir } from '../src/core/data-dir.js';
 
 const require = createRequire(import.meta.url);
 
 export const BASE_URL = 'https://app.tolkien.mordorstaffing.com';
-export const CHROMIUM_PATH = path.join(
-  os.homedir(),
-  '.cache',
-  'ms-playwright',
-  'chromium-1228',
-  'chrome-linux64',
-  'chrome',
-);
+export function chromiumPath() {
+  return process.env.CWC_TOLKIEN_CHROMIUM_PATH?.trim() || path.join(
+    os.homedir(),
+    '.cache',
+    'ms-playwright',
+    'chromium-1228',
+    'chrome-linux64',
+    'chrome',
+  );
+}
 export const NAVIGATION_TIMEOUT_MS = 30_000;
 // Los DOS cascarones observados en Tolkien vivo (medidos 2026-08-01, no supuestos).
 // El segundo no contiene la cadena larga: por eso «listo» no puede definirse sólo
@@ -66,7 +69,7 @@ export class WorkboardNotReadyError extends CliError {
 }
 
 export function identityAliasesPath() {
-  return path.join(os.homedir(), '.cwc-data', 'tolkien', 'identity.json');
+  return path.join(resolveDataDir(), 'tolkien', 'identity.json');
 }
 
 function normalizedIdentityEmail(value) {
@@ -172,15 +175,16 @@ export function requireSessionFile(sessionFile) {
 
 export async function launchContext(sessionFile) {
   requireSessionFile(sessionFile);
-  if (!fs.existsSync(CHROMIUM_PATH)) {
-    throw new CliError(`No se encontró Chromium en ${CHROMIUM_PATH}.`);
+  const executablePath = chromiumPath();
+  if (!fs.existsSync(executablePath)) {
+    throw new CliError(`No se encontró Chromium en ${executablePath}.`);
   }
   // La carga diferida mantiene importables los comandos de ayuda y los tests
   // aislados aun cuando este proceso no vaya a lanzar Chromium.
   const { chromium } = require('playwright-core');
   const browser = await chromium.launch({
     headless: true,
-    executablePath: CHROMIUM_PATH,
+    executablePath,
   });
   try {
     const context = await browser.newContext({ storageState: sessionFile });

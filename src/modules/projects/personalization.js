@@ -5,7 +5,7 @@
 import { principalOf } from '../../core/auth.js';
 import { loadInstance, saveInstance } from '../../core/instance-config.js';
 import { systemScopeFor } from '../../core/system-scope.js';
-import { hostUser, userGlobalClaudePath } from '../../core/user-space.js';
+import { hostUser, userClaudeDir, userGlobalClaudePath } from '../../core/user-space.js';
 import { readHooksState, setHookEnabled } from '../../core/user-hooks.js';
 import { readPrefs, writePrefs } from '../../core/user-prefs.js';
 import {
@@ -66,7 +66,8 @@ export function mountPersonalization(r) {
   // authenticated basta (ya gateado por el apiRouter). Hash/409 igual que projects.
   r.post('/me/global/section/:i', (req, res) => {
     try {
-      writeSectionOfFile(userGlobalClaudePath(uidOf(req)), req.params.i, req.body?.hash, String(req.body?.content ?? ''));
+      const owner = uidOf(req);
+      writeSectionOfFile(userGlobalClaudePath(owner), req.params.i, req.body?.hash, String(req.body?.content ?? ''), userClaudeDir(owner));
       res.json({ ok: true });
     } catch (e) {
       res.status(statusFor(e, e.conflict ? 409 : (e.badRequest ? 400 : 500)))
@@ -133,7 +134,10 @@ export function mountPersonalization(r) {
 
   r.post('/me/hooks/:id', (req, res) => {
     try {
-      const enabled = req.body?.enabled === true || req.body?.enabled === 'true';
+      if (typeof req.body?.enabled !== 'boolean') {
+        return res.status(400).json({ error: 'enabled debe ser booleano.' });
+      }
+      const enabled = req.body.enabled;
       const state = setHookEnabled(uidOf(req), req.params.id, enabled);
       res.json({ ok: true, hook: state });
     } catch (e) {

@@ -30,6 +30,7 @@ import crypto from 'node:crypto';
 import {
   validateField, recordAttempt, charsToUnits, estimateCostUsd,
 } from '../../core/closed-envelope.js';
+import { writeJsonAtomic } from '../../core/atomic-write.js';
 
 export const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 
@@ -85,8 +86,7 @@ export function makeResultStore({ file, tag, empty }) {
   };
   const write = (data) => {
     try {
-      fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-      fss.writeFileSync(file, JSON.stringify(data), { mode: 0o600 });
+      writeJsonAtomic(file, data);
     } catch (err) { console.error(`[${tag}] no pude escribir ${path.basename(file)}:`, err?.message); }
   };
   return { read, write };

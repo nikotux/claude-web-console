@@ -68,6 +68,13 @@ function rawBlock(obj) {
 
 async function buildInventory() {
   const inventory = [];
+  const failedCategories = [];
+
+  function recordCategoryFailure(kind, label, err) {
+    const error = String(err?.message || err);
+    failedCategories.push({ kind, label, error });
+    console.warn(`[unifi-inventory] No se pudieron escanear ${label}: ${error}`);
+  }
 
   try {
     const devices = await getDevices();
@@ -93,7 +100,7 @@ async function buildInventory() {
       });
     }
   } catch (err) {
-    console.warn(`[unifi-inventory] No se pudieron escanear dispositivos: ${err?.message || err}`);
+    recordCategoryFailure('dispositivo', 'dispositivos', err);
   }
 
   try {
@@ -118,7 +125,7 @@ async function buildInventory() {
       });
     }
   } catch (err) {
-    console.warn(`[unifi-inventory] No se pudieron escanear redes/VLANs: ${err?.message || err}`);
+    recordCategoryFailure('red', 'redes/VLANs', err);
   }
 
   try {
@@ -144,7 +151,7 @@ async function buildInventory() {
       });
     }
   } catch (err) {
-    console.warn(`[unifi-inventory] No se pudieron escanear WiFi: ${err?.message || err}`);
+    recordCategoryFailure('wifi', 'WiFi', err);
   }
 
   try {
@@ -169,7 +176,7 @@ async function buildInventory() {
       });
     }
   } catch (err) {
-    console.warn(`[unifi-inventory] No se pudieron escanear políticas de firewall: ${err?.message || err}`);
+    recordCategoryFailure('firewall', 'políticas de firewall', err);
   }
 
   try {
@@ -190,10 +197,10 @@ async function buildInventory() {
       });
     }
   } catch (err) {
-    console.warn(`[unifi-inventory] No se pudieron escanear reservas IP: ${err?.message || err}`);
+    recordCategoryFailure('reserva', 'reservas IP', err);
   }
 
-  return inventory;
+  return { inventory, failedCategories };
 }
 
 function itemsArray(data) {
@@ -208,8 +215,11 @@ function parseFields(item) {
   try { return JSON.parse(f) || {}; } catch { return {}; }
 }
 
-export async function scanToPad({ dryRun = false } = {}) {
-  const inv = await buildInventory();
+let scanInFlight = null;
+
+async function runScanToPad({ dryRun = false } = {}) {
+  const { inventory: inv, failedCategories } = await buildInventory();
+  const failedKinds = new Set(failedCategories.map((failure) => failure.kind));
   const r = await listItems(COLLECTION);
   if (!r.ok) {
     return { ok: false, error: r.error };
@@ -230,7 +240,7 @@ export async function scanToPad({ dryRun = false } = {}) {
   let updated = 0;
   let retired = 0;
   let linked = 0;
-  let errors = 0;
+  let errors = failedCategories.length;
   const errorDetails = [];
 
   function failureReason(result) {
@@ -246,6 +256,10 @@ export async function scanToPad({ dryRun = false } = {}) {
   function isOpenChildren(result) {
     const code = result?.code || result?.data?.code || result?.data?.error?.code;
     return code === 'open_children' || result?.status === 409;
+  }
+
+  for (const failure of failedCategories) {
+    recordError(`escaneo ${failure.label}`, { error: failure.error });
   }
 
   for (const entry of inv) {
@@ -271,7 +285,10 @@ export async function scanToPad({ dryRun = false } = {}) {
       });
 
       if (write.ok) created += 1;
-      else errors += 1;
+      else {
+        errors += 1;
+        recordError(`creación ${entry.uid}`, write);
+      }
       continue;
     }
 
@@ -283,6 +300,7 @@ export async function scanToPad({ dryRun = false } = {}) {
     const current = await getItem(item.ref);
     if (!current.ok) {
       errors += 1;
+      recordError(`lectura ${item.ref}`, current);
       continue;
     }
 
@@ -302,7 +320,10 @@ export async function scanToPad({ dryRun = false } = {}) {
     });
 
     if (write.ok) updated += 1;
-    else errors += 1;
+    else {
+      errors += 1;
+      recordError(`actualización ${item.ref}`, write);
+    }
   }
 
   const membersToRetire = [];
@@ -310,7 +331,7 @@ export async function scanToPad({ dryRun = false } = {}) {
   for (const item of existingItems) {
     const fields = parseFields(item);
     const uid = fields.uid;
-    if (!uid || seen.has(uid) || fields.status === 'retirado') {
+    if (!uid || seen.has(uid) || fields.status === 'retirado' || failedKinds.has(fields.kind)) {
       continue;
     }
 
@@ -415,5 +436,29 @@ export async function scanToPad({ dryRun = false } = {}) {
     }
   }
 
-  return { ok: true, created, updated, retired, linked, total: inv.length, dryRun, errors, errorDetails };
+  return {
+    ok: errors === 0,
+    created,
+    updated,
+    retired,
+    linked,
+    total: inv.length,
+    dryRun,
+    errors,
+    errorDetails,
+    failedCategories: failedCategories.map((failure) => failure.kind),
+  };
+}
+
+export async function scanToPad(options = {}) {
+  if (scanInFlight) {
+    return scanInFlight;
+  }
+
+  scanInFlight = runScanToPad(options);
+  try {
+    return await scanInFlight;
+  } finally {
+    scanInFlight = null;
+  }
 }

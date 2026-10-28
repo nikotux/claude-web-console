@@ -26,7 +26,8 @@ const CRITICAL = [
   { re: /core\/paths\.js$/, why: 'validación de rutas / path-traversal' },
   { re: /modules\/backup\//, why: 'guardas de push (regla 5: Mordor-Staffing/secretos)' },
   // Tickets & Features y su runner se archivaron el 2026-10-28 (console:PLAN-3480).
-  { re: /modules\/(health)\/(index|shared)\.js$/, why: 'blindaje read-only headless (regla 6)' },
+  { re: /modules\/health\//, why: 'blindaje de Salud: gate de política, invariantes y allowlists de dos capas (regla 6)' },
+  { re: /bin\/cwc-health(fix)?-(runner|orchestrator|scan-runner)\.js$/, why: 'runner de Salud con allowlist de seguridad (regla 6)' },
   { re: /bin\/cwc-(health|healthfix|chat)-runner\.js$/, why: 'runner desacoplado con allowlist de seguridad' },
 ];
 

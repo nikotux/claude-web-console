@@ -39,8 +39,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { encodeCwd } from '../../core/claude-model.js';
-import { resolveDataDir } from '../../core/data-dir.js';
-import { findItemByTitle, createItem, updateItem, addLink } from '../../core/pad-service-client.js';
+import {
+  findItemByTitle, createItem, updateItem, listLinks, addLink,
+} from '../../core/pad-service-client.js';
 
 const COLLECTION = 'contexto-de-tickets';
 // Sol de todo ítem de `contexto-de-tickets`: el nodo «Ciclo de tickets» de la
@@ -52,15 +53,27 @@ const CONTEXT_MAX = 20000;  // tope de chars del contexto adicional
 const SUMMARY_MAX = 4000;
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 let resolveClaudeDirForOwner = null;
+const metaMutationQueues = new Map();
 
-// El server inyecta userClaudeDir sin obligar a este archivo —también importado
-// por el runner— a arrastrar core/user-space.js → core/config.js/CWC_TOKEN.
+// API de compatibilidad: el server todavía registra el resolver sin obligar a
+// este archivo a importar user-space; extractSessionWork recibe claudeDir explícito.
 export function setTicketClaudeDirResolver(resolver) {
   resolveClaudeDirForOwner = typeof resolver === 'function' ? resolver : null;
 }
 
 function keyOf(id) { return String(id); }
 function blankEntry() { return { contextoAdicional: '', contextoAt: null, historico: [] }; }
+async function serializeMetaMutation(key, ctx, task) {
+  const queueKey = `${ctx?.workspace || 'console'}::${key}`;
+  const previous = metaMutationQueues.get(queueKey) || Promise.resolve();
+  const current = previous.catch(() => {}).then(task);
+  metaMutationQueues.set(queueKey, current);
+  try {
+    return await current;
+  } finally {
+    if (metaMutationQueues.get(queueKey) === current) metaMutationQueues.delete(queueKey);
+  }
+}
 
 // CONVE-1257 del Pad / regla dura 11: todo ítem nace enlazado a su sol.
 // Este guard existe porque los soles ARQUI-* de BUG-1878 solo viven en `console`.
@@ -74,6 +87,17 @@ function padSunApplies(ctx) {
 async function linkCdtToSun(ref, ctx) {
   try {
     if (!padSunApplies(ctx)) return;
+    const linksR = await listLinks(ref, { ctx });
+    if (!linksR?.ok || !Array.isArray(linksR.data)) {
+      console.error('[tickets] no pude verificar el enlace del contexto a su sol en Pad:', linksR?.error || linksR);
+      return;
+    }
+    const alreadyLinked = linksR.data.some((link) => {
+      if (link?.link_type !== 'implements') return false;
+      if (link.source_ref && link.source_ref !== ref) return false;
+      return (link.target_ref || link.target?.ref || link.target_item?.ref) === CDT_SUN;
+    });
+    if (alreadyLinked) return;
     const linkR = await addLink(ref, CDT_SUN, 'implements', { ctx });
     if (!linkR?.ok) console.error('[tickets] no pude enlazar el contexto a su sol en Pad:', linkR?.error || linkR);
   } catch (err) {
@@ -123,30 +147,37 @@ export async function saveContexto(id, text, ctx = null) {
   const key = keyOf(id);
   const clean = String(text || '').slice(0, CONTEXT_MAX);
   const at = Date.now();
-  const item = await findItemByTitle(COLLECTION, key, { ctx });
-  if (!item) {
-    const r = await createItem(COLLECTION, {
-      title: key,
-      fields: { ticketKey: key, contexto: { text: clean, at }, historico: [] },
-    }, { ctx });
+  return serializeMetaMutation(key, ctx, async () => {
+    // La búsqueda ocurre dentro de la cola: dos altas simultáneas no duplican el CDT.
+    const item = await findItemByTitle(COLLECTION, key, { ctx });
+    if (!item) {
+      const r = await createItem(COLLECTION, {
+        title: key,
+        fields: { ticketKey: key, contexto: { text: clean, at }, historico: [] },
+      }, { ctx });
+      if (!r.ok) throw padError('saveContexto', r);
+      await linkCdtToSun(r.data.ref, ctx);
+      return getMeta(id, ctx);
+    }
+    const nextFields = { ...parseFields(item), ticketKey: key, contexto: { text: clean, at } };
+    const r = await updateItem(item.ref, { fields: nextFields }, { ctx });
     if (!r.ok) throw padError('saveContexto', r);
-    await linkCdtToSun(r.data.ref, ctx);
+    await linkCdtToSun(item.ref, ctx);
     return getMeta(id, ctx);
-  }
-  const nextFields = { ...parseFields(item), ticketKey: key, contexto: { text: clean, at } };
-  const r = await updateItem(item.ref, { fields: nextFields }, { ctx });
-  if (!r.ok) throw padError('saveContexto', r);
-  return getMeta(id, ctx);
+  });
 }
 
 export async function clearContexto(id, ctx = null) {
   const key = keyOf(id);
-  const item = await findItemByTitle(COLLECTION, key, { ctx });
-  if (!item) return blankEntry(); // nada que borrar: no crea un ítem vacío
-  const nextFields = { ...parseFields(item), ticketKey: key, contexto: null };
-  const r = await updateItem(item.ref, { fields: nextFields }, { ctx });
-  if (!r.ok) throw padError('clearContexto', r);
-  return getMeta(id, ctx);
+  return serializeMetaMutation(key, ctx, async () => {
+    const item = await findItemByTitle(COLLECTION, key, { ctx });
+    if (!item) return blankEntry(); // nada que borrar: no crea un ítem vacío
+    const nextFields = { ...parseFields(item), ticketKey: key, contexto: null };
+    const r = await updateItem(item.ref, { fields: nextFields }, { ctx });
+    if (!r.ok) throw padError('clearContexto', r);
+    await linkCdtToSun(item.ref, ctx);
+    return getMeta(id, ctx);
+  });
 }
 
 // Agregar una entrada al histórico del trabajo (al cerrar un chat del ítem).
@@ -164,21 +195,25 @@ export async function appendHistorico(id, { sessionId, resumen, files }, ctx = n
     files: Array.isArray(files) ? files.slice(0, 60).map((f) => String(f).slice(0, 300)) : [],
   };
   try {
-    const item = await findItemByTitle(COLLECTION, key, { ctx });
-    if (!item) {
-      const r = await createItem(COLLECTION, {
-        title: key,
-        fields: { ticketKey: key, contexto: null, historico: [entry] },
-      }, { ctx });
-      if (!r.ok) console.error('[tickets] no pude crear item de histórico en Pad:', r.error);
-      else await linkCdtToSun(r.data.ref, ctx);
-      return;
-    }
-    const f = parseFields(item);
-    const historico = Array.isArray(f.historico) ? [...f.historico, entry] : [entry];
-    if (historico.length > HISTORY_MAX) historico.splice(0, historico.length - HISTORY_MAX);
-    const r = await updateItem(item.ref, { fields: { ...f, ticketKey: key, historico } }, { ctx });
-    if (!r.ok) console.error('[tickets] no pude actualizar histórico en Pad:', r.error);
+    await serializeMetaMutation(key, ctx, async () => {
+      // Igual que saveContexto: re-buscar bajo la cola evita dos creaciones.
+      const item = await findItemByTitle(COLLECTION, key, { ctx });
+      if (!item) {
+        const r = await createItem(COLLECTION, {
+          title: key,
+          fields: { ticketKey: key, contexto: null, historico: [entry] },
+        }, { ctx });
+        if (!r.ok) console.error('[tickets] no pude crear item de histórico en Pad:', r.error);
+        else await linkCdtToSun(r.data.ref, ctx);
+        return;
+      }
+      const f = parseFields(item);
+      const historico = Array.isArray(f.historico) ? [...f.historico, entry] : [entry];
+      if (historico.length > HISTORY_MAX) historico.splice(0, historico.length - HISTORY_MAX);
+      const r = await updateItem(item.ref, { fields: { ...f, ticketKey: key, historico } }, { ctx });
+      if (!r.ok) console.error('[tickets] no pude actualizar histórico en Pad:', r.error);
+      else await linkCdtToSun(item.ref, ctx);
+    });
   } catch (err) {
     console.error('[tickets] no pude persistir histórico en Pad:', err?.message || err);
   }
@@ -193,33 +228,8 @@ function transcriptPath(claudeDir, cwdAbs, sessionId) {
   return path.join(claudeDir, 'projects', encodeCwd(cwdAbs), `${sessionId}.jsonl`);
 }
 
-// Compatibilidad transitoria para los dos callers históricos de chat/index.js,
-// que está fuera del alcance de PLAN-2274: un chat de inquilino siempre tiene
-// cwd confinado a ~/.cwc-users/<owner>/workspace, de donde recuperamos el owner
-// y se la entregamos al resolver userClaudeDir(owner) inyectado por index.js.
-// Los callers nuevos deben pasar siempre (claudeDir, cwdAbs, sessionId).
-function claudeDirForLegacyCwd(cwdAbs) {
-  const parts = path.resolve(cwdAbs).split(path.sep);
-  const usersAt = parts.lastIndexOf('.cwc-users');
-  const tenantOwner = usersAt >= 0 && parts[usersAt + 2] === 'workspace'
-    ? parts[usersAt + 1]
-    : null;
-  if (resolveClaudeDirForOwner) return resolveClaudeDirForOwner(tenantOwner);
-  if (tenantOwner) {
-    const userRoot = parts.slice(0, usersAt + 2).join(path.sep) || path.sep;
-    return path.join(userRoot, '.claude');
-  }
-  // Fallback config-free para importaciones standalone: resolveDataDir() honra
-  // CWC_DATA_DIR y conserva ~/.cwc-data → ~/.claude para el host.
-  return path.join(path.dirname(resolveDataDir()), '.claude');
-}
-
 export function extractSessionWork(claudeDir, cwdAbs, sessionId) {
-  if (sessionId === undefined) {
-    sessionId = cwdAbs;
-    cwdAbs = claudeDir;
-    claudeDir = claudeDirForLegacyCwd(cwdAbs);
-  }
+  if (typeof claudeDir !== 'string' || !claudeDir.trim()) return null;
   let raw;
   try { raw = fs.readFileSync(transcriptPath(claudeDir, cwdAbs, sessionId), 'utf8'); } catch { return null; }
   const files = new Set();

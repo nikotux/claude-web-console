@@ -37,12 +37,25 @@ export function commandEnvFor(scope) {
 // para VERIFICAR que una reconexión quedó de verdad conectada antes de
 // reportar éxito — ver runMcpList más abajo). ---
 export function classifyStatus(raw) {
-  const s = String(raw || '').toLowerCase();
-  if (raw.includes('✔') || s.includes('connected')) return { code: 'connected', light: 'ok', label: 'Conectado' };
-  if (raw.includes('!') || s.includes('authentication') || s.includes('needs auth')) return { code: 'needs-auth', light: 'warn', label: 'Requiere reconexión' };
-  if (raw.includes('⏸') || s.includes('pending')) return { code: 'pending', light: 'info', label: 'Pendiente de aprobación' };
-  if (raw.includes('✘') || s.includes('failed') || s.includes('disconnect') || s.includes('error')) return { code: 'error', light: 'danger', label: 'Error de conexión' };
-  return { code: 'unknown', light: 'neutral', label: raw.trim() || 'Desconocido' };
+  const text = String(raw || '').trim();
+  const s = text.toLowerCase();
+  const ERR = { code: 'error', light: 'danger', label: 'Error de conexión' };
+  const OK = { code: 'connected', light: 'ok', label: 'Conectado' };
+  const NEEDS = { code: 'needs-auth', light: 'warn', label: 'Requiere reconexión' };
+  const PENDING = { code: 'pending', light: 'info', label: 'Pendiente de aprobación' };
+  // El símbolo inicial es la señal más precisa, salvo un verde contradictorio.
+  const lead = text[0];
+  if (lead === '✔' && (/(?:\bdisconnect|\bnot connected)/.test(s))) return ERR;
+  if (lead === '✘') return ERR;
+  if (lead === '✔') return OK;
+  if (lead === '!') return NEEDS;
+  if (lead === '⏸') return PENDING;
+  // Sin símbolo inicial, primero se reconocen siempre las palabras de fallo.
+  if (/\bdisconnect/.test(s) || /\bnot connected\b/.test(s) || s.includes('failed') || /\berror\b/.test(s) || text.includes('✘')) return ERR;
+  if (s.includes('authentication') || s.includes('needs auth')) return NEEDS;
+  if (text.includes('⏸') || s.includes('pending')) return PENDING;
+  if (text.includes('✔') || /\bconnected\b/.test(s)) return OK;
+  return { code: 'unknown', light: 'neutral', label: text || 'Desconocido' };
 }
 
 // name lazy hasta el primer ":", endpoint lazy, status anclado al final por su
@@ -162,11 +175,20 @@ export function spawnLogin(scope, world, name) {
   // Dedup: un job fresco no-terminal se reusa (no relanzamos otro pty).
   const existing = readLoginJob(scope, id);
   if (existing && !TERMINAL.has(existing.status) && Date.now() - (existing.ts || 0) < 10 * 60 * 1000) return id;
+  const env = commandEnvFor(scope);
   try { fs.unlinkSync(codeFileFor(scope, id)); } catch { /* noop */ }
   fs.writeFileSync(jobFileFor(scope, id), JSON.stringify({ id, world, name, status: 'starting', ts: Date.now() }), { mode: 0o600 });
-  const child = spawn('node', [runnerFor(), '--cwd', cwd, '--name', name, '--id', id], {
-    detached: true, stdio: 'ignore', env: commandEnvFor(scope),
-  });
+  let child;
+  try {
+    child = spawn('node', [runnerFor(), '--cwd', cwd, '--name', name, '--id', id], {
+      detached: true, stdio: 'ignore', env,
+    });
+  } catch (e) {
+    try {
+      fs.writeFileSync(jobFileFor(scope, id), JSON.stringify({ id, world, name, status: 'error', error: String(e?.message || e), ts: Date.now() }), { mode: 0o600 });
+    } catch { /* best-effort */ }
+    throw e;
+  }
   child.on('error', (err) => {
     try {
       fs.writeFileSync(jobFileFor(scope, id), JSON.stringify({ id, world, name, status: 'error', error: String(err.message || err), ts: Date.now() }), { mode: 0o600 });

@@ -13,11 +13,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
-import { resolveDataDir } from '../../core/data-dir.js';
-import {
-  hostUser, readUserOauthToken, userDataDir, userRunnerEnv,
-} from '../../core/user-space.js';
-import { PROMOTE_TARGETS } from './promote-shared.js';
+import { retroDataDirFor, retroRunnerEnvFor } from './owner-dirs.js';
+import { PROMOTE_TARGETS } from './promote-targets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
@@ -26,20 +23,9 @@ const RUNNER = path.join(ROOT, 'bin', 'cwc-retro-curate-runner.js');
 export const CURATE_TIMEOUT_MS = 4 * 60 * 1000;
 export const CURATE_STALE_MS = CURATE_TIMEOUT_MS + 30 * 1000;
 
-function dataDirFor(owner = null) { return owner ? userDataDir(owner) : resolveDataDir(); }
+function dataDirFor(owner = null) { return retroDataDirFor(owner); }
 function jobFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-curation.json'); }
 function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-curate.log'); }
-function runnerEnvFor(owner) {
-  if (!owner || owner === hostUser()) return process.env;
-  const oauthToken = readUserOauthToken(owner);
-  if (!oauthToken) {
-    const error = new Error('Necesitás conectar tu cuenta de Claude para curar el registro.');
-    error.conflict = true;
-    throw error;
-  }
-  return userRunnerEnv(owner, { oauthToken });
-}
-
 export function readCurationJob(owner = null) {
   try { return JSON.parse(fs.readFileSync(jobFileFor(owner), 'utf8')); }
   catch { return null; }
@@ -64,19 +50,24 @@ export function jobResult(job) {
 export function spawnRetroCurateRunner(owner) {
   const logFile = logFileFor(owner);
   fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
-  const logFd = fs.openSync(logFile, 'a');
-  const child = spawn(process.execPath, [RUNNER], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: runnerEnvFor(owner),
-  });
-  child.on('error', (err) => {
-    try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL curate: ${err?.message || err}\n`); } catch { /* noop */ }
-    try {
-      const job = readCurationJob(owner);
-      if (job && job.status === 'running') writeCurationJob({ ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de curaduría.', updatedAt: Date.now() }, owner);
-    } catch { /* noop */ }
-  });
-  child.unref();
-  fs.closeSync(logFd);
+  let logFd = null;
+  try {
+    logFd = fs.openSync(logFile, 'a');
+    const child = spawn(process.execPath, [RUNNER], {
+      detached: true, stdio: ['ignore', logFd, logFd],
+      env: retroRunnerEnvFor(owner, { missingOauthMessage: 'Necesitás conectar tu cuenta de Claude para curar el registro.' }),
+    });
+    child.on('error', (err) => {
+      try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL curate: ${err?.message || err}\n`); } catch { /* noop */ }
+      try {
+        const job = readCurationJob(owner);
+        if (job && job.status === 'running') writeCurationJob({ ...job, status: 'error', result: null, error: 'No se pudo iniciar el runner de curaduría.', updatedAt: Date.now() }, owner);
+      } catch { /* noop */ }
+    });
+    child.unref();
+  } finally {
+    if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* noop */ } }
+  }
 }
 
 // ===== Prompt (el server ya juntó lessons + rules en `context`) =====

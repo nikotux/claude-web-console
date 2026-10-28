@@ -28,6 +28,7 @@ const BODY_STATE_VERSION = 1;
 // conservar cuerpos completos durante el mes que sí necesita el retrato.
 const BODY_STATE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const REPRESENTATIVE_BODY_LIMIT = 80;
+const scanInflight = new Map();
 
 function sessionUser(req, res) {
   const principal = principalOf(req);
@@ -231,12 +232,17 @@ function failureStatus(reason) {
 mailScanRouter.get('/mail-scan/status', async (req, res) => {
   const user = sessionUser(req, res);
   if (!user) return;
-  readLastResult(user); // poda oportunista del snapshot sensible vencido
-  pruneBodyState(user); // el contenido privado tiene un TTL independiente y más corto
+  try {
+    readLastResult(user); // poda oportunista del snapshot sensible vencido
+    pruneBodyState(user); // el contenido privado tiene un TTL independiente y más corto
 
-  if (!connectionStatus(user, 'microsoft').connected) {
-    const failure = actionableFailure({ reason: 'unauthorized' });
-    return res.json({ connected: false, scopeAvailable: false, ...failure });
+    if (!connectionStatus(user, 'microsoft').connected) {
+      const failure = actionableFailure({ reason: 'unauthorized' });
+      return res.json({ connected: false, scopeAvailable: false, ...failure });
+    }
+  } catch {
+    const failure = actionableFailure({ reason: 'unknown' });
+    return res.status(500).json({ connected: false, scopeAvailable: false, ...failure });
   }
 
   try {
@@ -262,20 +268,17 @@ mailScanRouter.get('/mail-scan/status', async (req, res) => {
   }
 });
 
-mailScanRouter.post('/mail-scan', async (req, res) => {
-  const user = sessionUser(req, res);
-  if (!user) return;
-
+async function runMailScan(user) {
   let sample;
   try {
     sample = await fetchMailSample(user);
   } catch {
     const failure = actionableFailure({ reason: 'unknown' });
-    return res.status(500).json({ ok: false, ...failure });
+    return { status: 500, body: { ok: false, ...failure } };
   }
   if (!sample.ok) {
     const failure = actionableFailure(sample);
-    return res.status(failureStatus(failure.reason)).json({ ok: false, ...failure });
+    return { status: failureStatus(failure.reason), body: { ok: false, ...failure } };
   }
 
   const representative = selectRepresentative(sample.messages, REPRESENTATIVE_BODY_LIMIT);
@@ -284,11 +287,11 @@ mailScanRouter.post('/mail-scan', async (req, res) => {
     bodies = await fetchMailBodies(user, representative);
   } catch {
     const failure = actionableFailure({ reason: 'unknown' });
-    return res.status(500).json({ ok: false, ...failure });
+    return { status: 500, body: { ok: false, ...failure } };
   }
   if (!bodies.ok) {
     const failure = actionableFailure(bodies);
-    return res.status(failureStatus(failure.reason)).json({ ok: false, ...failure });
+    return { status: failureStatus(failure.reason), body: { ok: false, ...failure } };
   }
 
   const result = publicResult({
@@ -304,13 +307,38 @@ mailScanRouter.post('/mail-scan', async (req, res) => {
     writeMailBodies(user, bodies.messages);
     writeLastResult(user, result);
   } catch {
+    return {
+      status: 500,
+      body: {
+        ok: false,
+        reason: 'unknown',
+        message: 'El retrato se generó, pero no se pudo guardar de forma segura. Reintentá más tarde.',
+      },
+    };
+  }
+  return { status: 200, body: result };
+}
+
+mailScanRouter.post('/mail-scan', async (req, res) => {
+  const user = sessionUser(req, res);
+  if (!user) return;
+
+  try {
+    let promise = scanInflight.get(user);
+    if (!promise) {
+      promise = runMailScan(user).finally(() => {
+        if (scanInflight.get(user) === promise) scanInflight.delete(user);
+      });
+      scanInflight.set(user, promise);
+    }
+    const { status, body } = await promise;
+    return res.status(status).json(body);
+  } catch {
     return res.status(500).json({
       ok: false,
-      reason: 'unknown',
-      message: 'El retrato se generó, pero no se pudo guardar de forma segura. Reintentá más tarde.',
+      ...actionableFailure({ reason: 'unknown' }),
     });
   }
-  return res.json(result);
 });
 
 mailScanRouter.get('/mail-scan/last', (req, res) => {

@@ -46,7 +46,7 @@ function run(cmd, args, { cwd = ROOT, timeout = 60_000, env } = {}) {
         code: err?.code ?? 0,
         stdout: String(stdout || ''),
         stderr: String(stderr || ''),
-        failed: !!(err && err.killed) || !!(err && typeof err.code !== 'number' && err.code !== undefined && err.signal),
+        failed: !!err && (err.killed || !!err.signal || typeof err.code !== 'number'),
       });
     });
   });
@@ -189,7 +189,9 @@ async function censusNpm() {
     run('npm', ['audit', '--json', '--omit=dev'], { timeout: 90_000 }),
   ]);
 
-  const od = safeJson(outdated.stdout) || {};
+  const parsedOutdated = safeJson(outdated.stdout);
+  const parsedAudit = safeJson(audit.stdout);
+  const od = parsedOutdated || {};
   const pkg = readPackageJson();
   const declared = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
 
@@ -248,7 +250,7 @@ async function censusNpm() {
   });
 
   // Vulnerabilidades: npm audit --json v2 → .vulnerabilities{name:{severity,...}}
-  const av = safeJson(audit.stdout) || {};
+  const av = parsedAudit || {};
   const vulns = [];
   const vObj = av.vulnerabilities || {};
   for (const [name, v] of Object.entries(vObj)) {
@@ -266,7 +268,10 @@ async function censusNpm() {
   vulns.sort((a, b) => (sevRank[a.severity] ?? 9) - (sevRank[b.severity] ?? 9));
 
   const meta = av.metadata?.vulnerabilities || {};
-  return { libs, vulns, vulnCounts: meta, error: outdated.failed ? 'npm outdated falló' : null };
+  const errors = [];
+  if (outdated.failed || (!outdated.ok && !parsedOutdated)) errors.push('npm outdated falló');
+  if (audit.failed || (!audit.ok && !parsedAudit)) errors.push('npm audit falló');
+  return { libs, vulns, vulnCounts: meta, error: errors.join('; ') || null };
 }
 
 // --- Claude Code CLI (npm global, tiene su propio updater) -----------------
@@ -413,7 +418,7 @@ async function censusMcps() {
   let timer;
   try {
     const listed = await Promise.race([
-      runMcpList(ROOT),
+      runMcpList(ROOT).catch(() => ({ servers: [], error: 'mcp list falló' })),
       new Promise((resolve) => {
         timer = setTimeout(() => resolve({
           servers: [],
@@ -421,19 +426,19 @@ async function censusMcps() {
         }), 15_000);
       }),
     ]);
-    clearTimeout(timer);
     return {
       items: (listed.servers || []).map(({ name, status }) => ({ name, status })),
       error: listed.error || null,
       note: 'Censo informativo: los MCP se administran y reconectan por separado; esta sección no ofrece actualizarlos.',
     };
   } catch (err) {
-    clearTimeout(timer);
     return {
       items: [],
       error: String(err?.message || err).slice(0, 300),
       note: 'Censo informativo: los MCP se administran y reconectan por separado; esta sección no ofrece actualizarlos.',
     };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -542,9 +547,13 @@ export async function buildUpdatesCensus() {
 // node --check sobre los entrypoints principales del repo. NO reinicia nada.
 export async function syntaxCheck() {
   const targets = ['src/server.js'];
-  // + todos los bin/*.js y src/**/*.js sería lento; server.js importa el árbol
-  // entero de módulos, así que un error de sintaxis en cualquiera lo revienta al
-  // cargarse. Igual chequeamos los runners sueltos de bin/ que NO se importan.
+  // server.js importa el árbol de módulos. Los runners de bin/ quedan sueltos,
+  // así que se enumeran explícitamente para no dejar entrypoints sin revisar.
+  try {
+    for (const file of fs.readdirSync(path.join(ROOT, 'bin'))) {
+      if (file.endsWith('.js')) targets.push(path.join('bin', file));
+    }
+  } catch { /* best-effort */ }
   const results = [];
   for (const t of targets) {
     const r = await run('node', ['--check', t], { timeout: 20_000 });

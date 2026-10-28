@@ -1,14 +1,15 @@
 // modules/terminal/sessions.js — gestor de sesiones de terminal.
 //
 // Estrategia de persistencia (aprobada): HÍBRIDO tmux aislado.
-//   - Cada sesión es un `tmux -L cwc new-session -A -s cwc-<id>` envuelto por
-//     un node-pty que actúa de viewport.
+//   - Cada sesión se crea detached por un source-file efímero y un node-pty se
+//     adjunta después como viewport.
 //   - El proceso REAL vive dentro del servidor tmux del socket dedicado `cwc`,
 //     así que sobrevive tanto a la desconexión del navegador como a un reinicio
 //     del proceso Node (rehidratamos al arrancar).
 //   - Mantenemos un ring buffer en memoria con la salida reciente para
 //     re-pintar el terminal al reconectar.
 import pty from 'node-pty';
+import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +21,7 @@ import {
   ensureCliOnboarded,
   ensureUserSpace,
   hostUser,
+  userDataDir,
   userRunnerEnv,
 } from '../../core/user-space.js';
 // Títulos humanos custom (titles.json), compartidos con el módulo tmux: se
@@ -36,6 +38,7 @@ const PREFIX = 'cwc-'; // prefijo de nombres de sesión tmux de este proyecto
 // (bare). Distinto de PREFIX a propósito: no se listan ni se rehidratan como
 // terminales normales, pero al vivir en tmux SOBREVIVEN un crash del server.
 const BARE_PREFIX = 'cwct-';
+let tmuxCommandSeq = 0;
 
 // El server tmux es compartido y de vida larga: un pane hereda SU entorno, no el
 // del cliente que lo crea. Por eso toda variable que una sesión necesite se pasa
@@ -74,7 +77,72 @@ function tmuxArgs(...rest) {
   return ['-L', config.tmuxSocket, '-f', TMUX_CONF, ...rest];
 }
 
-const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+// Quote para el parser de comandos de tmux 3.x: dentro de comillas dobles,
+// backslash, comillas, dólar y tilde tienen semántica propia.
+// Un newline crudo rompería la línea del archivo de comandos, por eso va como escape \n de tmux.
+function tmuxQuote(value) {
+  const escaped = String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\$/g, '\\$')
+    .replace(/~/g, '\\~')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+  return `"${escaped}"`;
+}
+
+function sessionExists(name) {
+  try {
+    execFileSync('tmux', tmuxArgs('has-session', '-t', `=${name}`), { stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+}
+
+function createTmuxSessionViaFile({ owner, name, envMap, cols, rows, cwd, command, env }) {
+  const dir = path.join(userDataDir(owner || hostUser()), 'terminal-spawn');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(dir, 0o700); } catch { /* best-effort sobre directorios existentes */ }
+
+  // Limpia restos de un crash; nunca impide crear la sesión actual.
+  try {
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.tmux')) continue;
+      const stale = path.join(dir, entry.name);
+      try {
+        if (fs.statSync(stale).mtimeMs < cutoff) fs.rmSync(stale, { force: true });
+      } catch { /* barrido best-effort */ }
+    }
+  } catch { /* barrido best-effort */ }
+
+  tmuxCommandSeq += 1;
+  const file = path.join(dir, `${name}-${process.pid}-${Date.now()}-${tmuxCommandSeq}.tmux`);
+  let content = 'new-session -d';
+  for (const [key, value] of envMap) content += ` -e ${tmuxQuote(`${key}=${value}`)}`;
+  content += ` -s ${tmuxQuote(name)} -x ${cols} -y ${rows} -c ${tmuxQuote(cwd)}`;
+  if (command) {
+    content += ` ${tmuxQuote(command.file)}`;
+    for (const arg of command.args) content += ` ${tmuxQuote(arg)}`;
+  }
+  content += '\n';
+
+  try {
+    fs.writeFileSync(file, content, { mode: 0o600, flag: 'wx' });
+    execFileSync('tmux', tmuxArgs('start-server', ';', 'source-file', file), {
+      env,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      encoding: 'utf8',
+    });
+  } catch (e) {
+    const detail = String(e?.stderr || e?.message || e).trim();
+    throw new Error(`No se pudo crear la sesión tmux: ${detail}`);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+}
+
+const validDim = (value) => Number.isInteger(value) && value >= 1 && value <= 1000;
 
 // ¿Sigue viva la tmux oculta de una vista TUI? (para re-adjuntar tras reinicio)
 export function bareTmuxAlive(id) {
@@ -147,9 +215,11 @@ class Session {
       if (needsClaude && !oauthToken) {
         this.alive = false;
         if (credential.sponsor) {
-          throw new Error(`El usuario ${this.owner} está patrocinado por ${credential.sponsor}, pero ${credential.sponsor} no tiene un token de patrocinio. Generalo con \`claude setup-token\` y guardalo en su oauth-token.`);
+          const msg = `El usuario ${this.owner} está patrocinado por ${credential.sponsor}, pero ${credential.sponsor} no tiene un token de patrocinio. Generalo con \`claude setup-token\` y guardalo en su oauth-token.`;
+          throw Object.assign(new Error(msg), { statusCode: 409, publicMessage: msg });
         }
-        throw new Error(`El usuario ${this.owner} no tiene credencial propia de Claude: completá el paso de credenciales del onboarding antes de abrir una sesión de Claude.`);
+        const msg = `El usuario ${this.owner} no tiene credencial propia de Claude: completá el paso de credenciales del onboarding antes de abrir una sesión de Claude.`;
+        throw Object.assign(new Error(msg), { statusCode: 409, publicMessage: msg });
       }
       env = { ...userRunnerEnv(this.owner, { oauthToken }), TERM: 'xterm-256color' };
     } else {
@@ -189,25 +259,32 @@ class Session {
     ]) {
       if (env[key] !== undefined) tmuxEnv.set(key, env[key]);
     }
-    const tmuxEnvArgs = [...tmuxEnv].flatMap(([key, value]) => ['-e', `${key}=${value}`]);
-
-    // IMPORTANTE: `new-session -A` ignora los `-e` si la sesión ya existe.
-    // Una sesión creada con el entorno viejo debe matarse y recrearse; este
-    // aislamiento no puede aplicarse en caliente durante la rehidratación.
+    // IMPORTANTE: si la sesión ya existe no se reescribe su entorno. Equivale
+    // a que `new-session -A` ignoraba los `-e`: para aplicar un entorno nuevo
+    // hay que matar y recrear, no puede corregirse durante la rehidratación.
     if (this.bare) {
       // tmux oculta corriendo el comando DIRECTO (sin shell debajo): cuando
       // `claude` sale, la sesión tmux muere y el pty también (waitForExit).
-      // new-session -A: si la tmux sobrevivió a un reinicio del server, se
-      // re-adjunta (el comando se ignora) en vez de lanzar otro claude.
-      const args = tmuxArgs(
-        'new-session', '-A',
-        ...tmuxEnvArgs,
-        '-s', this.tmuxName,
-        '-x', String(this.cols),
-        '-y', String(this.rows),
-        '-c', this.cwd,
-        this.command.file, ...this.command.args,
-      );
+      // Si sobrevivió a un reinicio, se re-adjunta en vez de lanzar otro claude.
+      if (!sessionExists(this.tmuxName)) {
+        try {
+          createTmuxSessionViaFile({
+            owner: this.owner,
+            name: this.tmuxName,
+            envMap: tmuxEnv,
+            cols: this.cols,
+            rows: this.rows,
+            cwd: this.cwd,
+            command: this.command,
+            env,
+          });
+        } catch (e) {
+          this.proc = null;
+          this.alive = false;
+          throw e;
+        }
+      }
+      const args = tmuxArgs('attach-session', '-t', `=${this.tmuxName}`);
       try {
         this.proc = pty.spawn('tmux', args, {
           name: 'xterm-256color', cols: this.cols, rows: this.rows, cwd: this.cwd, env,
@@ -224,15 +301,25 @@ class Session {
         // otros), evitando la guerra de redimensionado entre clientes de tmux.
         args = ['-S', this.attachSpec.socket, 'attach-session', '-d', '-t', this.attachSpec.session];
       } else {
-        // new-session -A: adjunta si existe, crea si no (idempotente = rehidratación).
-        args = tmuxArgs(
-          'new-session', '-A',
-          ...tmuxEnvArgs,
-          '-s', this.tmuxName,
-          '-x', String(this.cols),
-          '-y', String(this.rows),
-          '-c', this.cwd,
-        );
+        if (!sessionExists(this.tmuxName)) {
+          try {
+            createTmuxSessionViaFile({
+              owner: this.owner,
+              name: this.tmuxName,
+              envMap: tmuxEnv,
+              cols: this.cols,
+              rows: this.rows,
+              cwd: this.cwd,
+              command: null,
+              env,
+            });
+          } catch (e) {
+            this.proc = null;
+            this.alive = false;
+            throw e;
+          }
+        }
+        args = tmuxArgs('attach-session', '-t', `=${this.tmuxName}`);
       }
       try {
         this.proc = pty.spawn('tmux', args, {
@@ -362,12 +449,15 @@ class Session {
   }
 
   resize(cols, rows) {
-    if (!cols || !rows) return;
+    if (!validDim(cols) || !validDim(rows)) return;
+    if (this.alive && this.proc) {
+      try { this.proc.resize(cols, rows); } catch (e) {
+        console.error('[terminal] resize falló:', e?.message);
+        return;
+      }
+    }
     this.cols = cols;
     this.rows = rows;
-    if (this.alive && this.proc) {
-      try { this.proc.resize(cols, rows); } catch (e) { console.error('[terminal] resize falló:', e?.message); }
-    }
   }
 
   info() {
@@ -394,8 +484,8 @@ class SessionManager {
 
   // Rehidratación tras reinicio de Node: el proceso REAL vive en el servidor
   // tmux del socket `cwc`, así que al arrancar reconstruimos un Session por
-  // cada `cwc-*` que siga vivo. spawn() con `new-session -A` se re-adjunta a
-  // la existente (no crea una nueva). Solo tocamos nuestro prefijo: nunca
+  // cada `cwc-*` que siga vivo. spawn() detecta la existente y se re-adjunta
+  // sin crear una nueva. Solo tocamos nuestro prefijo: nunca
   // sesiones ajenas del mismo socket.
   rehydrate() {
     let out = '';
@@ -453,13 +543,28 @@ class SessionManager {
       throw e;
     }
     this.sessions.set(id, session);
-    if (owner) { try { setSessionOwner(id, owner); } catch { /* best-effort: el owner vive en RAM */ } }
+    if (owner) {
+      let ok = false;
+      try {
+        ok = setSessionOwner(id, owner) === true;
+      } catch (e) {
+        console.error('[terminal] Error persistiendo el dueño de la sesión', id, e?.message || e);
+      }
+      if (!ok) {
+        console.error('[terminal] No se pudo persistir el dueño de la sesión', id, '· owner:', owner);
+        if (owner !== hostUser()) {
+          try { session.kill(); } catch { /* best-effort */ }
+          this.sessions.delete(id);
+          throw new Error('No se pudo registrar el dueño de la sesión.');
+        }
+      }
+    }
     return session;
   }
 
   // Sesión "bare" (tmux oculta cwct-): la usa el modo TUI del chat para correr
   // `claude --resume <sessionId>`. Acepta `id` explícito para RE-ADJUNTAR una
-  // tmux que sobrevivió a un reinicio del server (new-session -A la retoma).
+  // tmux que sobrevivió a un reinicio del server (spawn detecta y la retoma).
   createBare({ cwd, command, title, id = null, owner = null } = {}) {
     const sid = id && !this.sessions.has(id) ? id : this._nextId();
     const session = new Session({ id: sid, cwd, title, bare: true, command, owner });

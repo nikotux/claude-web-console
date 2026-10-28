@@ -142,15 +142,27 @@ export function confirmSheet({
     document.body.appendChild(overlay);
 
     let done = false;
+    const entry = {};
     const finish = (val) => {
       if (done) return;
       done = true;
+      document.removeEventListener('keydown', onKey, true);
+      const idx = escLayers.indexOf(entry);
+      if (idx !== -1) escLayers.splice(idx, 1);
       // Salida deslizando hacia abajo (usa la transition base de .dlg-sheet).
       sheet.style.transform = 'translateY(100%)';
       overlay.style.opacity = '0';
       setTimeout(() => overlay.remove(), 200);
       resolve(val);
     };
+    function onKey(e) {
+      if (e.key !== 'Escape' || !isTopEscLayer(entry)) return;
+      e.stopPropagation();
+      finish(false);
+    }
+    entry.close = () => finish(false);
+    escLayers.push(entry);
+    document.addEventListener('keydown', onKey, true);
     overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) finish(false); });
     cancel.addEventListener('click', () => finish(false));
     confirm.addEventListener('click', () => finish(true));

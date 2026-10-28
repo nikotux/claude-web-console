@@ -723,7 +723,8 @@ router cambió el modelo a X sin que hagas nada") — un cambio MANUAL
 (selector de Sesiones, `POST /api/chat/model`) sigue sin nota,
 como siempre. APRENDIZAJE — cada cambio que hace el router (los 3
 orígenes: heuristic/classifier/reactive) se registra con
-`logDecision()` (núcleo, `~/.cwc-data/model-router-log.jsonl`,
+`logDecision()` (núcleo, `<userDataDir(owner)>/model-router-log.jsonl`;
+para el host sigue siendo `~/.cwc-data/model-router-log.jsonl`,
 append-only con poda cruda a la mitad pasado ~2MB) — SOLO
 observación para calibrar después con datos reales, patrón
 "invariantes propuestos" de Salud: nada de esta fase decide ni se
@@ -934,6 +935,8 @@ el contexto en el `task`). VERIFICADO E2E (WS real): chat tandem → Opus →
 "delego a Codex" → tarjeta de permiso → Codex crea el archivo en el cwd →
 Claude verifica con Read/Bash; Edit/Write NUNCA usadas.
 FAMILIA GPT-6 (2026-10-13, Codex CLI 0.162.1): la whitelist suma `gpt-6-astra` y `gpt-6-sol` (low→ultra) y `gpt-6-luna` (low→max), en `codex-models.js` Y en el espejo `public/js/ui/models.js`. El catálogo del CLI pasó `gpt-5.5` a `hide`, pero se conserva para no invalidar chats que lo tengan guardado. El default de Tándem SIGUE en `gpt-5.6-sol`: cambiarlo a GPT-6 queda pendiente de una prueba manual.
+
+GPT-6.1 (2026-10-28, Codex CLI 0.165.0): la whitelist suma `gpt-6.1-sol` y `gpt-6.1-terra` (los dos low→ultra, según `~/.codex/models_cache.json`), en `codex-models.js` Y en el espejo `public/js/ui/models.js`. El default de Tándem no cambia.
 MIGRACIÓN A GPT-5.6 (2026-07-24): el ejecutor Codex de Tándem deja de usar
 gpt-5.5 como default y pasa a la familia GPT-5.6 sufijada: `gpt-5.6-sol`
 es frontier y reemplaza a gpt-5.5; `gpt-5.6-terra` es balanceado y

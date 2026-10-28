@@ -104,6 +104,16 @@ function canWrite(req, p) {
   return !!(p.own && pr && pr.username && pr.username === p.userId);
 }
 
+function statusFor(e, fallback = 500) {
+  return e?.statusCode || (e?.badRequest ? 400 : (e?.conflict ? 409 : fallback));
+}
+
+function requireHash(req, res) {
+  if (typeof req.body?.hash === 'string' && req.body.hash) return true;
+  res.status(400).json({ error: 'Falta el hash del contenido abierto.' });
+  return false;
+}
+
 // ===== Análisis con IA de un cambio de contexto (guardián del CLAUDE.md) =====
 // Compara la sección ANTERIOR vs la NUEVA con una corrida corta del SDK
 // (haiku, 1 turno, CERO herramientas). DESACOPLADO (regla de oro 2026-07-04):
@@ -134,23 +144,31 @@ export default {
 
     // Contextos de Tickets & Features, archivado el 2026-10-28 (console:PLAN-3480).
     r.get('/work-context', (req, res) => {
-      const scope = systemScopeFor(req);
-      const kind = req.query.kind === 'pr' ? 'pr' : 'work';
-      const context = getContext(kind, scope);
-      res.json({ kind, context, isDefault: context === DEFAULT_CONTEXTS[kind] });
+      try {
+        const scope = systemScopeFor(req);
+        const kind = req.query.kind === 'pr' ? 'pr' : 'work';
+        const context = getContext(kind, scope);
+        res.json({ kind, context, isDefault: context === DEFAULT_CONTEXTS[kind] });
+      } catch (e) {
+        res.status(statusFor(e)).json({ error: e.message || 'No se pudo leer el contexto de trabajo.' });
+      }
     });
     r.post('/work-context', (req, res) => {
-      const scope = systemScopeFor(req);
-      const kind = req.body?.kind === 'pr' ? 'pr' : 'work';
-      const text = String(req.body?.context ?? '');
-      if (!text.trim()) return res.status(400).json({ error: 'El contexto no puede quedar vacío.' });
-      saveContext(kind, text, scope);
-      res.json({
-        ok: true,
-        kind,
-        context: getContext(kind, scope),
-        sync: verifySync(scope),
-      });
+      try {
+        const scope = systemScopeFor(req);
+        const kind = req.body?.kind === 'pr' ? 'pr' : 'work';
+        const text = String(req.body?.context ?? '');
+        if (!text.trim()) return res.status(400).json({ error: 'El contexto no puede quedar vacío.' });
+        saveContext(kind, text, scope);
+        res.json({
+          ok: true,
+          kind,
+          context: getContext(kind, scope),
+          sync: verifySync(scope),
+        });
+      } catch (e) {
+        res.status(statusFor(e)).json({ error: e.message || 'No se pudo guardar el contexto de trabajo.' });
+      }
     });
 
     // Verificador del ESPEJO a Tolkien: ¿el subset work+pr en el clon propio
@@ -158,15 +176,20 @@ export default {
     // muestra como badge (✅ al día / ⚠️ desactualizado / ❌ falta) y el check
     // rápido de Salud consume el MISMO estado. 0 tokens, solo lee disco.
     r.get('/work-context/sync', (req, res) => {
-      res.json(verifySync(systemScopeFor(req)));
+      try { res.json(verifySync(systemScopeFor(req))); }
+      catch (e) { res.status(statusFor(e)).json({ error: e.message || 'No se pudo verificar el espejo de Tolkien.' }); }
     });
     // Re-sincronizar a mano (botón "Re-sincronizar" del panel): re-renderiza el
     // subset desde el master y lo escribe en CLAUDE.local.md.
     r.post('/work-context/sync', (req, res) => {
-      const scope = systemScopeFor(req);
-      const r2 = syncToTolkien(scope);
-      if (!r2.ok) return res.status(502).json({ error: `No se pudo sincronizar con Tolkien: ${r2.reason}` });
-      res.json({ ok: true, sync: verifySync(scope) });
+      try {
+        const scope = systemScopeFor(req);
+        const r2 = syncToTolkien(scope);
+        if (!r2.ok) return res.status(502).json({ error: `No se pudo sincronizar con Tolkien: ${r2.reason}` });
+        res.json({ ok: true, sync: verifySync(scope) });
+      } catch (e) {
+        res.status(statusFor(e)).json({ error: e.message || 'No se pudo sincronizar con Tolkien.' });
+      }
     });
 
     // ===== Contexto (CLAUDE.md) =====
@@ -176,14 +199,12 @@ export default {
       catch { res.status(500).json({ error: 'No se pudo leer el contexto.' }); }
     });
 
-    // `hash` es OPCIONAL en el body: si el cliente lo manda (el que abrió el
-    // archivo vía el GET de arriba), se rechaza con 409 si CLAUDE.md cambió
-    // en el medio (misma protección que el guardado por secciones, invariante
-    // #2 — ver comentario en memory.js:writeContext). Sin hash, guarda como
-    // siempre (compatibilidad con llamadores programáticos existentes).
+    // El hash del GET es obligatorio: el archivo también cambia desde Claude
+    // Code y nunca se debe guardar una copia vieja a ciegas.
     r.post('/:key/context', (req, res) => {
       const p = project(req, res); if (!p) return;
       if (!canWrite(req, p)) return res.status(403).json({ error: 'No autorizado para editar este proyecto.' });
+      if (!requireHash(req, res)) return;
       try {
         writeContext(p.dir, String(req.body?.content ?? ''), req.body?.hash);
         res.json({ ok: true });
@@ -292,13 +313,12 @@ export default {
       catch { res.status(500).json({ error: 'No se pudo leer el índice.' }); }
     });
 
-    // `hash` OPCIONAL en el body (mismo patrón que POST /:key/context): si el
-    // cliente lo manda (lo leyó del GET de arriba o de listMemory), se rechaza
-    // con 409 si MEMORY.md cambió en el medio — misma protección contra
-    // ediciones concurrentes de sesiones de Claude Code (ver memory.js:writeIndex).
+    // El hash leído del GET/listMemory es obligatorio para no pisar cambios de
+    // Claude Code ni de otra pestaña.
     r.post('/:key/memory/index', (req, res) => {
       const p = project(req, res); if (!p) return;
       if (!canWrite(req, p)) return res.status(403).json({ error: 'No autorizado para editar este proyecto.' });
+      if (!requireHash(req, res)) return;
       try {
         writeIndex(p.dir, String(req.body?.content ?? ''), req.body?.hash, p.userId);
         res.json({ ok: true });
@@ -315,12 +335,11 @@ export default {
       } catch (e) { res.status(e.badRequest ? 400 : 500).json({ error: e.message || 'No se pudo leer la nota.' }); }
     });
 
-    // `hash` OPCIONAL en el body, mismo patrón que el índice de arriba: detecta
-    // si la nota cambió entre que se abrió (GET de arriba) y se guardó (ver
-    // memory.js:writeNote).
+    // El hash del GET es obligatorio para detectar cambios concurrentes.
     r.post('/:key/memory/note/:file', (req, res) => {
       const p = project(req, res); if (!p) return;
       if (!canWrite(req, p)) return res.status(403).json({ error: 'No autorizado para editar este proyecto.' });
+      if (!requireHash(req, res)) return;
       try {
         writeNote(p.dir, req.params.file, String(req.body?.content ?? ''), req.body?.hash, p.userId);
         res.json({ ok: true });

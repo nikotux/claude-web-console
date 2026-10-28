@@ -1,16 +1,89 @@
 // Cliente de solo lectura al UDM Pro: usa la API Integration y la API interna
 // de Network con API key desde .env y TLS self-signed limitado a estas requests.
 import https from 'node:https';
+import tls from 'node:tls';
 import { config } from '../../core/config.js';
 
-const agent = new https.Agent({ rejectUnauthorized: false });
 const REQUEST_TIMEOUT_MS = 15000;
+const rawPinnedFingerprint = process.env.UNIFI_CERT_SHA256?.trim() || null;
+
+function markedError(message, mark, extra = {}) {
+  const err = new Error(message);
+  err[mark] = true;
+  Object.assign(err, extra);
+  return err;
+}
+
+function normalizeFingerprint(value) {
+  return String(value || '').replace(/:/g, '').toUpperCase();
+}
+
+const pinnedFingerprint = normalizeFingerprint(rawPinnedFingerprint);
+
+function checkServerIdentity(_hostname, cert) {
+  const actual = normalizeFingerprint(cert?.fingerprint256);
+  if (!actual || actual !== pinnedFingerprint) {
+    return markedError('La huella SHA-256 del certificado UniFi no coincide', 'upstream');
+  }
+  return undefined;
+}
+
+function createAgent() {
+  const agent = new https.Agent({
+    rejectUnauthorized: false,
+    ...(pinnedFingerprint ? { checkServerIdentity } : {}),
+  });
+  if (!pinnedFingerprint) {
+    return agent;
+  }
+
+  // El UDM usa certificado self-signed: la huella opcional reemplaza la CA
+  // como ancla de confianza y se valida antes de entregar el socket al request.
+  agent.createConnection = (options, callback) => {
+    const socket = tls.connect({ ...options, rejectUnauthorized: false });
+    let settled = false;
+
+    function finish(err) {
+      if (settled) return;
+      settled = true;
+      socket.removeListener('secureConnect', onSecureConnect);
+      socket.removeListener('error', onError);
+      if (err) {
+        socket.destroy();
+        callback(err);
+        return;
+      }
+      callback(null, socket);
+    }
+
+    function onSecureConnect() {
+      finish(checkServerIdentity(options.servername || options.host, socket.getPeerCertificate()));
+    }
+
+    function onError(err) {
+      finish(markedError(`Error TLS UniFi: ${err.message}`, 'upstream'));
+    }
+
+    socket.once('secureConnect', onSecureConnect);
+    socket.once('error', onError);
+  };
+
+  return agent;
+}
+
+const agent = createAgent();
 
 let cachedSiteId = null;
 
 function ensureConfigured() {
   if (!config.unifi?.host || !config.unifi?.apiKey) {
-    throw new Error('Puente UniFi no configurado: falta UNIFI_HOST/UNIFI_API_KEY en .env');
+    throw markedError(
+      'Puente UniFi no configurado: falta UNIFI_HOST/UNIFI_API_KEY en .env',
+      'notConfigured',
+    );
+  }
+  if (rawPinnedFingerprint && !/^[A-F0-9]{64}$/.test(pinnedFingerprint)) {
+    throw markedError('UNIFI_CERT_SHA256 no contiene una huella SHA-256 valida', 'notConfigured');
   }
 }
 
@@ -24,10 +97,14 @@ function segment(value) {
 
 function apiGet(pathStr) {
   ensureConfigured();
+  let url;
+  try {
+    url = new URL(pathStr, `https://${config.unifi.host}`);
+  } catch {
+    throw markedError('UNIFI_HOST no contiene un host valido', 'notConfigured');
+  }
 
   return new Promise((resolve, reject) => {
-    const url = new URL(pathStr, `https://${config.unifi.host}`);
-
     const req = https.request(
       url,
       {
@@ -48,25 +125,35 @@ function apiGet(pathStr) {
           const status = res.statusCode ?? 0;
 
           if (status < 200 || status >= 300) {
-            reject(new Error(`Error HTTP UniFi ${status} al consultar ${pathStr}`));
+            reject(markedError(
+              `Error HTTP UniFi ${status} al consultar ${pathStr}`,
+              'upstream',
+              { status },
+            ));
             return;
           }
 
           try {
             resolve(body ? JSON.parse(body) : null);
           } catch (err) {
-            reject(new Error(`Respuesta UniFi no es JSON valido en ${pathStr}: ${err.message}`));
+            reject(markedError(
+              `Respuesta UniFi no es JSON valido en ${pathStr}: ${err.message}`,
+              'upstream',
+            ));
           }
         });
       },
     );
 
     req.on('timeout', () => {
-      req.destroy(new Error(`Timeout UniFi tras ${REQUEST_TIMEOUT_MS / 1000}s al consultar ${pathStr}`));
+      req.destroy(markedError(
+        `Timeout UniFi tras ${REQUEST_TIMEOUT_MS / 1000}s al consultar ${pathStr}`,
+        'upstream',
+      ));
     });
 
     req.on('error', (err) => {
-      reject(new Error(`Error de red UniFi al consultar ${pathStr}: ${err.message}`));
+      reject(markedError(`Error de red UniFi al consultar ${pathStr}: ${err.message}`, 'upstream'));
     });
 
     req.end();
@@ -84,20 +171,50 @@ export async function resolveSiteId() {
   }
 
   const sites = await getSites();
-  const preferredSite = sites.find((site) => site?.internalReference === config.unifi?.site);
-  const selectedSite = preferredSite ?? sites[0];
+  const configuredSite = config.unifi?.site?.trim();
+  let selectedSite;
+
+  if (configuredSite) {
+    selectedSite = sites.find((site) => site?.internalReference === configuredSite);
+    if (!selectedSite) {
+      throw markedError(
+        `El site UniFi configurado '${configuredSite}' no existe en la API Integration`,
+        'notConfigured',
+      );
+    }
+  } else {
+    selectedSite = sites[0];
+    if (sites.length > 1) {
+      console.warn('[unifi] Hay varios sites y UNIFI_SITE no está definido; se usará el primero');
+    }
+  }
 
   if (!selectedSite?.id) {
-    throw new Error('No se pudo resolver el site UniFi: la API no devolvio sites con id');
+    throw markedError('No se pudo resolver el site UniFi: la API no devolvio sites con id', 'upstream');
   }
 
   cachedSiteId = selectedSite.id;
   return cachedSiteId;
 }
 
+async function integrationGet(pathForSite) {
+  let siteId = await resolveSiteId();
+  try {
+    return await apiGet(pathForSite(siteId));
+  } catch (err) {
+    if (err?.status !== 404) {
+      throw err;
+    }
+    cachedSiteId = null;
+    siteId = await resolveSiteId();
+    return apiGet(pathForSite(siteId));
+  }
+}
+
 export async function getDevices() {
-  const siteId = await resolveSiteId();
-  const payload = await apiGet(`/proxy/network/integration/v1/sites/${segment(siteId)}/devices`);
+  const payload = await integrationGet(
+    (siteId) => `/proxy/network/integration/v1/sites/${segment(siteId)}/devices`,
+  );
   return asArray(payload?.data);
 }
 
@@ -120,13 +237,12 @@ export async function getFixedClients() {
 }
 
 export async function getFirewallPolicies() {
-  const siteId = await resolveSiteId();
   const limit = 200;
   const policies = [];
 
   for (let offset = 0; ; offset += limit) {
-    const payload = await apiGet(
-      `/proxy/network/integration/v1/sites/${segment(siteId)}/firewall/policies?offset=${offset}&limit=${limit}`,
+    const payload = await integrationGet(
+      (siteId) => `/proxy/network/integration/v1/sites/${segment(siteId)}/firewall/policies?offset=${offset}&limit=${limit}`,
     );
     const page = asArray(payload?.data);
     policies.push(...page);
@@ -145,9 +261,8 @@ export async function getFirewallPolicies() {
 }
 
 export async function getGatewayStats(deviceId) {
-  const siteId = await resolveSiteId();
-  return apiGet(
-    `/proxy/network/integration/v1/sites/${segment(siteId)}/devices/${segment(deviceId)}/statistics/latest`,
+  return integrationGet(
+    (siteId) => `/proxy/network/integration/v1/sites/${segment(siteId)}/devices/${segment(deviceId)}/statistics/latest`,
   );
 }
 

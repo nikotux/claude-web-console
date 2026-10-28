@@ -21,7 +21,6 @@
 // fragmentos, con seq monotónica; el cliente pide ?since=<seq> (multi-ventana
 // safe, sin cursor por-cliente). Nada se persiste; un reinicio arranca de cero.
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { hostUser, userClaudeDir, userDataDir, userSpace } from '../../core/user-space.js';
 
@@ -261,9 +260,7 @@ async function loadCodexJobs(owner, state) {
 
   const byThread = new Map();
   const byWorktree = new Map();
-  const dir = owner === hostUser()
-    ? path.join(os.homedir(), '.cwc-data', 'codex-jobs')
-    : path.join(userDataDir(owner), 'codex-jobs');
+  const dir = path.join(userDataDir(owner), 'codex-jobs');
   for (const entry of await listDir(dir)) {
     if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
     try {

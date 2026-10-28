@@ -150,12 +150,15 @@ export default {
     r.post('/send', jsonBody(), (req, res) => {
       try {
         const { to, text, packageRef } = req.body || {};
-        if (!to || !text || !String(text).trim()) {
+        if (typeof to !== 'string' || typeof text !== 'string' || !to.trim() || !text.trim()) {
           return res.status(400).json({ error: 'Faltan destino o mensaje.' });
+        }
+        if (text.length > 4000) {
+          return res.status(400).json({ error: 'El mensaje no puede superar los 4000 caracteres.' });
         }
         const scope = systemScopeFor(req);
         const privileged = scope.admin || scope.isHost;
-        if (!privileged && BROADCAST_RE.test(String(to).trim())) {
+        if (!privileged && BROADCAST_RE.test(to.trim())) {
           return res.status(403).json({ error: 'El broadcast está disponible solo para admin/host. Elegí una de tus sesiones.' });
         }
         const ownedHandles = privileged ? null : ownedHandlesFor(scope);
@@ -172,7 +175,7 @@ export default {
         const from = `consola (${scope.user})`;
         const msg = bus.sendMessage({
           from: 'web:console', fromName: from,
-          to: target.handle, toName: target.name, text: String(text),
+          to: target.handle, toName: target.name, text,
           // PLAN-469 · 4a: pasar un paquete-sesión junto al mensaje (opcional).
           packageRef: /^PKG-\d+$/i.test(String(packageRef || '')) ? String(packageRef).toUpperCase() : null,
         });
@@ -191,7 +194,13 @@ export default {
         const privileged = scope.admin || scope.isHost;
         const CLAIM_404 = 'No hay un claim propio para ese archivo.';
         const { file, handle } = req.body || {};
-        const claim = file ? bus.getClaim(file) : null;
+        if (typeof file !== 'string' || !file || file.length > 512) {
+          return res.status(400).json({ error: 'El archivo debe ser un string de hasta 512 caracteres.' });
+        }
+        if (handle !== undefined && (typeof handle !== 'string' || !handle || handle.length > 512)) {
+          return res.status(400).json({ error: 'El handle debe ser un string de hasta 512 caracteres.' });
+        }
+        const claim = bus.getClaim(file);
         // Invariante 7: un no-admin no puede distinguir "no existe" de
         // "existe pero es ajeno"; mensajes distintos filtrarían actividad de
         // sesiones ajenas.

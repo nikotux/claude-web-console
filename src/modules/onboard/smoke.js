@@ -89,7 +89,10 @@ function withTimeout(work, timeoutMs, message) {
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(() => reject(new Error(message)), timeoutMs);
   });
-  return Promise.race([Promise.resolve().then(work), timeout])
+  const p = Promise.resolve().then(work);
+  // Evita unhandled rejection si el timeout gana y el trabajo falla después.
+  p.catch(() => {});
+  return Promise.race([p, timeout])
     .finally(() => clearTimeout(timer));
 }
 

@@ -30,8 +30,8 @@ export function templateDbName() {
   return process.env.CWC_TOLKIEN_TEMPLATE_DB?.trim() || 'tolkien_template';
 }
 
-export function templateDbUrl() {
-  return `postgresql://tolkien:${DEV_DB_PASSWORD}@localhost:${readTolkienDbPort()}/${templateDbName()}?schema=public`;
+export function templateDbUrl(dbName = templateDbName()) {
+  return `postgresql://tolkien:${DEV_DB_PASSWORD}@localhost:${readTolkienDbPort()}/${dbName}?schema=public`;
 }
 
 function quoteLiteral(value) {
@@ -40,6 +40,10 @@ function quoteLiteral(value) {
 
 function quoteIdentifier(value) {
   return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function quoteShell(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
 function ensureEnvDbName(dbName) {
@@ -83,6 +87,10 @@ export async function buildTemplate() {
   const steps = [];
   const t = templateDbName();
   const tIdent = quoteIdentifier(t);
+  const next = `${t}_new`;
+  const nextIdent = quoteIdentifier(next);
+  const previous = `${t}_old`;
+  const previousIdent = quoteIdentifier(previous);
   const wsId = readInfisicalWorkspaceId();
 
   // Igual que el refresh local: validar/compilar dist ANTES de tocar la DB
@@ -95,30 +103,53 @@ export async function buildTemplate() {
   steps.push({ step: 'chequeo Zoho', ok: zoho.ok, detail: zoho.detail });
   if (!zoho.ok) return { ok: false, steps, durationMs: Date.now() - started };
 
-  const existsStep = await runBuildStep(steps, 'detect template database', () =>
-    psqlAdmin(`SELECT 1 FROM pg_database WHERE datname=${quoteLiteral(t)};`));
-  if (!existsStep.ok) return { ok: false, steps, durationMs: Date.now() - started };
+  const detect = async (name, label) => {
+    const found = await runBuildStep(steps, label, () =>
+      psqlAdmin(`SELECT 1 FROM pg_database WHERE datname=${quoteLiteral(name)};`));
+    return { ok: found.ok, exists: /\b1\b/.test(found.res?.stdout || '') };
+  };
 
-  const exists = /\b1\b/.test(existsStep.res?.stdout || '');
-  if (exists) {
-    const unseal = await runBuildStep(steps, 'unseal existing template database', () =>
-      psqlAdmin(`ALTER DATABASE ${tIdent} WITH IS_TEMPLATE false ALLOW_CONNECTIONS true;`));
-    if (!unseal.ok) return { ok: false, steps, durationMs: Date.now() - started };
+  let current = await detect(t, 'detect template database');
+  if (!current.ok) return { ok: false, steps, durationMs: Date.now() - started };
+  const backup = await detect(previous, 'detect previous template backup');
+  if (!backup.ok) return { ok: false, steps, durationMs: Date.now() - started };
 
-    const drop = await runBuildStep(steps, 'drop existing template database', () =>
-      psqlAdmin(`DROP DATABASE ${tIdent};`));
-    if (!drop.ok) return { ok: false, steps, durationMs: Date.now() - started };
+  // Recuperación de un swap interrumpido entre ambos rename: la plantilla vieja
+  // sigue intacta bajo *_old y vuelve a su nombre contractual antes de construir.
+  if (!current.exists && backup.exists) {
+    const restore = await runBuildStep(steps, 'restore previous template database', () =>
+      psqlAdmin(`ALTER DATABASE ${previousIdent} RENAME TO ${tIdent};`));
+    if (!restore.ok) return { ok: false, steps, durationMs: Date.now() - started };
+    current = { ok: true, exists: true };
+  } else if (current.exists && backup.exists) {
+    const unsealBackup = await runBuildStep(steps, 'unseal stale template backup', () =>
+      psqlAdmin(`ALTER DATABASE ${previousIdent} WITH IS_TEMPLATE false ALLOW_CONNECTIONS true;`));
+    if (!unsealBackup.ok) return { ok: false, steps, durationMs: Date.now() - started };
+    const dropBackup = await runBuildStep(steps, 'drop stale template backup', () =>
+      psqlAdmin(`DROP DATABASE ${previousIdent};`));
+    if (!dropBackup.ok) return { ok: false, steps, durationMs: Date.now() - started };
   }
 
-  const create = await runBuildStep(steps, 'create template database', () =>
-    psqlAdmin(`CREATE DATABASE ${tIdent} OWNER tolkien;`));
+  const staleNext = await detect(next, 'detect temporary template database');
+  if (!staleNext.ok) return { ok: false, steps, durationMs: Date.now() - started };
+  if (staleNext.exists) {
+    const unsealNext = await runBuildStep(steps, 'unseal temporary template database', () =>
+      psqlAdmin(`ALTER DATABASE ${nextIdent} WITH IS_TEMPLATE false ALLOW_CONNECTIONS true;`));
+    if (!unsealNext.ok) return { ok: false, steps, durationMs: Date.now() - started };
+    const dropNext = await runBuildStep(steps, 'drop temporary template database', () =>
+      psqlAdmin(`DROP DATABASE ${nextIdent};`));
+    if (!dropNext.ok) return { ok: false, steps, durationMs: Date.now() - started };
+  }
+
+  const create = await runBuildStep(steps, 'create temporary template database', () =>
+    psqlAdmin(`CREATE DATABASE ${nextIdent} OWNER tolkien;`));
   if (!create.ok) return { ok: false, steps, durationMs: Date.now() - started };
 
-  const url = templateDbUrl();
+  const url = templateDbUrl(next);
   const migrate = await runBuildStep(steps, 'migrate template database', () =>
     runCmd('infisical', [
       'run', '--projectId', wsId, '--env', 'prod', '--silent', '--', 'bash', '-c',
-      `export DATABASE_URL='${url}'; cd "$HOME/tolkien"; pnpm --filter @tolkien/db exec prisma migrate deploy`,
+      `export DATABASE_URL=${quoteShell(url)}; cd ${quoteShell(config.projectDir)}; pnpm --filter @tolkien/db exec prisma migrate deploy`,
     ], { timeout: 180000 }));
   if (!migrate.ok) return { ok: false, steps, durationMs: Date.now() - started };
 
@@ -143,13 +174,53 @@ export async function buildTemplate() {
   if (!steps.every((s) => s.ok)) return { ok: false, steps, durationMs: Date.now() - started };
 
   await runBuildStep(steps, 'seed local users (dev-login)', async () => {
-    const result = await ensureLocalUsers(t);
+    const result = await ensureLocalUsers(next);
     if (!result.ok) throw new Error(result.detail);
     return { code: 0, stdout: `upserted=${result.upserted}`, stderr: '' };
   });
+  if (!steps.at(-1)?.ok) return { ok: false, steps, durationMs: Date.now() - started };
 
   await runBuildStep(steps, 'seal template database', () =>
-    psqlAdmin(`ALTER DATABASE ${tIdent} WITH IS_TEMPLATE true ALLOW_CONNECTIONS false;`));
+    psqlAdmin(`ALTER DATABASE ${nextIdent} WITH IS_TEMPLATE true ALLOW_CONNECTIONS false;`));
+  if (!steps.at(-1)?.ok) return { ok: false, steps, durationMs: Date.now() - started };
+
+  // PostgreSQL no ofrece rename atómico de dos bases. La anterior se conserva
+  // como *_old hasta que la nueva toma el nombre contractual; si el segundo
+  // rename falla se restaura inmediatamente. No se terminan sesiones: una
+  // conexión inesperada hace fallar el swap y deja la plantilla vieja intacta.
+  if (current.exists) {
+    const park = await runBuildStep(steps, 'park previous template database', () =>
+      psqlAdmin(`ALTER DATABASE ${tIdent} RENAME TO ${previousIdent};`));
+    if (!park.ok) return { ok: false, steps, durationMs: Date.now() - started };
+  }
+  const install = await runBuildStep(steps, 'install new template database', () =>
+    psqlAdmin(`ALTER DATABASE ${nextIdent} RENAME TO ${tIdent};`));
+  if (!install.ok) {
+    if (current.exists) {
+      await runBuildStep(steps, 'restore previous template after failed swap', () =>
+        psqlAdmin(`ALTER DATABASE ${previousIdent} RENAME TO ${tIdent};`));
+    }
+    return { ok: false, steps, durationMs: Date.now() - started };
+  }
+
+  if (current.exists) {
+    try {
+      const unseal = await psqlAdmin(`ALTER DATABASE ${previousIdent} WITH IS_TEMPLATE false ALLOW_CONNECTIONS true;`);
+      const drop = unseal.code === 0 ? await psqlAdmin(`DROP DATABASE ${previousIdent};`) : unseal;
+      const cleaned = unseal.code === 0 && drop.code === 0;
+      steps.push({
+        step: 'cleanup previous template backup',
+        ok: true,
+        detail: cleaned ? 'respaldo anterior eliminado' : `plantilla nueva activa; respaldo conservado: ${summarizeCommand(drop) || 'cleanup falló'}`,
+      });
+    } catch (err) {
+      steps.push({
+        step: 'cleanup previous template backup',
+        ok: true,
+        detail: `plantilla nueva activa; respaldo conservado: ${String(err?.message || err).slice(0, 220)}`,
+      });
+    }
+  }
 
   return {
     ok: steps.every((s) => s.ok),

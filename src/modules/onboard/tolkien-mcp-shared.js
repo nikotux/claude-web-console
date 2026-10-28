@@ -22,6 +22,12 @@ import { markProvisionStep } from './provision-state.js';
 const TIMEOUT_MS = 60_000;
 const MAX_BUFFER = 4 * 1024 * 1024;
 
+function infisicalEnv() {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.startsWith('INFISICAL_')),
+  );
+}
+
 function redact(s) {
   return String(s || '')
     .replace(/mcp_[A-Za-z0-9_-]+/g, 'mcp_****')
@@ -123,7 +129,7 @@ async function provisionTolkienMcpResult(userId, { force = false } = {}) {
       const projectId = config.instance.client.infisicalProjectId;
       if (!projectId) return { ok: false, error: 'Falta infisicalProjectId en la configuración de instancia.' };
 
-      const mintScript = `curl -s -X POST "$TOLKIEN_API_BASE/internal/mcp/tokens" -H "X-Tolkien-API-Key: $TOLKIEN_INTERNAL_API_KEY" -H "Content-Type: application/json" -d '{"label":"${id}-console","actor":"${id}"}'`;
+      const mintScript = `printf 'X-Tolkien-API-Key: %s\\n' "$TOLKIEN_INTERNAL_API_KEY" | curl -s -X POST "$TOLKIEN_API_BASE/internal/mcp/tokens" -H @- -H "Content-Type: application/json" -d '{"label":"${id}-console","actor":"${id}"}'`;
       const minted = await runFile('infisical', [
         'run',
         '--projectId', projectId,
@@ -132,7 +138,8 @@ async function provisionTolkienMcpResult(userId, { force = false } = {}) {
         'sh', '-c', mintScript,
       ], {
         cwd: config.projectDir || config.home,
-        env: { ...process.env, HOME: config.home },
+        // Invariante 8: nunca heredar el entorno completo al proceso de mint.
+        env: { ...userRunnerEnv(hostUser()), ...infisicalEnv() },
       });
       if (minted.error) {
         return {
@@ -156,6 +163,8 @@ async function provisionTolkienMcpResult(userId, { force = false } = {}) {
     fs.writeFileSync(tokenPath, token, { mode: 0o600 });
     fs.chmodSync(tokenPath, 0o600);
 
+    // Riesgo residual aceptado: el CLI no admite stdin/archivo para el header;
+    // dura <1 s, corre como el mismo usuario de SO y usa el token del inquilino.
     const registered = await runFile('claude', [
       'mcp',
       'add',
@@ -186,6 +195,7 @@ async function provisionTolkienMcpResult(userId, { force = false } = {}) {
 
 export async function provisionTolkienMcp(userId, options = {}) {
   const result = await provisionTolkienMcpResult(userId, options);
+  if (result.skipped && result.reason === 'host') return result;
   markProvisionStep(
     userId,
     'tolkien-mcp',

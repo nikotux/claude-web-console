@@ -14,10 +14,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
-import { resolveDataDir } from '../../core/data-dir.js';
-import {
-  hostUser, readUserOauthToken, userDataDir, userRunnerEnv,
-} from '../../core/user-space.js';
+import { retroDataDirFor, retroRunnerEnvFor } from './owner-dirs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..');
@@ -27,22 +24,11 @@ export const TEAMS_FB_TIMEOUT_MS = 5 * 60 * 1000;
 export const TEAMS_FB_HEARTBEAT_MS = 3000;
 export const TEAMS_FB_LOCK_FRESH_MS = 20000;
 
-function dataDirFor(owner = null) { return owner ? userDataDir(owner) : resolveDataDir(); }
+function dataDirFor(owner = null) { return retroDataDirFor(owner); }
 function scanFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-teams-scan.json'); }
 function lockFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-teams.lock'); }
 function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-teams.log'); }
 function ensureDir(owner = null) { try { fss.mkdirSync(dataDirFor(owner), { recursive: true, mode: 0o700 }); } catch { /* noop */ } }
-function runnerEnvFor(owner) {
-  if (!owner || owner === hostUser()) return process.env;
-  const oauthToken = readUserOauthToken(owner);
-  if (!oauthToken) {
-    const error = new Error('Necesitás conectar tu cuenta de Claude para traer feedback de Teams.');
-    error.conflict = true;
-    throw error;
-  }
-  return userRunnerEnv(owner, { oauthToken });
-}
-
 export function readTeamsFeedbackScan(owner = null) {
   try { return JSON.parse(fss.readFileSync(scanFileFor(owner), 'utf8')); } catch { return { items: [], lastProcessedAt: null, scannedAt: 0, error: null }; }
 }
@@ -69,7 +55,8 @@ export function spawnRetroTeamsRunner(owner) {
   const logFile = logFileFor(owner);
   const logFd = fss.openSync(logFile, 'a');
   const child = spawn(process.execPath, [RUNNER], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: runnerEnvFor(owner),
+    detached: true, stdio: ['ignore', logFd, logFd],
+    env: retroRunnerEnvFor(owner, { missingOauthMessage: 'Necesitás conectar tu cuenta de Claude para traer feedback de Teams.' }),
   });
   writeTeamsFbLock({ pid: child.pid }, owner);
   child.on('error', (err) => {

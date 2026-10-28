@@ -15,13 +15,27 @@ function redact(s) {
     .replace(/sk-[A-Za-z0-9_-]+/g, 'sk-****');
 }
 
-export async function provisionTolkienBestEffort(user) {
-  try {
-    const result = await provisionTolkienMcp(user);
-    if (!result.ok) console.error('[onboard] provisioning de Tolkien MCP best-effort falló:', redact(result.error || result.reason));
-  } catch (e) {
-    console.error('[onboard] provisioning de Tolkien MCP best-effort excepción:', redact(e?.message || e));
-  }
+const tolkienInflight = new Map();
+
+export function provisionTolkienBestEffort(user) {
+  const inflight = tolkienInflight.get(user);
+  if (inflight) return inflight;
+
+  // /finish y el paso workspace podían acuñar dos tokens en paralelo. Un paso
+  // ya ok no re-acuña porque provisionTolkienMcpResult corta por isRegistered.
+  let promise;
+  promise = (async () => {
+    try {
+      const result = await provisionTolkienMcp(user);
+      if (!result.ok) console.error('[onboard] provisioning de Tolkien MCP best-effort falló:', redact(result.error || result.reason));
+    } catch (e) {
+      console.error('[onboard] provisioning de Tolkien MCP best-effort excepción:', redact(e?.message || e));
+    }
+  })().finally(() => {
+    if (tolkienInflight.get(user) === promise) tolkienInflight.delete(user);
+  });
+  tolkienInflight.set(user, promise);
+  return promise;
 }
 
 export function provisionNewUser(username) {

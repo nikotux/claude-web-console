@@ -70,7 +70,13 @@ export const PRIORITIES = ['alta', 'media', 'baja'];
 export const SCOPES = ['console', 'tolkien'];
 export const ROUTE_STATUSES = ['activa', 'propuesta', 'completada', 'archivada'];
 const MAX_ACTIVITY = 300;
+const ACTIVITY_LOCK_TIMEOUT_MS = 2000;
+const ACTIVITY_LOCK_STALE_MS = 30000;
+const ACTIVITY_LOCK_RETRY_MS = 25;
+const activityLockWait = new Int32Array(new SharedArrayBuffer(4));
 const ROUTE_ID_RE = /^RDA-\d+$/;
+const TOPIC_ID_RE = /^TDA-\d+$/;
+const topicMutationQueues = new Map();
 
 function ownerFor(ctx = null, owner = null) {
   if (owner) return owner;
@@ -123,10 +129,33 @@ function padError(action, r) {
   e.padError = true;
   return e;
 }
+function notFound(entityLabel) {
+  const e = new Error(`${entityLabel} inexistente.`);
+  e.notFound = true;
+  return e;
+}
+function badInput(message) {
+  const e = new Error(message);
+  e.badInput = true;
+  return e;
+}
+function requireId(id, re, entityLabel) {
+  if (!re.test(String(id))) throw notFound(entityLabel);
+}
+async function serializeTopicMutation(id, task) {
+  const previous = topicMutationQueues.get(id) || Promise.resolve();
+  const current = previous.catch(() => {}).then(task);
+  topicMutationQueues.set(id, current);
+  try {
+    return await current;
+  } finally {
+    if (topicMutationQueues.get(id) === current) topicMutationQueues.delete(id);
+  }
+}
 // notFound se marca SOLO ante un 404 real de Pad — cualquier otro fallo (Pad
 // caído, timeout, token vencido) es un 500 genérico, nunca un 404 engañoso.
 function notFoundOr500(action, entityLabel, r) {
-  if (r.status === 404) { const e = new Error(`${entityLabel} inexistente.`); e.notFound = true; return e; }
+  if (r.status === 404) return notFound(entityLabel);
   return padError(action, r);
 }
 
@@ -173,11 +202,11 @@ function routeFromPadItem(item) {
 // derivar topicCount/doneCount/pct.
 async function topicsForProgress(ctx = null) {
   const r = await listItems(TOPICS_COLLECTION, { ctx });
-  if (!r.ok) return [];
+  if (!r.ok) throw padError('topicsForProgress', r);
   return r.data.map(topicFromPadItem);
 }
 
-// ===== LOG DE ACTIVIDAD (SIN CAMBIOS: append-only local, con poda) =====
+// ===== LOG DE ACTIVIDAD (append-only local, con poda y lock entre procesos) =====
 function loadActivity(ctx = null, owner = null) {
   try {
     const raw = JSON.parse(fs.readFileSync(learningActivityFileFor(ownerFor(ctx, owner)), 'utf8'));
@@ -188,14 +217,74 @@ function saveActivity(events, ctx = null, owner = null) {
   ensureDir(ctx, owner);
   writeJsonAtomic(learningActivityFileFor(ownerFor(ctx, owner)), { events }); // atómico tmp-por-PID (fix B3 2026-07-11)
 }
+function acquireActivityLock(file) {
+  const lockFile = `${file}.lock`;
+  const deadline = Date.now() + ACTIVITY_LOCK_TIMEOUT_MS;
+  while (true) {
+    try {
+      const fd = fs.openSync(lockFile, 'wx', 0o600);
+      return { fd, lockFile };
+    } catch (err) {
+      if (err?.code !== 'EEXIST') return null;
+    }
+
+    // Un proceso muerto puede dejar el vecino bloqueado: pasados 30 s se
+    // considera rancio y se retira antes del siguiente intento.
+    try {
+      const stat = fs.statSync(lockFile);
+      if ((Date.now() - stat.mtimeMs) > ACTIVITY_LOCK_STALE_MS) {
+        fs.unlinkSync(lockFile);
+        continue;
+      }
+    } catch (err) {
+      if (err?.code === 'ENOENT') continue;
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return null;
+    Atomics.wait(activityLockWait, 0, 0, Math.min(ACTIVITY_LOCK_RETRY_MS, remaining));
+  }
+}
+function releaseActivityLock(lock) {
+  let owned = null;
+  try {
+    owned = fs.fstatSync(lock.fd);
+  } catch {}
+  try {
+    // No borrar un lock nuevo si el nuestro fue reemplazado por considerarse
+    // rancio mientras este proceso estuvo suspendido.
+    const stat = fs.statSync(lock.lockFile);
+    if (owned && stat.dev === owned.dev && stat.ino === owned.ino) fs.unlinkSync(lock.lockFile);
+  } catch {}
+  try {
+    fs.closeSync(lock.fd);
+  } catch {}
+}
 let actCounter = 0;
 function appendActivity(ev, ctx = null, owner = null) {
-  const events = loadActivity(ctx, owner);
+  ensureDir(ctx, owner);
+  const file = learningActivityFileFor(ownerFor(ctx, owner));
   actCounter += 1;
   // pid en el id (BUG-29): actCounter es por-proceso; server + runner en el mismo
   // ms generaban el mismo id. El pid lo hace único entre procesos.
-  events.push({ id: `A${Date.now()}-${process.pid.toString(36)}-${actCounter}`, ts: Date.now(), ...ev });
-  saveActivity(events.slice(-MAX_ACTIVITY), ctx, owner);
+  const event = { id: `A${Date.now()}-${process.pid.toString(36)}-${actCounter}`, ts: Date.now(), ...ev };
+  const persist = () => {
+    const events = loadActivity(ctx, owner);
+    events.push(event);
+    saveActivity(events.slice(-MAX_ACTIVITY), ctx, owner);
+  };
+  const lock = acquireActivityLock(file);
+  if (!lock) {
+    // El log nunca debe romper al caller: tras agotar el lock se intenta una
+    // escritura final sin bloqueo, aceptando que siga siendo best-effort.
+    try { persist(); } catch {}
+    return;
+  }
+  try {
+    persist();
+  } finally {
+    releaseActivityLock(lock);
+  }
 }
 export function listActivity(limit = 40, owner = hostUser()) {
   return loadActivity(null, owner).slice(-limit).reverse();
@@ -233,6 +322,7 @@ export async function createRoute(input = {}, ctx = null) {
 }
 
 export async function updateRoute(id, patch = {}, ctx = null) {
+  requireId(id, ROUTE_ID_RE, 'Ruta');
   const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('updateRoute', 'Ruta', cur);
   const f = parseFields(cur.data);
@@ -252,12 +342,13 @@ export async function updateRoute(id, patch = {}, ctx = null) {
   if (!r.ok) throw padError('updateRoute', r);
 
   const fresh = await getItem(id, { ctx });
-  appendActivity({ kind: statusChanged ? 'status' : 'updated', entity: 'route', refId: id, title: fresh.data?.title, detail: statusChanged || null }, ctx);
+  appendActivity({ kind: statusChanged ? 'status' : 'updated', entity: 'route', refId: id, title: fresh.data?.title ?? cur.data.title, detail: statusChanged || null }, ctx);
   const route = routeFromPadItem(fresh.ok ? fresh.data : cur.data);
   return routesWithProgress([route], await topicsForProgress(ctx))[0];
 }
 
 export async function deleteRoute(id, ctx = null) {
+  requireId(id, ROUTE_ID_RE, 'Ruta');
   const cur = await getItem(id, { ctx });
   if (!cur.ok) throw notFoundOr500('deleteRoute', 'Ruta', cur);
   const removed = routeFromPadItem(cur.data);
@@ -295,12 +386,18 @@ export async function listTopics(ctx = null) {
 
 export async function getTopic(id, ctx = null) {
   const r = await getItem(id, { ctx });
-  if (!r.ok) return null;
+  if (!r.ok) {
+    const error = notFoundOr500('getTopic', 'Tema', r);
+    if (error.notFound) return null;
+    throw error;
+  }
   return topicFromPadItem(r.data);
 }
 
 export async function createTopic(input = {}, ctx = null) {
   const title = clampStr(input.title, 200).trim() || 'Tema sin título';
+  const routeCandidate = clampStr(input.routeId, 20).trim();
+  if (routeCandidate && !ROUTE_ID_RE.test(routeCandidate)) throw badInput('Ruta inválida.');
   const fields = {
     area: clampStr(input.area, 80),
     scope: normScope(input.scope),
@@ -320,8 +417,10 @@ export async function createTopic(input = {}, ctx = null) {
   if (!r.ok) throw padError('createTopic', r);
   const ref = r.data.ref;
 
-  const routeCandidate = clampStr(input.routeId, 20).trim();
-  if (routeCandidate && ROUTE_ID_RE.test(routeCandidate)) await setParent(ref, routeCandidate, { ctx });
+  if (routeCandidate) {
+    const parentR = await setParent(ref, routeCandidate, { ctx });
+    if (!parentR.ok) throw padError('createTopic:setParent', parentR);
+  }
 
   appendActivity({ kind: 'created', refId: ref, title }, ctx);
   const fresh = await getItem(ref, { ctx });
@@ -329,47 +428,53 @@ export async function createTopic(input = {}, ctx = null) {
 }
 
 export async function updateTopic(id, patch = {}, ctx = null) {
-  const cur = await getItem(id, { ctx });
-  if (!cur.ok) throw notFoundOr500('updateTopic', 'Tema', cur);
-  const f = parseFields(cur.data);
-  const body = {};
-  if (patch.title != null) body.title = clampStr(patch.title, 200).trim() || cur.data.title;
-  if (patch.notes != null) body.content = clampStr(patch.notes, 8000);
-  if (patch.tags != null) body.tags = normTags(patch.tags);
+  requireId(id, TOPIC_ID_RE, 'Tema');
+  const routeCandidate = patch.routeId == null ? '' : clampStr(patch.routeId, 20).trim();
+  if (routeCandidate && !ROUTE_ID_RE.test(routeCandidate)) throw badInput('Ruta inválida.');
+  return serializeTopicMutation(id, async () => {
+    const cur = await getItem(id, { ctx });
+    if (!cur.ok) throw notFoundOr500('updateTopic', 'Tema', cur);
+    const f = parseFields(cur.data);
+    const body = {};
+    if (patch.title != null) body.title = clampStr(patch.title, 200).trim() || cur.data.title;
+    if (patch.notes != null) body.content = clampStr(patch.notes, 8000);
+    if (patch.tags != null) body.tags = normTags(patch.tags);
 
-  const nextFields = { ...f };
-  if (patch.area != null) nextFields.area = clampStr(patch.area, 80);
-  if (patch.scope != null) nextFields.scope = normScope(patch.scope);
-  if (patch.priority != null) nextFields.priority = normPriority(patch.priority);
-  if (patch.question != null) nextFields.question = clampStr(patch.question, 1000);
-  // Permite editar/borrar a mano la explicación guardada (material de estudio);
-  // preserva el resto de la metadata empaquetada (model/at/fingerprint/files/versions).
-  if (patch.explanation != null) {
-    const exp = parseJsonField(f.explanation, {});
-    nextFields.explanation = { ...exp, text: clampStr(patch.explanation, 40000) };
-  }
-  let statusChanged = null;
-  if (patch.status != null) {
-    const next = normStatus(patch.status);
-    if (next !== normStatus(f.status)) { statusChanged = next; nextFields.status = next; }
-  }
-  body.fields = nextFields; // SIEMPRE el objeto completo (PATCH de fields reemplaza, no mergea)
-
-  const r = await updateItem(id, body, { ctx });
-  if (!r.ok) throw padError('updateTopic', r);
-
-  if (patch.routeId !== undefined) {
-    if (patch.routeId) {
-      const rid = clampStr(patch.routeId, 20).trim();
-      if (ROUTE_ID_RE.test(rid)) await setParent(id, rid, { ctx });
-    } else if (cur.data.parent_link_id) {
-      await deleteLink(cur.data.parent_link_id, { ctx });
+    const nextFields = { ...f };
+    if (patch.area != null) nextFields.area = clampStr(patch.area, 80);
+    if (patch.scope != null) nextFields.scope = normScope(patch.scope);
+    if (patch.priority != null) nextFields.priority = normPriority(patch.priority);
+    if (patch.question != null) nextFields.question = clampStr(patch.question, 1000);
+    // Permite editar/borrar a mano la explicación guardada (material de estudio);
+    // preserva el resto de la metadata empaquetada (model/at/fingerprint/files/versions).
+    if (patch.explanation != null) {
+      const exp = parseJsonField(f.explanation, {});
+      nextFields.explanation = { ...exp, text: clampStr(patch.explanation, 40000) };
     }
-  }
+    let statusChanged = null;
+    if (patch.status != null) {
+      const next = normStatus(patch.status);
+      if (next !== normStatus(f.status)) { statusChanged = next; nextFields.status = next; }
+    }
+    body.fields = nextFields; // SIEMPRE el objeto completo (PATCH de fields reemplaza, no mergea)
 
-  const fresh = await getItem(id, { ctx });
-  appendActivity({ kind: statusChanged ? 'status' : 'updated', refId: id, title: fresh.data?.title, detail: statusChanged || null }, ctx);
-  return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
+    const r = await updateItem(id, body, { ctx });
+    if (!r.ok) throw padError('updateTopic', r);
+
+    if (patch.routeId !== undefined) {
+      if (routeCandidate) {
+        const parentR = await setParent(id, routeCandidate, { ctx });
+        if (!parentR.ok) throw padError('updateTopic:setParent', parentR);
+      } else if (cur.data.parent_link_id) {
+        const unlinkR = await deleteLink(cur.data.parent_link_id, { ctx });
+        if (!unlinkR.ok) throw padError('updateTopic:deleteLink', unlinkR);
+      }
+    }
+
+    const fresh = await getItem(id, { ctx });
+    appendActivity({ kind: statusChanged ? 'status' : 'updated', refId: id, title: fresh.data?.title ?? cur.data.title, detail: statusChanged || null }, ctx);
+    return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
+  });
 }
 
 // AUTO-GUARDA la explicación guiada generada por el runner IA en el tema.
@@ -382,31 +487,34 @@ export async function updateTopic(id, patch = {}, ctx = null) {
 const MAX_EXPLAIN_VERSIONS = 5;
 const MAX_EXPLAIN_FILES = 40;
 export async function saveExplanation(id, { explanation, model, scope, fingerprint, files } = {}, ctx = null) {
-  const cur = await getItem(id, { ctx });
-  if (!cur.ok) throw notFoundOr500('saveExplanation', 'Tema', cur);
-  const f = parseFields(cur.data);
-  const exp = parseJsonField(f.explanation, {});
-  const nextExp = { ...exp };
-  if (exp.text) {
-    const prevVersions = Array.isArray(exp.versions) ? exp.versions : [];
-    nextExp.versions = [
-      { explanation: exp.text, model: exp.model || '', at: exp.at || null },
-      ...prevVersions,
-    ].slice(0, MAX_EXPLAIN_VERSIONS);
-  }
-  nextExp.text = clampStr(explanation, 40000);
-  nextExp.model = clampStr(model, 40);
-  nextExp.fingerprint = clampStr(fingerprint, 64);
-  nextExp.files = Array.isArray(files) ? files.slice(0, MAX_EXPLAIN_FILES) : [];
-  nextExp.at = Date.now();
+  requireId(id, TOPIC_ID_RE, 'Tema');
+  return serializeTopicMutation(id, async () => {
+    const cur = await getItem(id, { ctx });
+    if (!cur.ok) throw notFoundOr500('saveExplanation', 'Tema', cur);
+    const f = parseFields(cur.data);
+    const exp = parseJsonField(f.explanation, {});
+    const nextExp = { ...exp };
+    if (exp.text) {
+      const prevVersions = Array.isArray(exp.versions) ? exp.versions : [];
+      nextExp.versions = [
+        { explanation: exp.text, model: exp.model || '', at: exp.at || null },
+        ...prevVersions,
+      ].slice(0, MAX_EXPLAIN_VERSIONS);
+    }
+    nextExp.text = clampStr(explanation, 40000);
+    nextExp.model = clampStr(model, 40);
+    nextExp.fingerprint = clampStr(fingerprint, 64);
+    nextExp.files = Array.isArray(files) ? files.slice(0, MAX_EXPLAIN_FILES) : [];
+    nextExp.at = Date.now();
 
-  const nextFields = { ...f, explanation: nextExp };
-  if (scope) nextFields.scope = normScope(scope);
-  const r = await updateItem(id, { fields: nextFields }, { ctx });
-  if (!r.ok) throw padError('saveExplanation', r);
-  appendActivity({ kind: 'explained', refId: id, title: cur.data.title, detail: nextExp.model || null }, ctx);
-  const fresh = await getItem(id, { ctx });
-  return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
+    const nextFields = { ...f, explanation: nextExp };
+    if (scope) nextFields.scope = normScope(scope);
+    const r = await updateItem(id, { fields: nextFields }, { ctx });
+    if (!r.ok) throw padError('saveExplanation', r);
+    appendActivity({ kind: 'explained', refId: id, title: cur.data.title, detail: nextExp.model || null }, ctx);
+    const fresh = await getItem(id, { ctx });
+    return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
+  });
 }
 
 // ===== Contexto adicional (LISTA de entradas: charlas IA + notas manuales) =====
@@ -421,7 +529,10 @@ const CONTEXT_SOURCES = ['ia', 'manual', 'chat'];
 export function contextoText(topic) {
   const list = (topic && Array.isArray(topic.contextoEntradas)) ? topic.contextoEntradas : [];
   if (!list.length) return '';
-  return list.map((e) => `[${e.source === 'ia' ? 'charla interpretada por IA' : 'nota manual'}]\n${e.text}`).join('\n\n');
+  return list.map((e) => {
+    const source = e.source === 'ia' ? 'charla interpretada por IA' : (e.source === 'chat' ? 'resumen de chat' : 'nota manual');
+    return `[${source}]\n${e.text}`;
+  }).join('\n\n');
 }
 
 // id de entrada: timestamp + contador de proceso (no hace falta más rigor que
@@ -432,20 +543,24 @@ let cxCounter = 0;
 // 'manual' (nota escrita a mano) o 'chat' (resumen de un chat "Profundizar"
 // al cerrarlo). Las más nuevas van primero; cap 30.
 export async function addContexto(id, { text, source } = {}, ctx = null) {
+  requireId(id, TOPIC_ID_RE, 'Tema');
   const clean = clampStr(text, CONTEXT_ENTRY_MAX).trim();
   if (!clean) { const e = new Error('La entrada de contexto está vacía.'); e.badInput = true; throw e; }
-  const cur = await getItem(id, { ctx });
-  if (!cur.ok) throw notFoundOr500('addContexto', 'Tema', cur);
-  const f = parseFields(cur.data);
-  const list = parseJsonField(f.contextoEntradas, []);
-  cxCounter += 1;
-  const entry = { id: `CX${Date.now()}-${process.pid.toString(36)}-${cxCounter}`, at: Date.now(), source: CONTEXT_SOURCES.includes(source) ? source : 'manual', text: clean };
-  const nextList = [entry, ...list].slice(0, MAX_CONTEXT_ENTRIES);
-  const r = await updateItem(id, { fields: { ...f, contextoEntradas: nextList } }, { ctx });
-  if (!r.ok) throw padError('addContexto', r);
-  appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: entry.source }, ctx);
-  const fresh = await getItem(id, { ctx });
-  return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
+  return serializeTopicMutation(id, async () => {
+    const cur = await getItem(id, { ctx });
+    if (!cur.ok) throw notFoundOr500('addContexto', 'Tema', cur);
+    const f = parseFields(cur.data);
+    const parsed = parseJsonField(f.contextoEntradas, []);
+    const list = Array.isArray(parsed) ? parsed : [];
+    cxCounter += 1;
+    const entry = { id: `CX${Date.now()}-${process.pid.toString(36)}-${cxCounter}`, at: Date.now(), source: CONTEXT_SOURCES.includes(source) ? source : 'manual', text: clean };
+    const nextList = [entry, ...list].slice(0, MAX_CONTEXT_ENTRIES);
+    const r = await updateItem(id, { fields: { ...f, contextoEntradas: nextList } }, { ctx });
+    if (!r.ok) throw padError('addContexto', r);
+    appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: entry.source }, ctx);
+    const fresh = await getItem(id, { ctx });
+    return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
+  });
 }
 
 // AUTO write-back del "💬 Profundizar en chat": al cerrar el chat, el módulo
@@ -454,6 +569,7 @@ export async function addContexto(id, { text, source } = {}, ctx = null) {
 // Best-effort: devuelve null si no hay nada útil o si Pad falla (no debe
 // romper el cierre del chat).
 export async function appendChatContext(id, { summary, files } = {}, ctx = null) {
+  requireId(id, TOPIC_ID_RE, 'Tema');
   const parts = [];
   if (summary && String(summary).trim()) parts.push(String(summary).trim());
   if (Array.isArray(files) && files.length) parts.push(`Archivos tocados: ${files.slice(0, 20).join(', ')}`);
@@ -464,44 +580,52 @@ export async function appendChatContext(id, { summary, files } = {}, ctx = null)
 }
 
 export async function updateContextoEntry(id, entryId, text, ctx = null) {
+  requireId(id, TOPIC_ID_RE, 'Tema');
   const clean = clampStr(text, CONTEXT_ENTRY_MAX).trim();
   if (!clean) { const e = new Error('La entrada de contexto está vacía.'); e.badInput = true; throw e; }
-  const cur = await getItem(id, { ctx });
-  if (!cur.ok) throw notFoundOr500('updateContextoEntry', 'Tema', cur);
-  const f = parseFields(cur.data);
-  const list = parseJsonField(f.contextoEntradas, []);
-  const entry = list.find((x) => x.id === entryId);
-  if (!entry) { const e = new Error('Entrada inexistente.'); e.notFound = true; throw e; }
-  entry.text = clean;
-  entry.at = Date.now();
-  const r = await updateItem(id, { fields: { ...f, contextoEntradas: list } }, { ctx });
-  if (!r.ok) throw padError('updateContextoEntry', r);
-  appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: 'edit' }, ctx);
-  const fresh = await getItem(id, { ctx });
-  return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
+  return serializeTopicMutation(id, async () => {
+    const cur = await getItem(id, { ctx });
+    if (!cur.ok) throw notFoundOr500('updateContextoEntry', 'Tema', cur);
+    const f = parseFields(cur.data);
+    const parsed = parseJsonField(f.contextoEntradas, []);
+    const list = Array.isArray(parsed) ? parsed : [];
+    if (!list.some((x) => x.id === entryId)) { const e = new Error('Entrada inexistente.'); e.notFound = true; throw e; }
+    const nextList = list.map((entry) => (entry.id === entryId ? { ...entry, text: clean, at: Date.now() } : entry));
+    const r = await updateItem(id, { fields: { ...f, contextoEntradas: nextList } }, { ctx });
+    if (!r.ok) throw padError('updateContextoEntry', r);
+    appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: 'edit' }, ctx);
+    const fresh = await getItem(id, { ctx });
+    return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
+  });
 }
 
 export async function deleteContextoEntry(id, entryId, ctx = null) {
-  const cur = await getItem(id, { ctx });
-  if (!cur.ok) throw notFoundOr500('deleteContextoEntry', 'Tema', cur);
-  const f = parseFields(cur.data);
-  const list = parseJsonField(f.contextoEntradas, []);
-  const before = list.length;
-  const nextList = list.filter((x) => x.id !== entryId);
-  if (nextList.length === before) { const e = new Error('Entrada inexistente.'); e.notFound = true; throw e; }
-  const r = await updateItem(id, { fields: { ...f, contextoEntradas: nextList } }, { ctx });
-  if (!r.ok) throw padError('deleteContextoEntry', r);
-  appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: 'delete' }, ctx);
-  const fresh = await getItem(id, { ctx });
-  return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
+  requireId(id, TOPIC_ID_RE, 'Tema');
+  return serializeTopicMutation(id, async () => {
+    const cur = await getItem(id, { ctx });
+    if (!cur.ok) throw notFoundOr500('deleteContextoEntry', 'Tema', cur);
+    const f = parseFields(cur.data);
+    const parsed = parseJsonField(f.contextoEntradas, []);
+    const list = Array.isArray(parsed) ? parsed : [];
+    const nextList = list.filter((x) => x.id !== entryId);
+    if (nextList.length === list.length) { const e = new Error('Entrada inexistente.'); e.notFound = true; throw e; }
+    const r = await updateItem(id, { fields: { ...f, contextoEntradas: nextList } }, { ctx });
+    if (!r.ok) throw padError('deleteContextoEntry', r);
+    appendActivity({ kind: 'context', refId: id, title: cur.data.title, detail: 'delete' }, ctx);
+    const fresh = await getItem(id, { ctx });
+    return topicFromPadItem(fresh.ok ? fresh.data : cur.data);
+  });
 }
 
 export async function deleteTopic(id, ctx = null) {
-  const cur = await getItem(id, { ctx });
-  if (!cur.ok) throw notFoundOr500('deleteTopic', 'Tema', cur);
-  const removed = topicFromPadItem(cur.data);
-  const r = await padDeleteItem(id, { ctx });
-  if (!r.ok) throw padError('deleteTopic', r);
-  appendActivity({ kind: 'deleted', refId: id, title: removed.title }, ctx);
-  return removed;
+  requireId(id, TOPIC_ID_RE, 'Tema');
+  return serializeTopicMutation(id, async () => {
+    const cur = await getItem(id, { ctx });
+    if (!cur.ok) throw notFoundOr500('deleteTopic', 'Tema', cur);
+    const removed = topicFromPadItem(cur.data);
+    const r = await padDeleteItem(id, { ctx });
+    if (!r.ok) throw padError('deleteTopic', r);
+    appendActivity({ kind: 'deleted', refId: id, title: removed.title }, ctx);
+    return removed;
+  });
 }

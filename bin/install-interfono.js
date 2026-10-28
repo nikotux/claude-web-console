@@ -22,7 +22,36 @@ const CMD_DIR = path.join(os.homedir(), '.claude', 'commands');
 const CMD_FILE = path.join(CMD_DIR, 'btw.md');
 const MARK = 'cwc-bus.js';
 
-const cmd = (sub) => `node ${BUS} ${sub}`;
+// BUS queda dentro de comillas dobles del shell: escapar todos los caracteres
+// que conservan significado especial en ese contexto.
+const shellDoubleQuote = (value) => `"${String(value).replace(/["\\$`]/g, '\\$&')}"`;
+const cmd = (sub) => `node ${shellDoubleQuote(BUS)} ${sub}`;
+
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function abortInvalidSettings(detail) {
+  console.error(`ERROR: ${SETTINGS} tiene una configuración inválida (${detail}).`);
+  console.error('Abortado antes de escribir. Corregila a mano y reintentá.');
+  process.exit(1);
+}
+
+function writeFileAtomic(file, contents) {
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
+  const mode = fs.existsSync(file) ? fs.statSync(file).mode & 0o777 : 0o600;
+  try {
+    fs.writeFileSync(tmp, contents, { flag: 'wx', mode });
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* no llegó a crearse o ya se renombró */ }
+    throw e;
+  }
+}
 
 let settings = {};
 try {
@@ -40,12 +69,22 @@ try {
   // ENOENT: settings nuevo, seguimos con {}.
 }
 
+if (!isPlainObject(settings)) {
+  abortInvalidSettings('la raíz debe ser un objeto');
+}
+if (settings.hooks === undefined) {
+  settings.hooks = {};
+} else if (!isPlainObject(settings.hooks)) {
+  abortInvalidSettings('"hooks" debe ser un objeto');
+}
+for (const [event, entries] of Object.entries(settings.hooks)) {
+  if (!Array.isArray(entries)) abortInvalidSettings(`hooks.${event} debe ser un array`);
+}
+
 if (fs.existsSync(SETTINGS) && !fs.existsSync(BACKUP)) {
   fs.copyFileSync(SETTINGS, BACKUP);
   console.log(`backup: ${BACKUP}`);
 }
-
-settings.hooks = settings.hooks || {};
 
 // Reemplaza SOLO nuestras entradas (por MARK) en un evento, preservando ajenas.
 function setHook(event, entry) {
@@ -63,8 +102,7 @@ setHook('PostToolUse', { matcher: 'Edit|Write|MultiEdit', hooks: [{ type: 'comma
 // Cierre: soltar todos los claims propios.
 setHook('SessionEnd', { hooks: [{ type: 'command', command: cmd('hook-release') }] });
 
-fs.mkdirSync(path.dirname(SETTINGS), { recursive: true });
-fs.writeFileSync(SETTINGS, JSON.stringify(settings, null, 2) + '\n');
+writeFileAtomic(SETTINGS, JSON.stringify(settings, null, 2) + '\n');
 console.log(`hooks instalados en ${SETTINGS}`);
 
 // Comando /btw. Si ya existe un btw.md AJENO (sin nuestra marca cwc-bus.js), lo
@@ -104,7 +142,7 @@ corre en esta misma máquina (otra TUI o chat). El primer argumento es el nombre
 de la sesión destino (o \`all\` para broadcast); el resto es el mensaje.
 
 Resultado del envío:
-!\`node ${BUS} send "$ARGUMENTS"\`
+!\`node ${shellDoubleQuote(BUS)} send "$ARGUMENTS"\`
 
 Confirmale al usuario a quién se envió. Si el comando devolvió un error o la
 lista de sesiones, mostrásela para que corrija el destino. Si el mensaje era una

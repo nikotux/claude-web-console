@@ -115,6 +115,7 @@ function listSessionsForSocket(sock, opts) {
 // al primer éxito se olvida, así una recuperación seguida de una recaída vuelve
 // a avisar. Sólo cambia el LOG: la lógica de no podar títulos queda intacta.
 const LIST_FAIL_LOG_MS = 30 * 60 * 1000;
+const MAX_FAIL_LOG_KEYS = 200;
 const listFailLoggedAt = new Map();
 
 function logListFailThrottled(scope, socketName, message) {
@@ -122,6 +123,9 @@ function logListFailThrottled(scope, socketName, message) {
   const now = Date.now();
   const prev = listFailLoggedAt.get(key);
   if (prev && now - prev < LIST_FAIL_LOG_MS) return;
+  if (!listFailLoggedAt.has(key) && listFailLoggedAt.size >= MAX_FAIL_LOG_KEYS) {
+    listFailLoggedAt.delete(listFailLoggedAt.keys().next().value);
+  }
   listFailLoggedAt.set(key, now);
   const repeat = prev ? ' (se repite; próximo aviso en ≥30 min)' : '';
   console.error(`${message}${repeat}`);
@@ -206,7 +210,9 @@ export default {
             if (valid.has(k)) continue;
             // No podar títulos de un socket cuya consulta falló esta pasada:
             // no sabemos si sus sesiones siguen vivas o no.
-            const sockName = k.slice(0, k.indexOf('/'));
+            const separator = k.indexOf('/');
+            if (separator < 0) continue;
+            const sockName = k.slice(0, separator);
             if (unverifiedSockets.has(sockName)) continue;
             delete titles[k];
             dirty = true;
@@ -255,9 +261,11 @@ export default {
         const titles = loadTitles();
         const out = [];
         for (const sock of listSockets()) {
+          if (out.length >= 20) break;
           let sessions;
           try { sessions = listSessionsForSocket(sock, { throwOnError: true }); } catch { continue; }
           for (const s of sessions) {
+            if (out.length >= 20) break;
             if (!s.owned) continue;
             if (s.name.startsWith(BARE_PREFIX)) continue; // TUI oculta de chat → ya llueve por transcript
             // Retrocompat: `s.owner` sale del mismo lookup confiable de
@@ -266,7 +274,6 @@ export default {
             // la vista del host se quedaría sin sus propias terminales viejas.
             const sessionOwner = s.owner ?? null;
             if (!(sessionOwner === me || (sessionOwner === null && me === hostUser()))) continue;
-            if (out.length >= 20) break;
             if (!isValidSessionName(s.name)) continue;
             let text = '';
             try { text = runTmux(sock.path, ['capture-pane', '-p', '-t', s.name, '-S', scrollback], { throwOnError: false }) || ''; } catch { text = ''; }

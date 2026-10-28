@@ -63,6 +63,7 @@ async function parseFile(file) {
   const rows = {};
   let cwd = '';
   let model = 'gpt-5';
+  let lastTotalUsage = null;
 
   for (const line of txt.split('\n')) {
     if (!line) continue;
@@ -80,8 +81,14 @@ async function parseFile(file) {
     }
     if (obj.type !== 'event_msg' || obj.payload?.type !== 'token_count') continue;
 
-    const usage = obj.payload?.info?.last_token_usage;
+    const info = obj.payload?.info;
+    const usage = info?.last_token_usage;
     if (!usage) continue;
+    const totalUsage = info.total_token_usage?.total_tokens;
+    if (Number.isFinite(totalUsage)) {
+      if (totalUsage === lastTotalUsage) continue;
+      lastTotalUsage = totalUsage;
+    }
     const ts = Date.parse(obj.timestamp || '') || 0;
     const hourKey = ts ? localHourKey(ts) : 'unknown';
     const key = `${hourKey}\t${model}`;

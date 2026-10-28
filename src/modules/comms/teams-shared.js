@@ -171,6 +171,14 @@ export function parseTeamsResponse(out, contact, self) {
   // Para BOTS se exige solo que YO esté (el bot no matchea por email/nombre de
   // persona — su identidad es una app); para personas se exige YO + el contacto.
   const isBot = contact.kind === 'bot';
+  if (!members.length) {
+    if (!isBot) return { found: false, rejected: true, note: 'sin lista de miembros' };
+    const knownChatId = String(contact.chatId || '');
+    const responseChatId = String(parsed.chatId || '');
+    if (!knownChatId || (responseChatId && responseChatId !== knownChatId)) {
+      return { found: false, rejected: true, note: 'bot sin lista de miembros ni chatId conocido' };
+    }
+  }
   if (members.length) {
     const selfIn = members.some((m) => isSelfPerson(m, self));
     if (!selfIn) {

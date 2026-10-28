@@ -27,7 +27,7 @@ export const ESTADOS = Object.freeze({
 // ejecución sin una aprobación explícita registrada y los terminales no salen.
 export const TRANSICIONES = Object.freeze({
   pendiente: Object.freeze(['aprobada', 'rechazada', 'cancelada', 'caducada']),
-  aprobada: Object.freeze(['ejecutando', 'caducada']),
+  aprobada: Object.freeze(['ejecutando', 'fallida', 'caducada']),
   ejecutando: Object.freeze(['ejecutada', 'fallida']),
   ejecutada: Object.freeze([]),
   fallida: Object.freeze([]),
@@ -89,6 +89,7 @@ export function crearPeticion(dataDir, {
     creadoAt: Date.now(),
     decididoAt: null,
     iniciadoAt: null,
+    latidoAt: null,
     terminadoAt: null,
   };
   writeJsonAtomic(peticionFile(dataDir, id), peticion, { mode: 0o600 });
@@ -181,12 +182,50 @@ export function caducarVencidas(dataDir, {
   return caducadas;
 }
 
+// Reserva un reintento de spawn antes de lanzarlo. El candado de ejecución del
+// runner sigue siendo la garantía final entre procesos; esta marca evita
+// relanzamientos repetidos desde listados concurrentes del mismo server.
+export function marcarRelanzamiento(dataDir, id, {
+  umbralMs = 2 * 60 * 1000,
+  now = Date.now(),
+} = {}) {
+  const peticion = leerPeticion(dataDir, id);
+  if (!peticion) return { ok: false, code: 'no_existe' };
+  if (peticion.estado !== ESTADOS.APROBADA || peticion.iniciadoAt) {
+    return { ok: false, code: 'estado_invalido' };
+  }
+
+  const referencias = [peticion.relanzadoAt, peticion.decididoAt, peticion.creadoAt]
+    .map(Number)
+    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+  const ultimoIntento = referencias.length ? Math.max(...referencias) : null;
+  if (ultimoIntento === null || ultimoIntento + umbralMs > now) {
+    return { ok: false, code: 'aun_no' };
+  }
+
+  const siguiente = { ...peticion, relanzadoAt: now };
+  writeJsonAtomic(peticionFile(dataDir, id), siguiente, { mode: 0o600 });
+  return { ok: true, peticion: siguiente };
+}
+
+// Heartbeat durable del runner. Solo renueva expedientes que siguen en
+// ejecución; si un barrido ya los cerró, no los resucita.
+export function actualizarLatido(dataDir, id, now = Date.now()) {
+  const peticion = leerPeticion(dataDir, id);
+  if (!peticion || peticion.estado !== ESTADOS.EJECUTANDO) return false;
+  writeJsonAtomic(
+    peticionFile(dataDir, id),
+    { ...peticion, latidoAt: now },
+    { mode: 0o600 },
+  );
+  return true;
+}
+
 // Gemela de caducarVencidas para el OTRO lado del ciclo: una petición que entró
 // en EJECUTANDO y nunca reportó fin. El candado de estado aprobada→ejecutando
-// funciona como lock, pero sin heartbeat ni PID persistido nada detecta que el
-// runner murió a mitad de op.run() (kill -9, restart del servicio, reboot). La
-// regla dura 2 exige que todo lo que corre en el tiempo sea recuperable: este es
-// el equivalente al lockIsStale de los runners con heartbeat.
+// se complementa con el heartbeat persistido para detectar si el runner murió a
+// mitad de op.run() (kill -9, restart del servicio, reboot). La regla dura 2
+// exige que todo lo que corre en el tiempo sea recuperable.
 export function caducarEjecutandoVencidas(dataDir, {
   maxMs = 20 * 60 * 1000,
   now = Date.now(),
@@ -194,14 +233,20 @@ export function caducarEjecutandoVencidas(dataDir, {
   const fallidas = [];
   const ejecutando = listarPeticiones(dataDir, { estado: ESTADOS.EJECUTANDO });
   for (const peticion of ejecutando) {
-    // Los expedientes anteriores pueden no tener iniciadoAt: decididoAt y
-    // creadoAt permiten recuperarlos sin interpretar un timestamp inválido.
-    const inicio = [peticion.iniciadoAt, peticion.decididoAt, peticion.creadoAt]
+    // Los expedientes anteriores pueden no tener latidoAt o iniciadoAt:
+    // decididoAt y creadoAt conservan un fallback compatible.
+    const referencias = [
+      peticion.latidoAt,
+      peticion.iniciadoAt,
+      peticion.decididoAt,
+      peticion.creadoAt,
+    ]
       .map(Number)
-      .find((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+      .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+    const actividad = referencias.length ? Math.max(...referencias) : undefined;
     // Es preferible dejarla ejecutando antes que cerrar una operación vigente
     // cuando el momento de inicio no se puede determinar con seguridad.
-    if (inicio === undefined || inicio + maxMs >= now) continue;
+    if (actividad === undefined || actividad + maxMs >= now) continue;
     const resultado = transicionar(
       dataDir,
       peticion.id,

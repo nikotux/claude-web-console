@@ -4,7 +4,8 @@
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
 ### comms/                    LIBRERÍAS COMPARTIDAS de comunicaciones (file-based, patrón
 Interfono; estado 100% en ~/.cwc-data/comms/, 0 tokens, sobrevive
-reinicios). ⚠️ El DASHBOARD de Comunicaciones (módulo backend
+reinicios). Es deliberadamente HOST-ONLY: sus rutas no reciben `owner` y ningún
+consumidor puede exponer lecturas o envíos a inquilinos. ⚠️ El DASHBOARD de Comunicaciones (módulo backend
 registrado `index.js` con ruta /api/comms + el tablero frontend
 `public/js/modules/comms/board/`) se ELIMINÓ el 2026-07-14 (feedback
 de Niko: no lo usaba, un inbox-dashboard COMPITE con Teams/WhatsApp
@@ -37,7 +38,7 @@ exclusivos del head en `diverged`, deja `behind` vacío y cachea permanentemente
 cada par inmutable),
 `gateway-shared.js`
 (GATEWAY de envíos Desk/Teams/GitHub — lo importa el CLI
-`bin/cwc-comms.js`), `teams-shared.js` · `chatbot-shared.js` ·
+`bin/cwc-comms.js`; el send-runner aborta a los 5 min y persiste `status:"timeout"`), `teams-shared.js` · `chatbot-shared.js` ·
 `analyze-shared.js` (usados por los runners `bin/cwc-comms-*.js`), y
 `whatsapp-transcribe.js` (transcripción de voz, ver abajo). El
 reemplazo del dashboard NO es otro inbox: es el FLUJO DE SEGUIMIENTO

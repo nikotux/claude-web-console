@@ -150,7 +150,8 @@ parser y el histórico). parseFile bucketea por HORA local (clave
 las horas de HOY y la ventana de 5 h sin re-parsear; el día sale de
 slice(0,10). buildSummary GANA (mismo loop): `daily` ({YYYY-MM-DD local:
 {opus:{tokens,cost}...}}, se snapshotea a ~/.cwc-data/usage-history.json
-vía history-store.js/mergeDaily — UPSERT de días vivos + CONGELA los
+vía history-store.js/mergeDaily — UPSERT monotónico por proyecto×modelo
+(máximo guardado/nuevo por métrica) + CONGELA los
 podados, throttle 5 min, atómica, retención 400 d + rollup mensual);
 `hourlyToday` (serie {keys,points,totals} de hoy por hora, gráfica Día);
 y `windows` {h5, d7, d7ByKey} = TOKEN-COUNTS de las ventanas de límite
@@ -200,7 +201,8 @@ substring antes de JSON.parse porque los rollouts traen mucho ruido
 session_meta.payload.cwd → proyecto (espejo deliberado de projectOf, pero
 sobre la ruta ABSOLUTA real y no el dir codificado de Claude),
 turn_context.payload.model → modelo vigente, y event_msg token_count →
-info.last_token_usage (delta por turno). GOTCHA heredado de flow.js:
+info.last_token_usage (delta por turno); eventos consecutivos con el mismo
+info.total_token_usage se deduplican por archivo. GOTCHA heredado de flow.js:
 input_tokens YA INCLUYE cached_input_tokens y total_tokens = input+output,
 entonces el cache se descuenta del input y viaja aparte como cache read
 (`cr`); si no, se cuenta dos veces. DECISIONES DE NIKO: Codex se cuenta
@@ -322,8 +324,9 @@ VIVAS: en esta máquina hay ~4.000 transcripts / 811 MB en
 el endpoint. Una sesión ociosa por más de RECENT_MS no tiene total hasta
 que vuelva a escribir; ahí se siembra completa y queda exacta. El dedup
 del seed usa un Set LOCAL por archivo (el `message.id` de Claude se
-repite en varias líneas del transcript), NO el `seenClaudeIds` global, que
-tiene TTL de 120 s y sirve solo al ledger. El enfriamiento ya NO borra la
+repite en varias líneas del transcript) y, al terminar, vuelca esos ids a
+`seenClaudeIds` para cubrir el borde seed→append; ese Map conserva TTL de
+120 s. El enfriamiento ya NO borra la
 entrada (antes borraba el cursor y se perdía todo lo escrito entre polls);
 la purga pasó a ser por TTL de 6 h. Un archivo truncado/rotado
 (`size < offset`) dispara re-seed completo; antes reseteaba el offset a 0

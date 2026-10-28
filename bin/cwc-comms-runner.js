@@ -134,29 +134,51 @@ function finish(code) { clearInterval(heartbeat); C.clearLock(); process.exit(co
     prs = prs.slice(0, C.PR_DETAIL_CAP);
 
     const cache = C.readGhCache();
-    const nextCache = {};
+    // Mientras la corrida está a mitad, conservar entradas aún no revisadas
+    // permite reanudar sin perder el progreso previo.
+    const nextCache = { ...cache };
+    const previousThreads = C.readGithub().threads || [];
+    const reviewedPrs = new Set();
     const threads = [];
     let done = 0;
     for (const pr of prs) {
       const fp = C.prFingerprint(pr);
-      let hilos = (cache[pr.number] && cache[pr.number].fp === fp && cache[pr.number].v === 2) ? cache[pr.number].threads : null;
+      const previousEntry = cache[pr.number];
+      let cacheEntry = previousEntry && previousEntry.fp === fp && previousEntry.v === 2
+        ? previousEntry
+        : null;
+      let hilos = cacheEntry ? cacheEntry.threads : null;
       if (!hilos) {
         try {
           // Fase C: lectura centralizada (misma caché que prLive/investigate).
           const det = await fetchPrRich(pr.number, { fresh: true });
           hilos = threadsForPr(det, contacts, self, myLogin);
+          cacheEntry = { fp, v: 2, threads: hilos };
         } catch (e) {
           log('PR', pr.number, 'error de detalle:', e.message);
-          hilos = (cache[pr.number] && cache[pr.number].threads) || [];
+          // No sellar el fingerprint nuevo: conservar la entrada vieja hace
+          // que el próximo escaneo reintente este PR.
+          hilos = (previousEntry && previousEntry.threads) || [];
+          cacheEntry = previousEntry || null;
         }
       }
-      nextCache[pr.number] = { fp, v: 2, threads: hilos };
+      if (cacheEntry) nextCache[pr.number] = cacheEntry;
+      else delete nextCache[pr.number];
       for (const t of hilos) threads.push(t);
+      reviewedPrs.add(Number(pr.number));
       done += 1;
-      // Escritura INCREMENTAL: el front ve crecer la lista mientras escanea.
-      C.writeGithub({ threads, scannedAt: Date.now(), error: null });
+      // Persistencia INCREMENTAL reanudable: la caché avanza por PR y el
+      // snapshot conserva hilos previos de los PRs todavía no revisados.
+      C.writeGhCache(nextCache);
+      const pendingThreads = previousThreads.filter((thread) => {
+        const match = String(thread?.id || '').match(/^gh:(\d+):/);
+        return !match || !reviewedPrs.has(Number(match[1]));
+      });
+      C.writeGithub({ threads: [...threads, ...pendingThreads], scannedAt: Date.now(), error: null });
     }
-    C.writeGhCache(nextCache);
+    const finalCache = {};
+    for (const pr of prs) if (nextCache[pr.number]) finalCache[pr.number] = nextCache[pr.number];
+    C.writeGhCache(finalCache);
     C.writeGithub({ threads, scannedAt: Date.now(), error: null });
     log('listo:', threads.length, 'hilos de', done, 'PRs revisados.');
     finish(0);

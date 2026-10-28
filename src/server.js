@@ -40,6 +40,15 @@ function setCookie(res, name, value, { clear = false } = {}) {
 const loginFails = new Map(); // ip -> { count, first }
 const MAX_FAILS = 8;
 const FAIL_WINDOW_MS = 5 * 60 * 1000;
+const MAX_TRACKED_IPS = 5000;
+function pruneLoginFails(now) {
+  for (const [ip, rec] of loginFails) {
+    if (now - rec.first > FAIL_WINDOW_MS) loginFails.delete(ip);
+  }
+  while (loginFails.size > MAX_TRACKED_IPS) {
+    loginFails.delete(loginFails.keys().next().value);
+  }
+}
 function loginBlocked(ip) {
   const rec = loginFails.get(ip);
   if (!rec) return false;
@@ -49,7 +58,10 @@ function loginBlocked(ip) {
 function noteFail(ip) {
   const now = Date.now();
   const rec = loginFails.get(ip);
-  if (!rec || now - rec.first > FAIL_WINDOW_MS) loginFails.set(ip, { count: 1, first: now });
+  if (!rec || now - rec.first > FAIL_WINDOW_MS) {
+    if (!rec && loginFails.size >= MAX_TRACKED_IPS) pruneLoginFails(now);
+    loginFails.set(ip, { count: 1, first: now });
+  }
   else rec.count += 1;
 }
 function clearFails(ip) { loginFails.delete(ip); }

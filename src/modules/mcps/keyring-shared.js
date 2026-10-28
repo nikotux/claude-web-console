@@ -9,7 +9,14 @@ import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { TOLKIEN_EXPIRY_WARN_DAYS, tolkienStatus } from '../../core/connections-tolkien.js';
 import { PAD_DEFAULT_URL } from '../../core/pad-url.js';
-import { CODEX_TOKEN_TTL_MS } from '../../core/user-space.js';
+import {
+  CODEX_TOKEN_TTL_MS,
+  hostUser,
+  readInfisicalAccountEmail,
+  readUserPadToken,
+  userCodexAuthPath,
+  userSpace,
+} from '../../core/user-space.js';
 import {
   infisicalDependents,
   probeInfisicalProject,
@@ -23,6 +30,7 @@ export const EXPIRY_WARN_MS = 2 * 24 * 60 * 60 * 1000; // < 2 días => preventiv
 // normal es vivir pocos minutos. 30 min dan margen al refresco automático y,
 // a la vez, detectan rápido cuando dejó de ocurrir.
 export const AUTO_GRACE_MS = 30 * 60 * 1000;
+export const KEYRING_EXPENSIVE_PROBES = new Set(['infisical']);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
@@ -70,6 +78,44 @@ function cleanText(s) {
 
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function normIdentity(value) {
+  return String(value || '').trim().toLowerCase() || null;
+}
+
+function codexEmail(auth) {
+  try {
+    const encoded = auth?.tokens?.id_token?.split('.')?.[1];
+    if (!encoded) return null;
+    return normIdentity(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))?.email);
+  } catch { return null; }
+}
+
+function sameNonEmptySecret(a, b) {
+  return typeof a === 'string' && a.trim().length > 0
+    && typeof b === 'string' && b.trim().length > 0 && a === b;
+}
+
+async function fetchPadIdentity(url, token, timeoutMs = 3000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${String(url).replace(/\/+$/, '')}/api/v1/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    if (!res.ok) return { ok: false, status: res.status, network: false };
+    try {
+      return { ok: true, body: await res.json() };
+    } catch {
+      return { ok: false, status: res.status, network: false, invalidJson: true };
+    }
+  } catch (e) {
+    return { ok: false, network: true, error: String(e?.message || e || '').slice(0, 200) };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function toMs(value) {
@@ -365,6 +411,23 @@ export async function probeClaudeOauth(scope) {
 export async function probeCodexCli(scope) {
   try {
     const auth = readJson(path.join(scope.home, '.codex', 'auth.json'));
+    const dependents = ['modelo Tándem (codex exec)', 'límites de Codex en el panel Uso'];
+    const action = reconnectActionFor({ id: 'codex-cli' });
+    if (!scope.isHost) {
+      const email = codexEmail(auth);
+      const hostAuth = readJson(userCodexAuthPath(hostUser()));
+      const hostEmail = codexEmail(hostAuth);
+      const sameToken = sameNonEmptySecret(auth?.tokens?.refresh_token, hostAuth?.tokens?.refresh_token)
+        || sameNonEmptySecret(auth?.tokens?.access_token, hostAuth?.tokens?.access_token);
+      if (!email || !hostEmail) {
+        const detail = 'No se pudo verificar de quién es la sesión de Codex.';
+        return item({ id: 'codex-cli', family: 'engines', label: 'Codex CLI', role: 'sesión del motor Tándem', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action, error: detail });
+      }
+      if (email === hostEmail || sameToken) {
+        const detail = 'Es la cuenta de Codex del anfitrión: entrá con la tuya.';
+        return item({ id: 'codex-cli', family: 'engines', label: 'Codex CLI', role: 'sesión del motor Tándem', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action, error: detail });
+      }
+    }
     const lastRefresh = toMs(auth?.last_refresh);
     const expiresAt = lastRefresh == null ? null : lastRefresh + CODEX_TOKEN_TTL_MS;
     const expiresInMs = expiresIn(expiresAt);
@@ -381,8 +444,8 @@ export async function probeCodexCli(scope) {
       detail: `${mode} · ${refreshed} · vencimiento estimado: ${durationText(expiresInMs)}`,
       expiresAt,
       expiresInMs,
-      dependents: ['modelo Tándem (codex exec)', 'límites de Codex en el panel Uso'],
-      action: reconnectActionFor({ id: 'codex-cli' }),
+      dependents,
+      action,
       error: expiresAt == null ? 'no hay last_refresh en ~/.codex/auth.json' : null,
     });
   } catch (e) {
@@ -429,6 +492,18 @@ export async function probeInfisicalKey(scope) {
     const dependents = infisicalDependents(cliCfg);
     const identity = readInfisicalIdentity(scope);
     const [status, project] = await Promise.all([probeInfisicalStatus(scope), probeInfisicalProject(scope)]);
+    if (!scope.isHost && status?.ok) {
+      const email = normIdentity(status.email);
+      const hostEmail = normIdentity(readInfisicalAccountEmail(hostUser()));
+      if (!email || !hostEmail) {
+        const detail = 'No se pudo verificar de quién es la sesión de Infisical.';
+        return item({ id: 'infisical', family: 'keys', label: 'Infisical', role: 'llave de secretos para MCPs stdio', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action: reconnectActionFor({ id: 'infisical', dependents }), error: detail });
+      }
+      if (email === hostEmail) {
+        const detail = 'Es la cuenta de Infisical del anfitrión: entrá con la tuya.';
+        return item({ id: 'infisical', family: 'keys', label: 'Infisical', role: 'llave de secretos para MCPs stdio', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action: reconnectActionFor({ id: 'infisical', dependents }), error: detail });
+      }
+    }
     const expiresAt = status?.ok && status.expiresInMs != null ? Date.now() + status.expiresInMs : null;
     const expiresInMs = status?.ok ? status.expiresInMs : null;
     let light = 'danger';
@@ -467,6 +542,8 @@ export async function probeInfisicalKey(scope) {
 
 export async function probeGithubCli(scope) {
   try {
+    const dependents = ['PRs y su investigación', 'Comunicaciones', 'censo de Actualizaciones'];
+    const action = reconnectActionFor({ id: 'github-cli', dependents });
     const { err, stdout, stderr } = await runFile('gh', ['auth', 'status'], {
       cwd: scope.home,
       timeout: 8000,
@@ -484,10 +561,26 @@ export async function probeGithubCli(scope) {
         light: 'danger',
         statusLabel: 'Sin sesión',
         detail: cleanText(out).slice(0, 300) || 'gh auth status falló',
-        dependents: ['PRs y su investigación', 'Comunicaciones', 'censo de Actualizaciones'],
-        action: reconnectActionFor({ id: 'github-cli', dependents: ['PRs y su investigación', 'Comunicaciones', 'censo de Actualizaciones'] }),
+        dependents,
+        action,
         error: cleanText(out).slice(0, 300) || 'gh auth status falló',
       });
+    }
+    if (!scope.isHost) {
+      const ownLogin = normIdentity(login[2]);
+      let hostLogins = new Set();
+      try {
+        const hosts = fs.readFileSync(path.join(userSpace(hostUser()), '.config', 'gh', 'hosts.yml'), 'utf8');
+        hostLogins = new Set([...hosts.matchAll(/^\s*user:\s*(\S+)/gm)].map((m) => normIdentity(m[1])).filter(Boolean));
+      } catch { /* la duda se trata como sesión no verificada */ }
+      if (!ownLogin || hostLogins.size === 0) {
+        const detail = 'No se pudo verificar de quién es la sesión de GitHub.';
+        return item({ id: 'github-cli', family: 'keys', label: 'GitHub CLI', role: 'credencial local de gh', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action, error: detail });
+      }
+      if (hostLogins.has(ownLogin)) {
+        const detail = 'Es la cuenta de GitHub del anfitrión: entrá con la tuya.';
+        return item({ id: 'github-cli', family: 'keys', label: 'GitHub CLI', role: 'credencial local de gh', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action, error: detail });
+      }
     }
     return item({
       id: 'github-cli',
@@ -497,8 +590,8 @@ export async function probeGithubCli(scope) {
       light: 'ok',
       statusLabel: 'Conectado',
       detail: `${login[2]} @ ${login[1]}${scopes ? ` · scopes: ${scopes}` : ''}`,
-      dependents: ['PRs y su investigación', 'Comunicaciones', 'censo de Actualizaciones'],
-      action: reconnectActionFor({ id: 'github-cli', dependents: ['PRs y su investigación', 'Comunicaciones', 'censo de Actualizaciones'] }),
+      dependents,
+      action,
     });
   } catch (e) {
     return item({ id: 'github-cli', family: 'keys', label: 'GitHub CLI', role: 'credencial local de gh', light: 'danger', statusLabel: 'Error de sonda', detail: 'No se pudo ejecutar gh auth status.', dependents: ['PRs y su investigación', 'Comunicaciones', 'censo de Actualizaciones'], action: reconnectActionFor({ id: 'github-cli', dependents: ['PRs y su investigación', 'Comunicaciones', 'censo de Actualizaciones'] }), error: String(e?.message || e || '').slice(0, 300) });
@@ -507,9 +600,65 @@ export async function probeGithubCli(scope) {
 
 export async function probePadLocal(scope) {
   try {
+    const dependents = ['Pendientes', 'Aprendizaje', 'Mejora Continua', 'contexto de tickets'];
+    const action = reconnectActionFor({ id: 'pad-local' });
+    const url = PAD_DEFAULT_URL;
+    if (!scope.isHost) {
+      const token = readUserPadToken(scope.user, url);
+      if (!token) {
+        return item({ id: 'pad-local', family: 'keys', label: 'Pad local', role: 'token de sesión y servicio Pad', light: 'danger', statusLabel: 'Sin token', detail: 'No hay token de Pad para este usuario.', dependents, action, error: 'no hay token de Pad para este usuario' });
+      }
+      const hostToken = readUserPadToken(hostUser(), url);
+      if (!hostToken) {
+        const detail = 'No se pudo verificar que la sesión de Pad no sea la del anfitrión.';
+        return item({ id: 'pad-local', family: 'keys', label: 'Pad local', role: 'token de sesión y servicio Pad', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action, error: detail });
+      }
+      if (token === hostToken) {
+        const detail = 'Es la cuenta de Pad del anfitrión: entrá con la tuya.';
+        return item({ id: 'pad-local', family: 'keys', label: 'Pad local', role: 'token de sesión y servicio Pad', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action, error: detail });
+      }
+      const [ownSession, hostSession] = await Promise.all([
+        fetchPadIdentity(url, token),
+        fetchPadIdentity(url, hostToken),
+      ]);
+      if (!ownSession.ok) {
+        const statusLabel = ownSession.network ? 'Caído' : 'Sin sesión';
+        const detail = ownSession.network
+          ? `El servicio Pad no responde en ${url}.`
+          : `La sesión de Pad no fue aceptada por ${url}.`;
+        return item({ id: 'pad-local', family: 'keys', label: 'Pad local', role: 'token de sesión y servicio Pad', light: 'danger', statusLabel, detail, dependents, action, error: ownSession.network ? ownSession.error : `HTTP ${ownSession.status || 'inválido'}` });
+      }
+      const ownId = String(ownSession.body?.id || '').trim() || null;
+      const ownEmail = normIdentity(ownSession.body?.email);
+      if (!ownId && !ownEmail) {
+        const detail = 'No se pudo verificar de quién es la sesión de Pad.';
+        return item({ id: 'pad-local', family: 'keys', label: 'Pad local', role: 'token de sesión y servicio Pad', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action, error: detail });
+      }
+      const hostId = hostSession.ok ? String(hostSession.body?.id || '').trim() || null : null;
+      const hostEmail = hostSession.ok ? normIdentity(hostSession.body?.email) : null;
+      if (!hostSession.ok || (!hostId && !hostEmail)) {
+        const detail = 'No se pudo verificar que la sesión de Pad no sea la del anfitrión.';
+        return item({ id: 'pad-local', family: 'keys', label: 'Pad local', role: 'token de sesión y servicio Pad', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action, error: detail });
+      }
+      if ((ownId && hostId && ownId === hostId) || (ownEmail && hostEmail && ownEmail === hostEmail)) {
+        const detail = 'Es la cuenta de Pad del anfitrión: entrá con la tuya.';
+        return item({ id: 'pad-local', family: 'keys', label: 'Pad local', role: 'token de sesión y servicio Pad', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action, error: detail });
+      }
+      const identity = ownEmail || String(ownSession.body?.username || '').trim() || ownId;
+      return item({
+        id: 'pad-local',
+        family: 'keys',
+        label: 'Pad local',
+        role: 'token de sesión y servicio Pad',
+        light: 'ok',
+        statusLabel: 'Activo',
+        detail: `sesión propia verificada (${identity}) · servicio responde en ${url}`,
+        dependents,
+        action,
+      });
+    }
     const creds = readJson(path.join(scope.home, '.pad', 'credentials.json'));
     const hasToken = hasSessionToken(creds);
-    const url = PAD_DEFAULT_URL;
     const live = await httpAlive(url, 3000);
     const light = hasToken && live.alive ? 'ok' : 'danger';
     return item({
@@ -520,8 +669,8 @@ export async function probePadLocal(scope) {
       light,
       statusLabel: live.alive ? (hasToken ? 'Activo' : 'Sin token') : 'Caído',
       detail: `${hasToken ? 'token de sesión presente' : 'sin token de sesión'} · ${live.alive ? `servicio responde en ${url}` : `servicio no responde en ${url}`}`,
-      dependents: ['Pendientes', 'Aprendizaje', 'Mejora Continua', 'contexto de tickets'],
-      action: reconnectActionFor({ id: 'pad-local' }),
+      dependents,
+      action,
       error: live.alive ? (hasToken ? null : 'no hay token de sesión en ~/.pad/credentials.json') : live.error,
     });
   } catch (e) {
@@ -682,9 +831,15 @@ export async function probeZeroTier() {
   }
 }
 
-// Corre TODAS las sondas en paralelo. Ninguna puede tumbar a otra: cada una se
-// resuelve por separado y un fallo se convierte en su propia tarjeta en rojo.
-export async function buildKeyring(scope) {
+export function itemsForProbe(items, probeKey) {
+  const list = Array.isArray(items) ? items : [];
+  if (probeKey === 'services') return list.filter((it) => String(it?.id || '').startsWith('service-'));
+  return list.filter((it) => it?.id === probeKey);
+}
+
+// Corre las sondas en paralelo. Las que llegan en `reuse` conservan sus items
+// y checkedAt; un fallo de cualquier otra se convierte en su tarjeta en rojo.
+export async function buildKeyring(scope, { reuse = null } = {}) {
   const probes = [
     ['claude-oauth', () => probeClaudeOauth(scope)],
     ['codex-cli', () => probeCodexCli(scope)],
@@ -703,7 +858,10 @@ export async function buildKeyring(scope) {
       ['zerotier', probeZeroTier],
     );
   }
-  const settled = await Promise.allSettled(probes.map(([, fn]) => fn()));
+  const settled = await Promise.allSettled(probes.map(([probeKey, fn]) => {
+    const reused = reuse?.[probeKey];
+    return Array.isArray(reused) && reused.length > 0 ? reused : fn();
+  }));
   const items = settled.flatMap((r, i) => {
     if (r.status === 'fulfilled') return Array.isArray(r.value) ? r.value : [r.value];
     const id = probes[i][0];

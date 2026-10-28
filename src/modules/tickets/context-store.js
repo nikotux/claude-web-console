@@ -568,9 +568,9 @@ function writePlaybook(scope, playbookFile) {
   return { ok: true, changed: true };
 }
 
-// Clasifica sin escribir: un clon sin masters propios es semilla y puede
-// regenerarse desde el fallback de getContext(); uno con cualquier master es
-// dueño de su contexto y el fan-out del host no debe tocarlo.
+// Clasifica sin escribir: un clon sin el par completo de masters es semilla y
+// puede regenerarse desde el fallback de getContext(); solo con ambos es dueño
+// de su contexto y el fan-out del host no debe tocarlo.
 export function classifyTenantsForFanout() {
   const host = hostUser();
   return listUsers().filter((user) => user?.username && user.username !== host).map((user) => {
@@ -582,7 +582,7 @@ export function classifyTenantsForFanout() {
       kind = 'no-clone';
     } else if (
       fss.existsSync(contextPathsFor(scope, 'work').storeFile)
-      || fss.existsSync(contextPathsFor(scope, 'pr').storeFile)
+      && fss.existsSync(contextPathsFor(scope, 'pr').storeFile)
     ) {
       kind = 'own';
     }
@@ -799,5 +799,5 @@ export function saveContext(kind, text, scope = hostScope()) {
   writeFileAtomic(storeFile, String(text));
   // Espejar el subset a Tolkien (best-effort: si falla, el master ya quedó
   // guardado y el verificador lo marcará desincronizado).
-  syncToTolkien(scope);
+  return syncToTolkien(scope);
 }

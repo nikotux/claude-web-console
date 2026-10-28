@@ -79,7 +79,7 @@ export function pacClass(input = 'working', { size = '', cls = '' } = {}) {
 // solo para un estado EXPLÍCITO desconocido, nunca para "no me dijeron nada".
 export function pacman({ state, working = true, size = '', cls = '', title = '' } = {}) {
   const classes = pacClass({ state, working }, { size, cls });
-  return `<span class="${classes}"${title ? ` title="${escapeAttr(title)}"` : ''}>` +
+  return `<span class="${escapeAttr(classes)}"${title ? ` title="${escapeAttr(title)}"` : ''}>` +
     '<span class="pac-man"></span>' +
     '<span class="pac-track"><i class="pac-dot"></i><i class="pac-dot"></i><i class="pac-dot"></i></span>' +
     // El badge SIEMPRE está en el markup (una actualización en lugar solo

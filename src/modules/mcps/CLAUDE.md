@@ -41,7 +41,8 @@ el panel mostraba las PUERTAS (MCP) pero nunca el LLAVERO. Infisical no
 es MCP ni cuenta: es la llave de la que cuelga `tolkien-mordor` (scope
 local, arranca con `infisical run …`). Y no era la excepción: hay una
 llave detrás de casi todo. `GET /mcps/keyring` (autenticados, 0 tokens IA,
-caché CLAVEADA POR USUARIO + `?fresh=1` + snapshot
+caché CLAVEADA POR USUARIO en dos velocidades (estado vivo 2 min,
+Infisical 12 h; `?fresh=1` fuerza todo) + snapshot
 `<scope.dataDir>/keyring.json` con degradación `stale`) devuelve para el host
 las 11 tarjetas históricas en 3 familias: 🧠 Motores
 (Claude OAuth vía `expiresAt` · Codex CLI vía `last_refresh`, vencimiento
@@ -53,6 +54,15 @@ systemd y ZeroTier son estado de la instalación y no entran en su llavero.
 `probeCodexCli` ya no hardcodea esa ventana: importa `CODEX_TOKEN_TTL_MS` de
 `core/user-space.js`, la MISMA constante que usa `connections` para decidir si
 la credencial de Codex sigue viva.
+SALUD FAIL-CLOSED (2026-10-28, `console:PLAN-3493`): para inquilinos cada sonda
+verifica la identidad propia contra la del host (Infisical, gh, Codex y Pad
+local); una identidad igual o ilegible queda en `danger`. La aceptación de
+Infisical también falla cerrada si no puede leer cualquiera de las cuentas, y
+`runnerScopeFor()` deriva `isHost` del `HOME` real. Los jobs de login pasan a
+`error` si `spawn` falla en vez de quedar en `starting`; `classifyStatus()` usa
+primero el símbolo inicial y luego palabras de fallo antes que señales verdes.
+El llavero refresca el estado vivo cada 2 min y reutiliza la sonda cara de
+Infisical hasta 12 h, salvo un `?fresh=1` explícito.
 El llavero suma `tolkien-session` (familia 🔑 Llaves), común a host e inquilinos, leída de `tolkienStatus(scope.dataDir)` sin tocar jamás la cookie.
 Su `reconnectActionFor` entrega `kind:'tolkien-login'` con `command:null`, consumido por el dispatcher `reconnect-keyring` de
 `public/js/modules/system/mcps-panel.js` para abrir el asistente de conexión. Los ítems aceptan un `warnMs` propio porque Tolkien avisa a 3 días

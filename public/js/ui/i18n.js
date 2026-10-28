@@ -28,6 +28,7 @@ const MODULES = [
   'cabina',
   'forja',
 ];
+const FETCH_TIMEOUT_MS = 10000;
 
 let LANG = 'es';
 let DICT = {};
@@ -51,11 +52,14 @@ export function initI18n(lang) {
   DICT = {};
   if (LANG !== 'en') { ready = Promise.resolve(); return ready; }
   ready = Promise.all(MODULES.map(async (m) => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
     try {
-      const r = await fetch(`/i18n/en/${m}.json`, { cache: 'no-store' });
+      const r = await fetch(`/i18n/en/${m}.json`, { cache: 'no-store', signal: ac.signal });
       if (!r.ok) return;
       Object.assign(DICT, await r.json());
     } catch { /* módulo sin diccionario todavía: fallback ES cubre */ }
+    finally { clearTimeout(timer); }
   }));
   return ready;
 }

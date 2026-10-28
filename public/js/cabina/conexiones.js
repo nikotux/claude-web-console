@@ -1,5 +1,6 @@
 import { icon } from '../ui/icons.js';
 import { t } from '../ui/i18n.js';
+import { confirmDialog } from '../ui/dialog.js';
 
 const PROVIDER_COPY = {
   microsoft: {
@@ -455,7 +456,11 @@ export default {
 
     const disconnect = async (providerId) => {
       const name = PROVIDER_COPY[providerId]?.name || providerId;
-      if (!window.confirm(t('cabina.conexiones.disconnectConfirm', '¿Querés desconectar {name}? El agente dejará de poder usar esa cuenta.', { name }))) return;
+      const confirmed = await confirmDialog({
+        message: t('cabina.conexiones.disconnectConfirm', '¿Querés desconectar {name}? El agente dejará de poder usar esa cuenta.', { name }),
+        danger: true,
+      });
+      if (!confirmed) return;
       try {
         await ctx.api.post(`/api/connections/${encodeURIComponent(providerId)}/disconnect`, {});
         if (!alive) return;

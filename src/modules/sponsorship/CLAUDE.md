@@ -21,15 +21,15 @@ no tiene perfil de usuario y recibe 400 en las rutas self-service.
 
 | Método | Ruta | Contrato |
 |---|---|---|
-| GET | `/api/sponsorship/candidates` | Devuelve `{ candidates: [{ username }] }` sólo para perfiles en `awaiting-sponsor`; no filtra ningún otro dato del registro. |
+| GET | `/api/sponsorship/candidates` | Devuelve `{ candidates: [{ username }] }` sólo para perfiles en `awaiting-sponsor` cuando el principal puede patrocinar (estado `none` + token propio listo); en otro caso devuelve la lista vacía. No filtra ningún otro dato del registro. |
 | GET | `/api/sponsorship/mine` | Devuelve `{ canSponsor, tokenReady, sponsored }`; cada patrocinado incluye `{ username, todayUsd, thresholdUsd }`. |
-| POST | `/api/sponsorship/adopt` | El principal adopta `{ username }` únicamente si el target existe y sigue esperando sponsor, no es él mismo y el principal no es patrocinado. |
+| POST | `/api/sponsorship/adopt` | El principal adopta `{ username }` únicamente si el target existe y sigue esperando sponsor, no es él mismo, el principal no es patrocinado y tiene listo su token propio; sin token responde `400`. |
 | POST | `/api/sponsorship/release` | El principal suelta `{ username }` sólo cuando es su sponsor actual; cualquier otro caso responde `403` sin revelar al sponsor real. |
-| POST | `/api/sponsorship/token/start` | Inicia `cwc-sponsor-token-runner.js` para el principal; si su job sigue vivo no spawnea otro y devuelve el estado con `alreadyRunning:true`. El hijo corre `detached` + `unref`, por lo que sobrevive al reinicio del server. |
-| GET | `/api/sponsorship/token/status` | Lee `~/.cwc-data/sponsor-token-jobs/<user>.json` y devuelve exactamente `{ status, url, note, error, ready }`; NUNCA expone el token. |
-| POST | `/api/sponsorship/token/code` | Recibe `{ code }` no vacío y lo escribe mode 600 en `~/.cwc-data/sponsor-token-jobs/<user>.code` para el runner del principal. |
-| POST | `/api/sponsorship/token/cancel` | Envía SIGTERM al job vivo del principal, borra su `.code`, deja estado `error`/`cancelado` y devuelve `{ ok:true }`. |
-| POST | `/api/sponsorship/admin/assign` | Un admin asigna `{ username, sponsor? }`; si omite `sponsor`, se usa su propio username cuando el principal lo tiene (el token maestro debe indicarlo), y el sponsor designado debe tener listo su token propio. |
+| POST | `/api/sponsorship/token/start` | Reserva sincrónicamente el job con `wx`, spawnea `cwc-sponsor-token-runner.js` y persiste el PID antes de responder. Si ya vive, devuelve sólo el estado público con `alreadyRunning:true`, sin PID; `child.on('error')` persiste el error de lanzamiento. El hijo corre `detached` + `unref`, por lo que sobrevive al reinicio del server. |
+| GET | `/api/sponsorship/token/status` | Lee `userDataDir(user)/sponsor-token-jobs/<user>.json` y devuelve exactamente `{ status, url, note, error, ready }`; NUNCA expone el token. |
+| POST | `/api/sponsorship/token/code` | Recibe `{ code }` no vacío de hasta 512 caracteres y lo escribe mode 600 en `userDataDir(user)/sponsor-token-jobs/<user>.code` sólo si el job está vivo y en `awaiting-code` o `exchanging`; en otro caso responde `409`. |
+| POST | `/api/sponsorship/token/cancel` | Escribe primero el marcador `.cancel`, envía SIGTERM al job vivo del principal, borra su `.code`, deja estado `error`/`cancelado` y devuelve `{ ok:true }`. El runner respeta el marcador: no persiste el token ni estados no terminales después de cancelar. |
+| POST | `/api/sponsorship/admin/assign` | Un admin asigna `{ username, sponsor? }`; si omite `sponsor`, se usa su propio username cuando el principal lo tiene (el token maestro debe indicarlo). El sponsor designado debe tener listo su token propio, estar en estado `none` y ser distinto del target. |
 | POST | `/api/sponsorship/admin/release` | Un admin suelta `{ username }` y deja al perfil en `awaiting-sponsor`, manteniendo el fail-closed del tier patrocinado. |
 | GET | `/api/sponsorship/admin/overview` | Un admin obtiene `{ users: [{ username, tier, sponsorshipState, sponsor, canSponsor }] }`; `canSponsor` exige estado `none` y token propio listo. |
 
@@ -63,14 +63,19 @@ panel consume y filtra por `canSponsor`, nunca por `admin`.
   patrocinio a
   `core/users.js`.
 - `setUserSponsor()` y `setAwaitingSponsor()` persisten indirectamente en
-  `users.json`; este módulo nunca lo toca directo. Los jobs de generación sí
-  usan `~/.cwc-data/sponsor-token-jobs/` para estado, buzón de código y log.
+  `users.json`; este módulo nunca lo toca directo.
+- Los jobs usan `userDataDir(username)/sponsor-token-jobs/`, resuelto por
+  operación con la misma fórmula que el runner; para el host coincide con
+  `~/.cwc-data/sponsor-token-jobs/`. El server conserva fallback de LECTURA a
+  la ruta global vieja para jobs en vuelo y envía código/cancelación al
+  directorio donde encontró el job. `jobAlive()` verifica además
+  `/proc/<pid>/cmdline` antes de considerar vivo o matar un proceso.
 
 ## Lo que más duele
 
 - No agregues `requireAdmin` a las cuatro rutas self-service: impediría que cada sponsor decida desde su consola. Las tres rutas `/admin` sí deben conservar su gate `isAdmin`.
 - `/candidates` devuelve únicamente `username`; agregar tier, rol o sponsor filtra datos de terceros a usuarios no-admin.
 - Validar `awaiting-sponsor` antes de adoptar es el guard que impide robarle un patrocinado a otra persona.
-- Un token de patrocinio ausente no impide adoptar: `tokenReady` existe para que la UI avise y la resolución de credenciales siga fallando cerrada mientras tanto.
+- `/adopt` y `/candidates` exigen token propio listo: fallan cerradas y mantienen simetría con `/admin/assign` (decisión registrada en PLAN-3494).
 - Las cuatro rutas `/token/*` toman SIEMPRE el username de `principalUsername(req,res)`, nunca de body ni query: aceptar un username externo permitiría generar o manipular el token de otro usuario.
-- El job vive en `~/.cwc-data/sponsor-token-jobs/`, global como el precedente de `onboard-jobs`: por eso cada estado se indexa por username y se limita a metadatos del arranque, sin contenido del usuario; el token queda únicamente en `userOauthTokenPath(user)`.
+- El job vive en `userDataDir(username)/sponsor-token-jobs/`, nunca en una constante global de módulo; el username se valida con `sanitizeUserId` y cada ruta con `path.relative` antes de usarla.

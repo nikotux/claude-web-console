@@ -25,6 +25,13 @@ function copyDefaults() {
   );
 }
 
+function isPlainObject(value) {
+  return value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.getPrototypeOf(value) === Object.prototype;
+}
+
 function validateThresholds(thresholds) {
   for (const axis of AXES) {
     let previous = -Infinity;
@@ -52,26 +59,42 @@ export function loadThresholds() {
   let thresholds = copyDefaults();
   let mtimeMs = null;
 
-  if (fs.existsSync(configPath)) {
-    // Evita la ventana TOCTOU: el mtime previo identifica el contenido leído;
-    // si cambia después, el cache queda deliberadamente viejo y fuerza otra lectura.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const mtimeBefore = configMtime(configPath);
-      const overrides = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      const candidate = copyDefaults();
-      for (const state of ['optimo', 'atencion', 'degradado']) {
-        if (overrides[state] && typeof overrides[state] === 'object') {
+  try {
+    if (fs.existsSync(configPath)) {
+      // Evita la ventana TOCTOU: el mtime previo identifica el contenido leído;
+      // si cambia después, el cache queda deliberadamente viejo y fuerza otra lectura.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const mtimeBefore = configMtime(configPath);
+        const overrides = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        if (!isPlainObject(overrides)) {
+          throw new TypeError('thresholds.json debe contener un objeto plano');
+        }
+        const candidate = copyDefaults();
+        for (const state of ['optimo', 'atencion', 'degradado']) {
+          if (overrides[state] === undefined) continue;
+          if (!isPlainObject(overrides[state])) {
+            throw new TypeError(`Override inválido para ${state}`);
+          }
           Object.assign(candidate[state], overrides[state]);
         }
-      }
-      validateThresholds(candidate);
+        validateThresholds(candidate);
 
-      const mtimeAfter = configMtime(configPath);
-      thresholds = candidate;
-      mtimeMs = mtimeBefore;
-      if (mtimeAfter === mtimeBefore) break;
+        const mtimeAfter = configMtime(configPath);
+        thresholds = candidate;
+        mtimeMs = mtimeBefore;
+        if (mtimeAfter === mtimeBefore) break;
+      }
+    } else {
+      validateThresholds(thresholds);
     }
-  } else {
+  } catch (error) {
+    console.error(`[mikrotik] thresholds.json inválido; se usan los umbrales por defecto: ${error?.message}`);
+    thresholds = copyDefaults();
+    try {
+      mtimeMs = configMtime(configPath);
+    } catch {
+      mtimeMs = null;
+    }
     validateThresholds(thresholds);
   }
 

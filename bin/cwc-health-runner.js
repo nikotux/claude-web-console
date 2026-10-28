@@ -86,6 +86,9 @@ async function readOnlyRun(prompt, model, timeoutMs, maxTurns) {
       } else if (m.type === 'result') break;
     }
   })();
+  // Si gana el timeout, q.close() rechaza el for-await: absorber ese rechazo
+  // evita que el runner muera por un unhandled rejection.
+  pump.catch(() => {});
   try { await Promise.race([pump, timeout]); }
   finally { clearTimeout(timer); try { Promise.resolve(q.close?.()).catch(() => {}); } catch { /* noop */ } }
   return text;

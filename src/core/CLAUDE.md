@@ -10,7 +10,11 @@ con ~/.cwc-data/instance.json como default retrocompatible del host;
 autogenerado; caché POR ARCHIVO para no cruzar principales; DEFAULTS genéricos
 vacíos (los valores reales viven en instance.json), deepMerge por union de
 claves — ver módulo env-vars) ·
-auth · users(registro `{username,hash,admin,oversight,lang?,tier?,sponsor?}`;
+auth(sessions.json se persiste atómicamente con modo 0600; los errores de
+lectura distintos de ENOENT se loguean) ·
+onboard-tokens(un token `revoked` nunca valida; en server.js `loginFails` poda
+el mapa de intentos al tope de 5000 IPs) ·
+users(registro `{username,hash,admin,oversight,lang?,tier?,sponsor?}`;
 `oversightFor(username)` da acceso al contenido ajeno solo al host por default y
 lee el flag persistido para los demás; `setOversight` lo actualiza;
 `sponsorshipState(username)` distingue `none` · `awaiting-sponsor` · `sponsored`,
@@ -41,7 +45,9 @@ migración implícita, sin mover nada en disco. `restoreFromTrash` devuelve
 El root del host sigue siendo `config.home`, por lo que su papelera permanece
 en `~/.cwc-trash` con retrocompat total. El cambio cierra un hallazgo CRÍTICO:
 el índice global anterior filtraba nombres/rutas borrados entre usuarios y un
-purge sin id vaciaba la papelera de todos) · recents ·
+purge sin id vaciaba la papelera de todos) ·
+recents(registro EXCLUSIVO del host; `listRecents` filtra por principal: un
+inquilino ve 0 entradas, el host por cookie o token ve las suyas y principal nulo ve 0) ·
 pool(runAdaptivePool — pool de concurrencia ADAPTATIVA transversal;
 MOVIDO acá desde health/pool.js en la coherencia 2026-07-12 porque lo
 consumen salud/tokens/comms/tickets; health/pool.js queda re-exportando
@@ -52,7 +58,9 @@ Zoho) ·
 text-only-query(textOnlyQuery — helper ÚNICO de las corridas del SDK de
 TEXTO PURO/interpretación sin herramientas: encapsula settingSources:[]
 vía settingSourcesFor('none') + las DOS capas de deny de la regla 6
-[PreToolUse+canUseTool, INCONDICIONALES] + carrera de timeout + pump.
+[PreToolUse+canUseTool, INCONDICIONALES] + carrera de timeout + pump. Usa
+`haiku` por default (`sonnet` es opt-in), exporta `DEFAULT_TIMEOUT_MS` = 5 min
+y acepta `abortController`, que aborta la query al vencer el timeout.
 Lo usan retro-runner y ticket-context-runner; NO usarlo si el runner
 necesita herramientas — ese arma su query con su allowlist explícita) ·
 claude-oauth(ÚNICO escritor de `.claude/.credentials.json`: refresca el
@@ -106,7 +114,12 @@ deliberado: el grafo de ~300 KB no contamina la caché compartida que el barrido
 refresca cada 20 s de por vida; `/activity`, poleteado cada ~2 s, no sufre los
 30 s de caché; y la vista no genera su propio latido falso — el observador no se
 observa a sí mismo. `padTelemetry` es un `EventEmitter` best-effort para los
-demás requests del cliente: un fallo al emitir nunca puede romper el request) ·
+demás requests del cliente: un fallo al emitir nunca puede romper el request.
+La caché de GET se indexa por `url + sha256(token)[0..16] + urlPath`; sin token
+no cachea. `startCacheSweep` sólo refresca entradas del host (URL default + tag
+de su token) y poda por TTL las de inquilinos: jamás usa el token host para sus datos) ·
+pad-provision(contraseña aleatoria con `crypto.randomBytes`; el listado de
+workspaces valida `status` y normaliza respuestas array o `{workspaces}`) ·
 closed-envelope(sobre cerrado + ledger de intentos de IA: el enum del
 prompt se genera con `catalogEnum()` desde el MISMO array que valida la
 respuesta; outcomes/errorClass son cerrados y guardan CLASE, nunca el
@@ -132,7 +145,9 @@ colisionar con el `_app.json` de instancia. GOTCHA: `os.homedir()` sigue a
 dato de INSTANCIA (no per-usuario) se ancla a `config.home`, nunca a
 `os.homedir()`, o el runner del inquilino lee un path fantasma. Fue la causa de
 que el chat de una usuaria patrocinada dijera "Microsoft no está conectado"
-con la conexión sana (2026-09-16)) ·
+con la conexión sana (2026-09-16). `getAccessToken` deduplica refresh concurrentes
+por `usuario:proveedor` con un Map de promesas en vuelo; relee la conexión antes
+y después de refrescar para no resucitar una borrada ni pisar la versión fresca) ·
 connections-microsoft(device code
 flow) · connections-zoho(grant code Self Client + getOrg +
 identidad por listado de agentes) · connections-tolkien(cookie de sesión
@@ -146,7 +161,11 @@ de otra persona. Es la misma familia de invariantes que el aislamiento de Pad
 por usuario. Las operaciones que ESCRIBEN hacia afuera son
 `ms_correo_enviar`, `ms_correo_responder` y `ms_calendario_crear`; por eso el
 servidor NO se carga en salas de Aduana. Sólo se carga cuando esa persona tiene
-Microsoft conectado) ·
+Microsoft conectado. Los límites `YYYY-MM-DD` se anclan a
+`T00:00:00-05:00`; `-05:00` sólo se agrega a horas sin zona) ·
+microsoft-mail-client(`fetchMailSample`/`fetchMailBodies` leen en paralelo con
+`runAdaptivePool` (max 3/4, inicio 2), hacen backoff ante 429 y conservan orden
+por índice y la misma semántica de primera falla del bucle serial) ·
 zoho-desk-client(ESCRITURA a
 Desk con la identidad del USUARIO: getTicket/assignTicket/
 updateTicket/addComment/uploadAttachment/createTicket; resuelve el
@@ -168,7 +187,11 @@ del sitio YA ES la biblioteca "Shared Documents" ⇒ el path del item es
 `/drive/root/children` pero con path = `/drive/root:{path}:/children`
 — nunca `root::/children`; el path se codifica POR SEGMENTO (espacios
 → %20, barras intactas). Un 401/403 se traduce a un mensaje accionable
-que pide reconectar Microsoft porque el token viejo no tiene el scope) ·
+que pide reconectar Microsoft porque el token viejo no tiene el scope.
+`downloadFile(...,{root})` y `uploadFile(...,{as,root})` confinan la ruta local
+con `path.relative` + `realpath` del ancestro existente para destinos nuevos.
+Sin `root`, el HOME aísla al inquilino y el host conserva el comportamiento;
+PENDIENTE: bin/cwc-sharepoint.js debe pasar `root` explícito) ·
 tool-policy(NÚCLEO de gobernanza de permisos del chat interactivo —
 NO es motor, es plomería in-process como sdk-settings/paths: el
 estado del modo lo persiste el server (Chat.permissionMode→chats.json)
@@ -293,7 +316,13 @@ minutos, UN SOLO USO, queda registrado; lo emite la CLI
 bin/cwc-forbidden-override.js. Paths por resolveDataDir() = multi-tenant
 correcto. LÍMITE HONESTO: sólo entran lecciones traducibles a "no ejecutes
 X"; "escribí PRs más chicos" NO es de este registro y no se fuerza) ·
-claude-model(VALID_MODELS/encodeCwd/resolveModelArg — SEGUNDO REPOINT DE TIER 2026-09-24 (tras el de 2026-07-24 a Opus 5): el alias interno 'opus' resuelve a `claude-opus-5-5` SOLO al entregarse a `claude --model`/`q.setModel()`; el alias NO cambia, así keyOf/pin-pout/color/router siguen intactos. OJO: el effort default de Opus 5.5 es `medium` (en Opus 5 era `high`), por eso chat/index.js y el runner lo mandan explícito y NO se debe quitar. Call-sites: bin/cwc-chat-runner.js (spawn + set_model; `currentModel` guarda el ALIAS sin resolver porque alimenta el eco `model` que adopta el server) y terminal/sessions.js (TUI). Un modelo nuevo del mismo tier = una entrada más en MODEL_ARG_OVERRIDES) · claude-state(observador —
+claude-model(VALID_MODELS/encodeCwd/resolveModelArg — SEGUNDO REPOINT DE TIER 2026-09-24 (tras el de 2026-07-24 a Opus 5): el alias interno 'opus' resuelve a `claude-opus-5-5` SOLO al entregarse a `claude --model`/`q.setModel()`; el alias NO cambia, así keyOf/pin-pout/color/router siguen intactos. OJO: el effort default de Opus 5.5 es `medium` (en Opus 5 era `high`), por eso chat/index.js y el runner lo mandan explícito y NO se debe quitar. Call-sites: bin/cwc-chat-runner.js (spawn + set_model; `currentModel` guarda el ALIAS sin resolver porque alimenta el eco `model` que adopta el server) y terminal/sessions.js (TUI). Un modelo nuevo del mismo tier = una entrada más en MODEL_ARG_OVERRIDES) ·
+model-router(sin constantes derivadas de `os.homedir()`: `logDecision/logTurn(entry,{dataDir})`,
+`readTurnMetrics/analyzeCalibration({dataDir})`, `readWindowPressure(dataDir)` y
+`learnedSignalBias(text,now,{dataDir})`, cuya caché es por dataDir. Sin dataDir usa
+`resolveDataDir()` del proceso. PENDIENTE: chat/index.js aún no pasa el dataDir del dueño,
+por lo que el server registra chats de inquilinos en el data-dir del host) ·
+claude-state(observador —
 estado por PANE de tmux primero: cwc-observe.js captura
 $TMUX_PANE (2026-07-05, fix del Pac-Man que no masticaba al
 reactivarse una sesión por interfono: el mapeo era SOLO por cwd
@@ -367,8 +396,13 @@ zombi robado). IDENTIDAD por "handle": TUI=`tmux:<sesión>`,
 chat=`claude:<sessionId>` — una TUI escucha en ambos. buildDirectory
 reconstruye el mapa nombre↔handle SIN estado del server (tmux del
 socket cwc + chats.json + titles.json). resolveTarget mapea el
-`/btw <nombre>` a un handle. Lo consumen bin/cwc-bus.js (hooks/CLI) y
-el módulo `interfono` (panel, solo lee). gc() oportunista en cada
+`/btw <nombre>` a un handle. Las escrituras usan `writeJsonAtomic` y
+markDelivered/markTombstonesDelivered releen y fusionan el disco para no pisar
+entregas concurrentes. `buildDirectory({owner})`/`resolveTarget(arg,{owner})`
+filtran por dueño; sin owner, un HOME bajo `.cwc-users/<id>` aplica scope implícito
+desde config.home o el home de passwd, mientras el host conserva la vista completa.
+El error de destino ausente no enumera sesiones. Lo consumen bin/cwc-bus.js
+(hooks/CLI) y el módulo `interfono` (panel, solo lee). gc() oportunista en cada
 invocación)
 
 ## Multi-tenant (multiusuario en una consola)

@@ -127,15 +127,32 @@ export function spawnAnalyzeRunner(id, owner) {
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
   const logFd = fs.openSync(logFile, 'a');
+  const recordSpawnError = (error) => {
+    try {
+      const current = readAnalyzeJob(id, owner) || {};
+      writeAnalyzeJob(id, {
+        ...current,
+        status: 'error', analysis: null,
+        error: String(error?.message || error).slice(0, 300), updatedAt: Date.now(),
+      }, owner);
+    } catch (writeError) {
+      // El listener jamás debe tumbar Express aunque también falle persistir.
+      console.error('No se pudo registrar el fallo del runner de projects:', writeError);
+    }
+  };
   let child;
   try {
     child = spawn(process.execPath, [RUNNER, id, owner], {
       detached: true, stdio: ['ignore', logFd, logFd], env,
     });
+    child.on('error', recordSpawnError);
+    child.unref();
+  } catch (error) {
+    recordSpawnError(error);
+    throw error;
   } finally {
     fs.closeSync(logFd);
   }
-  child.unref();
 }
 
 export function analyzePrompt(before, after) {

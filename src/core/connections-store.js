@@ -33,6 +33,7 @@ const DEFAULT_APP_CONFIG = {
   microsoft: { clientId: '', tenantId: 'common' },
   zoho: { clientId: '', clientSecret: '', dc: 'com' },
 };
+const refreshInFlight = new Map();
 
 export const JOB_ID_RE = /^[A-Za-z0-9_-]+$/;
 
@@ -334,36 +335,53 @@ export async function getAccessToken(username, provider) {
   if (meta?.kind === 'apikey') {
     throw new Error(`${provider} no usa OAuth: usá getApiCredential()`);
   }
-  const c = readConnection(username, provider);
-  if (!c) throw new Error(`Sin conexión de ${provider} para este usuario.`);
-  if (c.accessToken && c.expiresAt > Date.now() + 60_000) return c.accessToken;
+  const connection = readConnection(username, provider);
+  if (!connection) throw new Error(`Sin conexión de ${provider} para este usuario.`);
+  if (connection.accessToken && connection.expiresAt > Date.now() + 60_000) return connection.accessToken;
 
-  // El refresh token de un Self Client sólo vale para el client_id que lo emitió.
-  // Por eso la conexión guarda `appClientId` y acá se elige la config que COINCIDE
-  // (la del usuario o la de instancia), y sólo si no hay match se cae a la
-  // efectiva. Refrescar con el client_id equivocado invalida la conexión entera.
-  const cfg = appConfigForConnection(username, provider, c);
-  let t;
-  if (provider === 'microsoft') {
-    const { clientId, tenantId } = cfg.microsoft;
-    const scopes = Array.isArray(c.scopes) && c.scopes.length > 0 ? c.scopes : undefined;
-    t = await ms.refreshAccessToken({ clientId, tenantId, refreshToken: c.refreshToken, scopes });
-  } else if (provider === 'zoho') {
-    const { clientId, clientSecret, dc } = cfg.zoho;
-    t = await zoho.refreshAccessToken({ clientId, clientSecret, refreshToken: c.refreshToken, dc });
-  } else {
-    throw new Error(`Proveedor inválido: ${provider}`);
-  }
+  const key = `${username}:${provider}`;
+  const current = refreshInFlight.get(key);
+  if (current) return current;
 
-  const next = {
-    ...c,
-    accessToken: t.access_token,
-    refreshToken: t.refresh_token || c.refreshToken,
-    expiresAt: Date.now() + (Number(t.expires_in) || 3600) * 1000,
-    error: null,
-  };
-  writeConnection(username, provider, next);
-  return next.accessToken;
+  const refresh = (async () => {
+    const c = readConnection(username, provider);
+    if (!c) throw new Error(`Sin conexión de ${provider} para este usuario.`);
+    if (c.accessToken && c.expiresAt > Date.now() + 60_000) return c.accessToken;
+
+    // El refresh token de un Self Client sólo vale para el client_id que lo emitió.
+    // Por eso la conexión guarda `appClientId` y acá se elige la config que COINCIDE
+    // (la del usuario o la de instancia), y sólo si no hay match se cae a la
+    // efectiva. Refrescar con el client_id equivocado invalida la conexión entera.
+    const cfg = appConfigForConnection(username, provider, c);
+    let t;
+    if (provider === 'microsoft') {
+      const { clientId, tenantId } = cfg.microsoft;
+      const scopes = Array.isArray(c.scopes) && c.scopes.length > 0 ? c.scopes : undefined;
+      t = await ms.refreshAccessToken({ clientId, tenantId, refreshToken: c.refreshToken, scopes });
+    } else if (provider === 'zoho') {
+      const { clientId, clientSecret, dc } = cfg.zoho;
+      t = await zoho.refreshAccessToken({ clientId, clientSecret, refreshToken: c.refreshToken, dc });
+    } else {
+      throw new Error(`Proveedor inválido: ${provider}`);
+    }
+
+    const accessToken = t.access_token;
+    const fresh = readConnection(username, provider);
+    if (!fresh) return accessToken;
+    const next = {
+      ...fresh,
+      accessToken,
+      refreshToken: t.refresh_token || c.refreshToken,
+      expiresAt: Date.now() + (Number(t.expires_in) || 3600) * 1000,
+      error: null,
+    };
+    writeConnection(username, provider, next);
+    return next.accessToken;
+  })().finally(() => {
+    if (refreshInFlight.get(key) === refresh) refreshInFlight.delete(key);
+  });
+  refreshInFlight.set(key, refresh);
+  return refresh;
 }
 
 function apiCredentialFromConnection(provider, connection) {

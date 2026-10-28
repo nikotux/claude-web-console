@@ -30,7 +30,8 @@ INVARIANTE 7 en `POST /claim-release`: para un caller no privilegiado, “no
 existe” y “existe pero es ajeno” devuelven el MISMO 404
 (`No hay un claim propio para ese archivo.`), porque distinguir el texto
 filtraba actividad de sesiones ajenas. Host/admin conserva el diagnóstico
-informativo. `/send` y `/claim-release` montan el wrapper local `jsonBody()`
+informativo. `/send` exige strings y limita `text` a 4000 caracteres;
+`/claim-release` limita `file` y el `handle` opcional a 512. Ambos montan el wrapper local `jsonBody()`
 para traducir fallos de parseo a JSON 400. GOTCHA: hoy esa defensa modular es
 INERTE en la práctica, porque `server.js` monta antes el
 `express.json({ limit: '256kb' })` global (línea 122), antes de montar `/api`

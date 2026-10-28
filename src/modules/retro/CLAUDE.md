@@ -27,6 +27,12 @@ runner de inquilino recibe HOME y `CWC_DATA_DIR` aislados mediante
 transcript se lee desde `userClaudeDir(owner)` o desde el `claudeDir` ya
 resuelto por el llamador. No quedan constantes de módulo que congelen el HOME
 del server; el host conserva las rutas históricas bajo `~/.cwc-data`.
+Salud 174 / `console:PLAN-3495`: `owner-dirs.js` es el resolver inyectado
+config-free; en runners valida el dueño contra `CWC_DATA_DIR` y falla cerrado.
+`server-shared.js` es el puente que importa `user-space`, instala resolvers y
+lo cargan `chat/index.js`, `retro/index.js`, `sweep-shared.js` y el CLI rehydrate.
+`promote-targets.js` deja las literales de destinos libres de config global.
+`sweep-shared`/`sweep-runner` y context-rehydrate son host-only y pueden cargar `user-space`.
 STORE = Pad LOCAL (store.js, workspace 'console', colección
 'mejora-continua'/MC, molde de learning/store.js: async, read-modify-
 write). 1 lección = 1 item {status propuesta|aprobada|promovida|
@@ -143,8 +149,8 @@ ambos archivos casi no cambió. NO borrar los backups
 `~/tolkien/CLAUDE.local.md.bak-BUG1927-2026-07-26` · convencion =
 `promoteToConvention` crea una regla `active` en la colección
 `conventions`, con `scope:all`, `priority:should` y trigger derivado de
-la categoría. Es idempotente por título exacto: si ya existe actualiza
-su contenido; el cuerpo termina con la procedencia MC y el link
+la categoría. Solo reutiliza título si el contenido confirma la procedencia
+de la misma lección MC; si no, crea otra convención. El cuerpo termina con la procedencia MC y el link
 `implements` hacia la lección es best-effort. Solo memoria/claude-md
 exigen dir de proyecto (`TARGETS_NEED_DIR`); contexto/convencion no.
 `console:BUG-3241`: cada destino que escribe archivos lo hace en el espacio de
@@ -289,8 +295,10 @@ memoria|claude-md|contexto|convencion|contrato|invariante) · POST
 paramétrica /:id. Estado
 file-based del job en ~/.cwc-data/retro/<id>.json (id sha1 del
 sessionId; dedup: no re-gasta si ya done/fresco) + retro.log +
-retro-activity.json (log local append-only). Frontend
-public/js/modules/retro/retro.js: sección de sidebar IZQUIERDA
+retro-activity.json (log local append-only).
+Blindajes HTTP A24: email/Teams/verify requieren admin DEL HOST; `full` es booleano estricto y los lotes `refs`/`merge`/`ids` aceptan hasta 50 elementos.
+Los ids de `/feedback/:jobId` son SHA-1 truncados a 24 hex; cualquier otro formato responde 400. El auto-cebado de verify espera 30 min tras un error.
+Frontend public/js/modules/retro/retro.js: sección de sidebar IZQUIERDA
 (data-module="retro", tras comms) con badge de propuestas + tablero
 modal colapsable+árbol (.mc-* en style.css) que agrupa por estado.
 UX SIMPLIFICADA (2026-07-12, pedido de Niko: el tablero abrumaba con

@@ -13,9 +13,8 @@
 // observamos alimentan tokens60/tps.
 //
 // Claude repite el mismo message.id en varias líneas del transcript. El seed
-// dedupea con un Set local por archivo, descartable al terminar, porque
-// seenClaudeIds es un dedupe temporal del ledger (TTL 120 s), no una fuente
-// histórica confiable para reconstruir totales.
+// dedupea con un Set local por archivo y vuelca esos ids al dedupe temporal del
+// ledger al terminar, para cubrir también el borde entre seed y append.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { hostUser, userClaudeDir, userSpace } from '../../core/user-space.js';
@@ -169,12 +168,20 @@ function makeFileEntry(side, key, st) {
     size: st.size,
     mtimeMs: st.mtimeMs,
     seeded: false,
+    lastCodexTotal: null,
   };
 }
 
 function addFileTotal(entry, ev) {
   entry.total += ev.tokens;
   entry.lastTs = Math.max(entry.lastTs, ev.ts);
+}
+
+function isRepeatedCodexTotal(entry, ev) {
+  if (entry.side !== 'codex' || ev.totalUsage == null) return false;
+  if (entry.lastCodexTotal === ev.totalUsage) return true;
+  entry.lastCodexTotal = ev.totalUsage;
+  return false;
 }
 
 function parseTokenLine(line, tokensFromLine, now) {
@@ -189,13 +196,14 @@ function parseTokenLine(line, tokensFromLine, now) {
   return ev && ev.tokens > 0 ? ev : null;
 }
 
-async function seedFile(file, entry, tokensFromLine, st, now) {
+async function seedFile(file, entry, tokensFromLine, st, now, state) {
   entry.total = 0;
   entry.lastTs = 0;
   entry.offset = 0;
   entry.size = st.size;
   entry.mtimeMs = st.mtimeMs;
   entry.seeded = false;
+  entry.lastCodexTotal = null;
 
   const maxOffset = Math.min(st.size, SEED_MAX);
   const seenIds = entry.side === 'claude' ? new Set() : null;
@@ -228,6 +236,10 @@ async function seedFile(file, entry, tokensFromLine, st, now) {
               }
               seenIds.add(ev.id);
             }
+            if (isRepeatedCodexTotal(entry, ev)) {
+              start = nl + 1;
+              continue;
+            }
             addFileTotal(entry, ev);
           }
           start = nl + 1;
@@ -246,7 +258,7 @@ async function seedFile(file, entry, tokensFromLine, st, now) {
     if (ev) {
       if (!seenIds || !ev.id || !seenIds.has(ev.id)) {
         if (seenIds && ev.id) seenIds.add(ev.id);
-        addFileTotal(entry, ev);
+        if (!isRepeatedCodexTotal(entry, ev)) addFileTotal(entry, ev);
       }
     }
   }
@@ -255,6 +267,7 @@ async function seedFile(file, entry, tokensFromLine, st, now) {
   entry.size = st.size;
   entry.mtimeMs = st.mtimeMs;
   entry.seeded = true;
+  if (seenIds) for (const id of seenIds) state.seenClaudeIds.set(id, now);
   return true;
 }
 
@@ -287,7 +300,7 @@ async function readAppendedEvents(file, side, key, extractEvent, tokensFromLine,
   if (!entry) {
     entry = makeFileEntry(side, key, st);
     state.files.set(file, entry);
-    const seeded = await seedFile(file, entry, tokensFromLine, st, now);
+    const seeded = await seedFile(file, entry, tokensFromLine, st, now, state);
     if (!seeded) state.files.delete(file);
     return [];
   }
@@ -298,7 +311,7 @@ async function readAppendedEvents(file, side, key, extractEvent, tokensFromLine,
   entry.mtimeMs = st.mtimeMs;
 
   if (st.size < entry.offset) {
-    const seeded = await seedFile(file, entry, tokensFromLine, st, now);
+    const seeded = await seedFile(file, entry, tokensFromLine, st, now, state);
     if (!seeded) state.files.delete(file);
     return [];
   }
@@ -347,6 +360,7 @@ async function readAppendedEvents(file, side, key, extractEvent, tokensFromLine,
   for (const line of consumed.toString('utf8').split('\n')) {
     const ev = parseTokenLine(line, extractEvent, now);
     if (!ev) continue;
+    if (isRepeatedCodexTotal(entry, ev)) continue;
     addFileTotal(entry, ev);
     out.push(ev);
   }
@@ -446,7 +460,8 @@ function extractClaudeEvent(obj, now, state) {
 
 function codexTokensFromLine(obj, now) {
   if (obj?.type !== 'event_msg' || obj.payload?.type !== 'token_count') return null;
-  const usage = obj.payload?.info?.last_token_usage;
+  const info = obj.payload?.info;
+  const usage = info?.last_token_usage;
   if (!usage) return null;
   // Mismo criterio que Claude: el cache read pesa 0.1. En Codex `input_tokens`
   // YA INCLUYE `cached_input_tokens` (verificado: input 21808 ⊇ cached 20864, y
@@ -462,6 +477,9 @@ function codexTokensFromLine(obj, now) {
     id: null,
     ts: Date.parse(obj.timestamp || '') || now,
     tokens,
+    totalUsage: Number.isFinite(info.total_token_usage?.total_tokens)
+      ? info.total_token_usage.total_tokens
+      : null,
   };
 }
 

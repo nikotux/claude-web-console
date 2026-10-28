@@ -40,10 +40,32 @@ function logLine(s) {
   catch { /* el log nunca puede tumbar el runner */ }
 }
 
-function writeState(s) {
-  logLine(`[estado] ${s.status || 'desconocido'}`);
-  try { fs.writeFileSync(jobFile, JSON.stringify({ ...s, user: USER, pid: process.pid, ts: Date.now() }), { mode: 0o600 }); }
-  catch (e) { console.error('[onboard-runner] no pude escribir estado:', e.message); }
+let owned = false;
+function writeState(s, { claim = false } = {}) {
+  const status = s.status || 'desconocido';
+  if (!claim && !owned) {
+    logLine(`[estado] ${status}`);
+    return;
+  }
+  if (!claim) {
+    try {
+      const current = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
+      if (Number(current.pid) !== process.pid) {
+        logLine(`[estado] ${status} ignorado: job reservado por otra corrida`);
+        return;
+      }
+    } catch {
+      logLine(`[estado] ${status} ignorado: job reservado por otra corrida`);
+      return;
+    }
+  }
+  logLine(`[estado] ${status}`);
+  try {
+    fs.writeFileSync(jobFile, JSON.stringify({ ...s, user: USER, pid: process.pid, ts: Date.now() }), { mode: 0o600 });
+    if (claim) owned = true;
+  } catch (e) {
+    console.error('[onboard-runner] no pude escribir estado:', e.message);
+  }
 }
 
 const stripAnsi = (s) => s
@@ -56,7 +78,7 @@ const TOKEN_RE = /sk-ant-[A-Za-z0-9_-]{20,}/; // token largo de setup-token (val
 const workspace = userWorkspace(USER);
 logLine(`[inicio] usuario=${USER} cwd=${workspace} hora=${new Date().toISOString()}`);
 ensureUserSpace(USER);
-writeState({ status: 'starting' });
+writeState({ status: 'starting' }, { claim: true });
 
 const env = userRunnerEnv(USER); // HOME = espacio del inquilino, env limpio
 delete env.CLAUDE_CODE_OAUTH_TOKEN; // login FRESCO (que use la cuenta del inquilino)

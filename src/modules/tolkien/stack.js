@@ -30,6 +30,15 @@ const INDEX_COUNT = 400;
 const LOCK_WAIT_MS = 60_000;
 const LOCK_STALE_MS = 30 * 60_000;
 
+function statusError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+const badRequest = (message) => statusError(400, message);
+const conflict = (message) => statusError(409, message);
+
 const PORT_BASES = Object.freeze({
   DB_HOST_PORT: 5433,
   REDIS_HOST_PORT: 6380,
@@ -39,20 +48,20 @@ const PORT_BASES = Object.freeze({
 
 function cleanUser(user) {
   const value = String(user || '');
-  if (!USER_RE.test(value)) throw new Error(`Usuario de consola inválido: ${value}`);
+  if (!USER_RE.test(value)) throw badRequest(`Usuario de consola inválido: ${value}`);
   return value;
 }
 
 function cleanSessionId(sessionId) {
   const value = String(sessionId || '');
-  if (!SESSION_RE.test(value)) throw new Error('sessionId inválido.');
+  if (!SESSION_RE.test(value)) throw badRequest('sessionId inválido.');
   return value;
 }
 
 function composeNameFor(user) {
   const slug = cleanUser(user).toLowerCase().replace(/[^a-z0-9_-]/g, '-');
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(slug)) {
-    throw new Error(`El usuario ${user} no produce un nombre Compose seguro.`);
+    throw badRequest(`El usuario ${user} no produce un nombre Compose seguro.`);
   }
   return `tolkien-${slug}`;
 }
@@ -78,7 +87,7 @@ function preferredIndex(user, hostOwner = HOST_USER) {
 export function identityForIndex(user, index) {
   const owner = cleanUser(user);
   if (!Number.isInteger(index) || index < 0 || index >= INDEX_COUNT) {
-    throw new Error(`Índice de stack inválido: ${index}`);
+    throw badRequest(`Índice de stack inválido: ${index}`);
   }
   return {
     index,
@@ -170,7 +179,7 @@ async function acquireLock(lockFile, timeoutMs = LOCK_WAIT_MS) {
         if (readErr?.code === 'ENOENT') continue;
       }
       if (Date.now() - started >= timeoutMs) {
-        throw new Error(`Timeout esperando el lock ${path.basename(lockFile)}.`);
+        throw conflict(`Timeout esperando el lock ${path.basename(lockFile)}.`);
       }
       await wait(50);
     }
@@ -225,20 +234,20 @@ export function assertIdentityGuards(user, identity, assignments = readAssignmen
   const expectedProject = composeNameFor(owner);
   const hostProject = composeNameFor(HOST_USER);
   if (identity?.COMPOSE_PROJECT_NAME !== expectedProject) {
-    throw new Error(
+    throw conflict(
       `GUARD DURO: ${owner} tiene COMPOSE_PROJECT_NAME=${identity?.COMPOSE_PROJECT_NAME || '(vacío)'}, `
       + `pero debe ser ${expectedProject}.`,
     );
   }
   if (owner !== HOST_USER && identity.COMPOSE_PROJECT_NAME === hostProject) {
-    throw new Error(
+    throw conflict(
       `GUARD DURO: el stack del inquilino ${owner} coincide con el stack del host ${hostProject}.`,
     );
   }
   for (const state of assignments) {
     if (!state || state.user === owner) continue;
     if (state.identity?.COMPOSE_PROJECT_NAME === identity.COMPOSE_PROJECT_NAME) {
-      throw new Error(
+      throw conflict(
         `GUARD DURO: ${identity.COMPOSE_PROJECT_NAME} ya pertenece a ${state.user}; `
         + `no se operará el stack de ${owner}.`,
       );
@@ -246,7 +255,7 @@ export function assertIdentityGuards(user, identity, assignments = readAssignmen
     const otherPorts = new Set(allPorts(state.identity));
     const collision = allPorts(identity).find((port) => otherPorts.has(port));
     if (collision) {
-      throw new Error(
+      throw conflict(
         `GUARD DURO: el puerto ${collision} del stack de ${owner} ya está asignado a ${state.user}.`,
       );
     }
@@ -324,10 +333,10 @@ export function previewStackIdentity(
   const project = composeNameFor(owner);
   const hostProject = composeNameFor(hostOwner);
   if (owner !== hostOwner && project === hostProject) {
-    throw new Error(`GUARD DURO: ${owner} colisiona con el proyecto del host.`);
+    throw conflict(`GUARD DURO: ${owner} colisiona con el proyecto del host.`);
   }
   if (assignments.some((state) => state.user !== owner && state.identity?.COMPOSE_PROJECT_NAME === project)) {
-    throw new Error(`GUARD DURO: ${project} ya está asignado a otro usuario.`);
+    throw conflict(`GUARD DURO: ${project} ya está asignado a otro usuario.`);
   }
   const blocked = new Set(occupiedPorts.map(Number));
   for (const state of assignments) {
@@ -342,7 +351,7 @@ export function previewStackIdentity(
     if (owner === hostOwner && preserveHostIndex && step === 0) return identity;
     if (allPorts(identity).every((port) => !blocked.has(port))) return identity;
   }
-  throw new Error(`No quedan índices de puertos libres para ${owner}.`);
+  throw conflict(`No quedan índices de puertos libres para ${owner}.`);
 }
 
 export async function resolveStackIdentity(
@@ -360,10 +369,10 @@ export async function resolveStackIdentity(
 
     const project = composeNameFor(owner);
     if (owner !== HOST_USER && project === composeNameFor(HOST_USER)) {
-      throw new Error(`GUARD DURO: ${project} es el stack del host.`);
+      throw conflict(`GUARD DURO: ${project} es el stack del host.`);
     }
     if (assignments.some((state) => state.identity.COMPOSE_PROJECT_NAME === project)) {
-      throw new Error(`GUARD DURO: ${project} ya pertenece a otro usuario.`);
+      throw conflict(`GUARD DURO: ${project} ya pertenece a otro usuario.`);
     }
 
     const assignedPorts = new Set(assignments.flatMap((state) => allPorts(state.identity)));
@@ -390,7 +399,7 @@ export async function resolveStackIdentity(
       });
       return identity;
     }
-    throw new Error(`No hay un índice con los cuatro puertos libres para ${owner}.`);
+    throw conflict(`No hay un índice con los cuatro puertos libres para ${owner}.`);
   });
 }
 
@@ -593,13 +602,13 @@ export async function requestStackUp(
   // alcanza para que un request nuevo se apropie de una sesión ajena.
   const ownerProven = ['chat-registry', 'tmux-has-session'].includes(liveness?.source);
   if (liveness?.status !== 'alive' || !ownerProven) {
-    throw new Error(
+    throw conflict(
       `No se puede reclamar el stack: la sesión ${id} no está confirmada como viva para ${owner}.`,
     );
   }
   const portCheck = await verifyIdentityPorts(identity, { allowOwned: true });
   if (!portCheck.ok) {
-    throw new Error(
+    throw conflict(
       `Los puertos persistidos del stack de ${owner} no están libres: `
       + portCheck.conflicts.map((item) => `${item.port} (${item.reason})`).join(', '),
     );

@@ -13,8 +13,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
-import { resolveDataDir } from '../../core/data-dir.js';
-import { hostUser, userDataDir, userRunnerEnv } from '../../core/user-space.js';
+import { retroDataDirFor, retroRunnerEnvFor } from './owner-dirs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..');
@@ -28,7 +27,7 @@ export const PR_ENTRY_TTL_MS = 30 * 60 * 1000;
 export const ROUND_EXCERPT = 240;
 export const MAX_ROUNDS_PER_PR = 40;
 
-function dataDirFor(owner = null) { return owner ? userDataDir(owner) : resolveDataDir(); }
+function dataDirFor(owner = null) { return retroDataDirFor(owner); }
 export function verifyFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-verify.json'); }
 function lockFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-verify.lock'); }
 function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-verify.log'); }
@@ -100,7 +99,7 @@ export function spawnRetroVerifyRunner({ full = false, owner = null } = {}) {
   ensureDir(owner);
   const logFile = logFileFor(owner);
   const logFd = fss.openSync(logFile, 'a');
-  const env = owner && owner !== hostUser() ? userRunnerEnv(owner) : process.env;
+  const env = retroRunnerEnvFor(owner, { oauth: false });
   const child = spawn(process.execPath, [RUNNER, ...(full ? ['--full'] : [])], {
     detached: true, stdio: ['ignore', logFd, logFd], env,
   });

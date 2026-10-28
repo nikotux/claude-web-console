@@ -35,8 +35,9 @@ function requireAdmin(req, res, next) {
 function liveRunnerPids() {
   let out = '';
   try {
-    out = execFileSync('pgrep', ['-f', 'cwc-chat-runner\\.js'], { encoding: 'utf8' });
+    out = execFileSync('pgrep', ['-f', 'cwc-chat-runner\\.js'], { encoding: 'utf8', timeout: 5000 });
   } catch (e) {
+    if (e.signal || e.killed) throw e; // timeout/señal: no fingir que no hay runners
     if (e.status === 1) return []; // sin runners vivos
     throw e;
   }
@@ -72,10 +73,10 @@ export default {
     r.get('/users/:username/identity', (req, res) => {
       let id;
       try { id = sanitizeUserId(req.params.username); } catch { /* responde 404 abajo */ }
-      if (!id || !listUsers().some((user) => user.username === id)) {
-        return res.status(404).json({ error: 'Usuario no encontrado.' });
-      }
       try {
+        if (!id || !listUsers().some((user) => user.username === id)) {
+          return res.status(404).json({ error: 'Usuario no encontrado.' });
+        }
         const identity = loadInstance({ dataDir: userDataDir(id) }).identity;
         res.json({ identity });
       } catch (e) {
@@ -86,10 +87,10 @@ export default {
     r.post('/users/:username/identity', (req, res) => {
       let id;
       try { id = sanitizeUserId(req.params.username); } catch { /* responde 404 abajo */ }
-      if (!id || !listUsers().some((user) => user.username === id)) {
-        return res.status(404).json({ error: 'Usuario no encontrado.' });
-      }
       try {
+        if (!id || !listUsers().some((user) => user.username === id)) {
+          return res.status(404).json({ error: 'Usuario no encontrado.' });
+        }
         const dataDir = userDataDir(id);
         const clean = pickIdentity(req.body);
         const next = saveInstance({ identity: clean }, { dataDir });
@@ -194,6 +195,13 @@ export default {
           error: 'Envía { sponsor: null } para revocar o { awaiting: true } para dejar al usuario esperando sponsor.',
         });
       }
+      if (username === hostUser()) {
+        return res.status(409).json({ error: 'El usuario del sistema no se administra desde acá.' });
+      }
+      const principal = principalOf(req);
+      if (principal && principal.username === username) {
+        return res.status(409).json({ error: 'No puedes modificar tu propio usuario.' });
+      }
       try {
         if (revoke) setUserSponsor(username, null);
         else setAwaitingSponsor(username);
@@ -222,7 +230,12 @@ export default {
       try {
         deleteUser(username);
         // Usuario eliminado ⇒ ninguna sesión suya puede seguir viva.
-        invalidateSessionsForUser(username);
+        try {
+          invalidateSessionsForUser(username);
+        } catch (e) {
+          // Best-effort: la baja profunda debe intentarse aunque falle la sesión.
+          console.error('[admin] no se pudieron invalidar las sesiones del usuario eliminado:', e?.message || e);
+        }
         let cleanup = null;
         try {
           cleanup = await deprovisionUser(username);

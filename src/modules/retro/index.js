@@ -43,6 +43,8 @@ import { reqPadContext, reqSharedPadContext } from '../../core/pad-context.js';
 import { systemScopeFor } from '../../core/system-scope.js';
 import { deleteItem as padDeleteItem } from '../../core/pad-service-client.js';
 import { hardRulesText } from '../health/shared.js';
+// Instala primero los resolvers owner-scoped usados por todo retro del server.
+import './server-shared.js';
 import {
   listLessons, getLesson, setStatus, deleteLesson, listActivity, markPromoted, revertPromotion,
   mergeLessons, upsertLesson, setDestination, MC_ID_RE,
@@ -54,7 +56,7 @@ import {
 } from './curate-shared.js';
 import {
   feedbackJobId, readFeedbackJob, writeFeedbackJob, isFeedbackFreshRunning,
-  feedbackJobResult, spawnRetroFeedbackRunner,
+  feedbackJobResult, spawnRetroFeedbackRunner, FEEDBACK_JOB_ID_RE,
 } from './feedback-shared.js';
 import { readEmailScan, isEmailScanRunning, spawnRetroEmailRunner } from './email-shared.js';
 import { readTeamsFeedbackScan, isTeamsFeedbackScanRunning, spawnRetroTeamsRunner } from './teams-feedback-shared.js';
@@ -67,6 +69,9 @@ import {
   isShareOptedOut, setShareOptOut, markUnsharedFingerprint, unshareLessonFromPool,
   listPoolLessons, getPoolLesson,
 } from './pool.js';
+
+const VERIFY_ERROR_BACKOFF_MS = 30 * 60 * 1000;
+const MAX_APPLY_IDS = 50;
 
 function sendErr(res, e) {
   if (e?.badRequest) return res.status(400).json({ error: e.message });
@@ -175,10 +180,14 @@ export default {
         // estado persistido, regla 2). Acotado al admin del host sobre el
         // workspace 'console': un inquilino NO dispara lecturas del repo externo.
         try {
-          const own = !ctx || !ctx.workspace || ctx.workspace === 'console';
-          if (isAdmin(req) && own
+          const verifyState = readVerifyState(owner);
+          const lastErrorAt = Number(verifyState.errorAt || verifyState.startedAt) || 0;
+          const errorBackoff = verifyState.status === 'error'
+            && lastErrorAt > 0
+            && Date.now() - lastErrorAt < VERIFY_ERROR_BACKOFF_MS;
+          if (isAdmin(req) && scope.isHost && !errorBackoff
             && lessons.some((l) => l.category === 'feedback-cliente' && l.status === 'promovida')
-            && !isVerifyRunning(owner) && isVerifyStale(readVerifyState(owner), owner)) {
+            && !isVerifyRunning(owner) && isVerifyStale(verifyState, owner)) {
             spawnRetroVerifyRunner({ owner });
           }
         } catch { /* best-effort: nunca rompe el listado */ }
@@ -349,6 +358,9 @@ export default {
 
     r.get('/feedback/:jobId', (req, res) => {
       try {
+        if (!FEEDBACK_JOB_ID_RE.test(req.params.jobId)) {
+          return res.status(400).json({ error: 'Id de feedback inválido.' });
+        }
         const owner = systemScopeFor(req).user;
         res.json({ id: req.params.jobId, ...feedbackJobResult(readFeedbackJob(req.params.jobId, owner)) });
       }
@@ -359,7 +371,9 @@ export default {
     r.post('/email-refresh', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'El escaneo de correo consume tokens (requiere administrador).' });
       try {
-        const owner = systemScopeFor(req).user;
+        const scope = systemScopeFor(req);
+        if (!scope.isHost) return res.status(403).json({ error: 'El escaneo de correo está disponible solo para el administrador anfitrión.' });
+        const owner = scope.user;
         if (isEmailScanRunning(owner)) return res.json({ status: 'running' });
         spawnRetroEmailRunner(owner);
         res.json({ status: 'running' });
@@ -378,7 +392,9 @@ export default {
     r.post('/teams-refresh', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'El escaneo de Teams consume tokens (requiere administrador).' });
       try {
-        const owner = systemScopeFor(req).user;
+        const scope = systemScopeFor(req);
+        if (!scope.isHost) return res.status(403).json({ error: 'El escaneo de Teams está disponible solo para el administrador anfitrión.' });
+        const owner = scope.user;
         if (isTeamsFeedbackScanRunning(owner)) return res.json({ status: 'running' });
         spawnRetroTeamsRunner(owner);
         res.json({ status: 'running' });
@@ -447,7 +463,10 @@ export default {
         const b = req.body || {};
         const action = String(b.action || '');
         if (action === 'merge') {
-          return res.json({ lesson: await mergeLessons(String(b.keep || ''), Array.isArray(b.merge) ? b.merge : [], ctx) });
+          if (!Array.isArray(b.merge) || b.merge.length > MAX_APPLY_IDS) {
+            return res.status(400).json({ error: `merge debe ser un array de hasta ${MAX_APPLY_IDS} ids.` });
+          }
+          return res.json({ lesson: await mergeLessons(String(b.keep || ''), b.merge, ctx) });
         }
         if (action === 'dismiss') {
           return res.json({ lesson: await setStatus(String(b.id || ''), 'descartada', ctx) });
@@ -458,8 +477,11 @@ export default {
           return res.json({ lesson: await setDestination(String(b.id || ''), destination, ctx) });
         }
         if (action === 'consolidate') {
+          if (!Array.isArray(b.ids) || b.ids.length > MAX_APPLY_IDS) {
+            return res.status(400).json({ error: `ids debe ser un array de hasta ${MAX_APPLY_IDS} ids.` });
+          }
           const created = await upsertLesson({ title: b.title, category: b.category, lesson: b.lesson, observation: 'Consolidada por la curaduría IA', project: b.project || 'console', destination: 'registro' }, ctx, reqSharedPadContext(req));
-          for (const mid of (Array.isArray(b.ids) ? b.ids : [])) {
+          for (const mid of b.ids) {
             if (mid === created.lesson.id) continue; // si el dedup reusó una fuente, NO borres la consolidada (bug de pérdida de datos)
             try { await deleteLesson(mid, ctx); } catch { /* noop */ }
           }
@@ -477,9 +499,14 @@ export default {
     r.post('/verify', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Verificar la efectividad requiere administrador.' });
       try {
-        const owner = systemScopeFor(req).user;
+        const scope = systemScopeFor(req);
+        if (!scope.isHost) return res.status(403).json({ error: 'Verificar la efectividad está disponible solo para el administrador anfitrión.' });
+        if (req.body?.full !== undefined && typeof req.body.full !== 'boolean') {
+          return res.status(400).json({ error: 'full debe ser booleano.' });
+        }
+        const owner = scope.user;
         if (isVerifyRunning(owner)) return res.json({ status: 'running' });
-        spawnRetroVerifyRunner({ full: !!req.body?.full, owner });
+        spawnRetroVerifyRunner({ full: req.body?.full === true, owner });
         res.json({ status: 'running' });
       } catch (e) { sendErr(res, e); }
     });
@@ -512,6 +539,9 @@ export default {
       try {
         const b = req.body || {};
         if (b.action !== 'delete-copies') return res.status(400).json({ error: 'Acción de higiene inválida.' });
+        if (!Array.isArray(b.refs) || b.refs.length > MAX_APPLY_IDS) {
+          return res.status(400).json({ error: `refs debe ser un array de hasta ${MAX_APPLY_IDS} ids.` });
+        }
         const ctx = reqPadContext(req);
         // Re-verificación obligatoria: la lista del cliente nunca decide qué se
         // borra. Solo refs encontradas AHORA dentro de `playbooks` son elegibles.
@@ -520,7 +550,7 @@ export default {
           ...scan.copiasRedundantes.filter((item) => item.mcExists).map((item) => item.ref),
           ...scan.huerfanosDescartados.map((item) => item.ref),
         ]);
-        const refs = [...new Set(Array.isArray(b.refs) ? b.refs.map((ref) => String(ref || '').trim()).filter(Boolean) : [])];
+        const refs = [...new Set(b.refs.map((ref) => String(ref || '').trim()).filter(Boolean))];
         const deleted = [];
         const skipped = [];
         for (const ref of refs) {

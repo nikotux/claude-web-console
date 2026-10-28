@@ -73,7 +73,7 @@ function safeShellValue(value) {
 
 function safeCommand(command) {
   const unsets = `unset ${FORBIDDEN_DB_ENV.join(' ')}`;
-  return `export DATABASE_URL=${safeShellValue(localDbUrl())}; ${unsets}; cd "$HOME/tolkien"; ${command}`;
+  return `export DATABASE_URL=${safeShellValue(localDbUrl())}; ${unsets}; cd ${safeShellValue(TOLKIEN_ROOT)}; ${command}`;
 }
 
 function scrubDetail(value, secrets = []) {
@@ -191,7 +191,7 @@ async function teamStep() {
 }
 
 async function runDeskGlueStep(step, timeout) {
-  const command = `cd "$HOME/tolkien/apps/worker"; ${safeShellValue(TSX)} ${safeShellValue(GLUE)} ${step}`;
+  const command = `cd ${safeShellValue(WORKER_CWD)}; ${safeShellValue(TSX)} ${safeShellValue(GLUE)} ${step}`;
   const result = await runCmd('infisical', [
     'run', '--projectId', readInfisicalWorkspaceId(), '--env', 'prod', '--silent',
     '--', 'bash', '-c', safeCommand(command),

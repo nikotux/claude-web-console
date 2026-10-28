@@ -186,11 +186,11 @@ function validationError(code, error) {
   return { ok: false, code, error };
 }
 
-function catalogEntryFor(dirName) {
+function catalogEntryFor(dirName, catalog = listCatalog()) {
   if (typeof dirName !== 'string' || !SKILL_NAME_RE.test(dirName)) {
     return { error: validationError('invalid_name', 'Nombre de skill inválido.') };
   }
-  const entry = listCatalog().find((item) => item.dirName === dirName);
+  const entry = catalog.find((item) => item.dirName === dirName);
   if (!entry) {
     return { error: validationError('not_found', 'La skill no existe en el catálogo.') };
   }
@@ -257,8 +257,8 @@ function copyTreeWithoutSymlinks(source, destination) {
   }
 }
 
-export function installSkill(claudeDir, dirName) {
-  const validated = catalogEntryFor(dirName);
+export function installSkill(claudeDir, dirName, catalog = listCatalog()) {
+  const validated = catalogEntryFor(dirName, catalog);
   if (validated.error) return validated.error;
 
   const { skillsDir, destination } = destinationFor(claudeDir, dirName);
@@ -270,6 +270,8 @@ export function installSkill(claudeDir, dirName) {
   fs.mkdirSync(skillsDir, { recursive: true, mode: 0o700 });
   const stageRoot = fs.mkdtempSync(path.join(skillsDir, '.cwc-catalog-'));
   const stagedSkill = path.join(stageRoot, dirName);
+  const previousSkill = path.join(stageRoot, '.previous');
+  let preserveStage = false;
   try {
     copyTreeWithoutSymlinks(path.join(CATALOG_DIR, dirName), stagedSkill);
     writeJsonAtomic(path.join(stagedSkill, MARKER_NAME), {
@@ -285,14 +287,28 @@ export function installSkill(claudeDir, dirName) {
       if (!isCatalogOwned(destination, dirName)) {
         return validationError('user_owned', 'La skill dejó de pertenecer al catálogo.');
       }
-      fs.rmSync(destination, { recursive: true, force: true });
+      fs.renameSync(destination, previousSkill);
+      try {
+        fs.renameSync(stagedSkill, destination);
+      } catch (error) {
+        try {
+          fs.renameSync(previousSkill, destination);
+        } catch (rollbackError) {
+          // El respaldo queda en stageRoot para permitir recuperación manual.
+          preserveStage = true;
+          error.rollbackError = rollbackError;
+        }
+        throw error;
+      }
+      fs.rmSync(previousSkill, { recursive: true, force: true });
     } else if (destinationExists(destination)) {
       return validationError('user_owned', 'Ya existe una skill propia del usuario con ese nombre.');
+    } else {
+      fs.renameSync(stagedSkill, destination);
     }
-    fs.renameSync(stagedSkill, destination);
     return { ok: true, dirName, hash: validated.entry.hash };
   } finally {
-    fs.rmSync(stageRoot, { recursive: true, force: true });
+    if (!preserveStage) fs.rmSync(stageRoot, { recursive: true, force: true });
   }
 }
 
@@ -327,7 +343,7 @@ export function reconcileDefaults(claudeDir, dataDir, catalog = listCatalog()) {
   for (const entry of catalog.filter((item) => item.isDefault)) {
     if (offered.has(entry.dirName)) continue;
     try {
-      const result = installSkill(claudeDir, entry.dirName);
+      const result = installSkill(claudeDir, entry.dirName, catalog);
       if (result.ok) {
         installed.push(entry.dirName);
         offered.add(entry.dirName);

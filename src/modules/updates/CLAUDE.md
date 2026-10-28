@@ -301,3 +301,6 @@ Claude en estado neutro y el click entregando a `openChat` exactamente
 `{cwd:'claude-web-console', model:'opus', mode:'bypassPermissions'}`.
 `GET /api/health/checks` quedó 16/17 ok; el único warn eran cambios sin
 commitear.
+ENDURECIMIENTO DE AUDITORÍA (2026-10-28): cada job guarda package.json y lock
+en `~/.cwc-data/updates-jobs/<startedAt>/`; el revert total restaura esa foto
+y mantiene heartbeat cada 30 s durante apt/npm, con git solo como fallback.

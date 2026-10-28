@@ -724,3 +724,28 @@
   un solo espacio invalida la caché incremental y re-audita ~16 unidades con
   sonnet. `latencyMs`/`inputUnits` del ledger quedan en null hasta que los
   runners de `bin/` pasen `ctx`: contrato FORWARD fuera de este bloque.
+- **Blindaje del auto-fix** (2026-10-28, console:PLAN-3491): las escrituras
+  Edit/Write/MultiEdit/NotebookEdit quedan confinadas al root de la corrida,
+  con resolución segura de symlinks y fail-closed sin root. `fixQueryOptions`
+  es la fuente única de las dos capas de permisos. Los tres runners absorben
+  el rechazo tardío del pump tras un timeout, y review/batch/proposals/
+  audit-cache/result stores se persisten con escritura JSON atómica.
+- **Endurecimiento de endpoints y gate** (2026-10-28, console:PLAN-3491):
+  `policy.js` ahora clasifica CRITICAL todo `src/modules/health/` y los runners
+  `bin/cwc-health(fix)?-(runner|orchestrator|scan-runner).js`: el auto-fix ya
+  no puede editar su propio gate, invariantes ni allowlists.
+  `/optimize-proposal` y `/coherence-proposal` responden 409 si la propuesta ya
+  está decidida, tiene `padRef` o hay una decisión en vuelo (Set en memoria), y
+  escriben sobre el estado RELEÍDO después del await de Pad (antes un análisis
+  terminado durante ese await se pisaba). `/finding-fix-batch` rechaza más de
+  `MAX_BATCH` (400) ids y, si el spawn lanza, deja el batch `running:false` con
+  el error. `spawnOptimize`/`spawnCoherence`/`spawnOrchestrator` liberan su
+  reserva pid:0 ante `error` del hijo o fallo síncrono (y cierran el fd).
+  `crossCheckPad` devuelve `available:false` si Pad responde `{ok:false}`
+  (antes marcaba todo como 🆕 nuevo). `appendLearnedInvariant` rechaza (400,
+  `err.badRequest`) un `match` de más de 200 caracteres en vez de truncarlo y
+  relista los archivos del repo en cada aprobación; un fallo de I/O al aprobar
+  es 500. `/scan-pad-bug` valida el `finding` (400) y distingue Pad caído (502,
+  `err.upstream`) de fallo interno (500). Los dos runners de auto-fix llevan un
+  comentario con sus opciones porque el censo de motores de `core/inventory.js`
+  las lee por regex del propio archivo, no siguiendo `fixQueryOptions()`.

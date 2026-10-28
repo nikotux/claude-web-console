@@ -25,6 +25,8 @@ import path from 'node:path';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { config } from '../../core/config.js';
 
+// COMMS es deliberadamente HOST-ONLY: estas rutas no aceptan owner y siempre
+// resuelven el HOME del host. No exponer sus lectores/envíos a inquilinos.
 export const DATA_DIR = path.join(os.homedir(), '.cwc-data');
 export const COMMS_DIR = path.join(DATA_DIR, 'comms');
 export const CONTACTS_FILE = path.join(COMMS_DIR, 'contacts.json');

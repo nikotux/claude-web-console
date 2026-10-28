@@ -12,13 +12,13 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
-import { hostUser, userDataDir } from '../../core/user-space.js';
 import {
   listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem,
   listLinks, setParent, deleteLink,
 } from '../../core/pad-service-client.js';
 import { readVerifyState, verifyForLesson } from './verify-shared.js';
-import { PROMOTE_TARGETS, LEGACY_PROMOTE_TARGETS } from './promote-shared.js';
+import { retroDataDirFor, retroHostUser } from './owner-dirs.js';
+import { PROMOTE_TARGETS, LEGACY_PROMOTE_TARGETS } from './promote-targets.js';
 import {
   isShareOptedOut, isUnsharedFingerprint, shareLessonToPool,
 } from './pool.js';
@@ -134,7 +134,7 @@ async function linkLessonToSun(ref, category, ctx) {
 async function shareTolkienLesson(lesson, ctx, sharedCtx) {
   try {
     if (lesson?.project !== 'tolkien' || !sharedCtx) return;
-    const dataDir = userDataDir(ownerFor(ctx));
+    const dataDir = retroDataDirFor(ownerFor(ctx));
     if (isShareOptedOut(dataDir) || isUnsharedFingerprint(lesson.fingerprint, dataDir)) return;
     // El workspace Pad conserva la identidad cuando el caller no pasa owner:
     // `tenant-*` resuelve su userDataDir y `console`/ctx nulo resuelve al host.
@@ -150,46 +150,72 @@ async function shareTolkienLesson(lesson, ctx, sharedCtx) {
   }
 }
 
-// Lock de archivo para serializar el read-find-create/update de upsertLesson
-// entre runners de retro CONCURRENTES (dos sesiones cerrando casi a la vez
-// podrían ambas NO encontrar el fingerprint y crear DUPLICADOS). O_EXCL con toma
-// del lock viejo (runner muerto) y BEST-EFFORT: si no lo consigue en el deadline
-// sigue sin lock — nunca bloquea la destilación.
+// Lock de archivo para serializar los read-modify-write entre runners de retro.
+// El lock auxiliar de recuperación evita que dos esperadores borren por carrera
+// el lock fresco que uno de ellos acaba de tomar al reemplazar uno vencido.
 const UPSERT_LOCK_STALE_MS = 30_000;
+const FILE_LOCK_DEADLINE_MS = 15_000;
 
 function ownerFor(ctx = null, owner = null) {
   if (owner) return owner;
   const tenant = String(ctx?.workspace || '').match(/^tenant-(.+)$/);
-  return tenant ? tenant[1] : hostUser();
+  return tenant ? tenant[1] : retroHostUser();
 }
 export function retroActivityFileFor(owner) {
-  return path.join(userDataDir(owner), 'retro-activity.json');
+  return path.join(retroDataDirFor(owner), 'retro-activity.json');
 }
 function upsertLockFor(ctx = null) {
-  return path.join(userDataDir(ownerFor(ctx)), 'retro', 'upsert.lock');
+  return path.join(retroDataDirFor(ownerFor(ctx)), 'retro', 'upsert.lock');
 }
 
-async function withUpsertLock(fn, ctx = null) {
-  const upsertLock = upsertLockFor(ctx);
-  const deadline = Date.now() + 15_000;
+async function withFileLock(lockFile, fn) {
+  const reclaimLock = `${lockFile}.reclaim`;
+  const deadline = Date.now() + FILE_LOCK_DEADLINE_MS;
   let held = false;
-  try { fs.mkdirSync(path.dirname(upsertLock), { recursive: true, mode: 0o700 }); } catch { /* noop */ }
+  try { fs.mkdirSync(path.dirname(lockFile), { recursive: true, mode: 0o700 }); } catch { /* noop */ }
   while (!held && Date.now() < deadline) {
     try {
-      const fd = fs.openSync(upsertLock, 'wx'); // O_EXCL: falla con EEXIST si ya existe
-      fs.writeSync(fd, String(Date.now()));
-      fs.closeSync(fd);
+      const fd = fs.openSync(lockFile, 'wx'); // O_EXCL: falla con EEXIST si ya existe
+      try { fs.writeSync(fd, String(Date.now())); }
+      finally { fs.closeSync(fd); }
       held = true;
     } catch (e) {
-      if (e.code !== 'EEXIST') break; // error inesperado: seguí sin lock (best-effort)
+      if (e.code !== 'EEXIST') throw e;
       let ts = 0;
-      try { ts = Number(fs.readFileSync(upsertLock, 'utf8')) || 0; } catch { /* noop */ }
-      if (Date.now() - ts > UPSERT_LOCK_STALE_MS) { try { fs.unlinkSync(upsertLock); } catch { /* noop */ } continue; }
+      try { ts = Number(fs.readFileSync(lockFile, 'utf8')) || 0; } catch { /* noop */ }
+      if (Date.now() - ts > UPSERT_LOCK_STALE_MS) {
+        let reclaimFd = null;
+        try {
+          reclaimFd = fs.openSync(reclaimLock, 'wx');
+          fs.writeSync(reclaimFd, String(Date.now()));
+        } catch (reclaimErr) {
+          if (reclaimFd !== null) { try { fs.closeSync(reclaimFd); } catch { /* noop */ } }
+          if (reclaimErr.code !== 'EEXIST') throw reclaimErr;
+          await new Promise((r) => setTimeout(r, 100 + Math.floor(Math.random() * 120)));
+          continue;
+        }
+        try {
+          let currentTs = 0;
+          try { currentTs = Number(fs.readFileSync(lockFile, 'utf8')) || 0; } catch { /* noop */ }
+          if (Date.now() - currentTs > UPSERT_LOCK_STALE_MS) {
+            try { fs.unlinkSync(lockFile); } catch { /* noop */ }
+          }
+        } finally {
+          try { fs.closeSync(reclaimFd); } catch { /* noop */ }
+          try { fs.unlinkSync(reclaimLock); } catch { /* noop */ }
+        }
+        continue; // siempre volver a competir por O_EXCL; nunca entrar directo
+      }
       await new Promise((r) => setTimeout(r, 100 + Math.floor(Math.random() * 120)));
     }
   }
+  if (!held) throw new Error('No se pudo adquirir el lock de Mejora Continua.');
   try { return await fn(); }
-  finally { if (held) { try { fs.unlinkSync(upsertLock); } catch { /* noop */ } } }
+  finally { try { fs.unlinkSync(lockFile); } catch { /* noop */ } }
+}
+
+async function withUpsertLock(fn, ctx = null) {
+  return withFileLock(upsertLockFor(ctx), fn);
 }
 
 function parseFields(item) {
@@ -357,7 +383,8 @@ export async function upsertLesson(input = {}, ctx = null, sharedCtx = null) {
   return withUpsertLock(async () => {
     let existing = null;
     const lr = await listItems(COLLECTION, { ctx });
-    if (lr.ok) existing = lr.data.find((it) => parseFields(it).fingerprint === fingerprint) || null;
+    if (!lr.ok) throw padError('listar para upsertLesson', lr);
+    existing = lr.data.find((it) => parseFields(it).fingerprint === fingerprint) || null;
 
     if (existing) {
       const f = parseFields(existing);
@@ -370,7 +397,7 @@ export async function upsertLesson(input = {}, ctx = null, sharedCtx = null) {
       };
       const r = await updateItem(existing.ref, { fields: updatedFields }, { ctx });
       if (!r.ok) throw padError('upsertLesson', r);
-      appendActivity({ kind: 'recurrente', refId: existing.ref, title, detail: `x${rec}` }, ctx);
+      await appendActivity({ kind: 'recurrente', refId: existing.ref, title, detail: `x${rec}` }, ctx);
       // Auto-sana lecciones viejas que hubieran quedado huérfanas al reincidir.
       await linkLessonToSun(existing.ref, f.category || category, ctx);
       const fresh = await getItem(existing.ref, { ctx });
@@ -400,7 +427,7 @@ export async function upsertLesson(input = {}, ctx = null, sharedCtx = null) {
       fields,
     }, { ctx });
     if (!r.ok) throw padError('upsertLesson', r);
-    appendActivity({ kind: 'nueva', refId: r.data.ref, title }, ctx);
+    await appendActivity({ kind: 'nueva', refId: r.data.ref, title }, ctx);
     await linkLessonToSun(r.data.ref, category, ctx);
     const fresh = await getItem(r.data.ref, { ctx });
     const lesson = lessonFromPadItem(
@@ -423,7 +450,7 @@ export async function setStatus(id, status, ctx = null) {
   const f = parseFields(cur.data);
   const r = await updateItem(id, { fields: { ...f, status: st } }, { ctx });   // read-modify-write: fields completo
   if (!r.ok) throw padError('setStatus', r);
-  appendActivity({ kind: 'estado', refId: id, title: cur.data.title, detail: st }, ctx);
+  await appendActivity({ kind: 'estado', refId: id, title: cur.data.title, detail: st }, ctx);
   const fresh = await getItem(id, { ctx });
   return lessonFromPadItem(fresh.ok ? fresh.data : cur.data, readVerifyState(ownerFor(ctx)));
 }
@@ -444,7 +471,7 @@ export async function revertPromotion(id, prev, ctx = null) {
   };
   const r = await updateItem(id, { fields }, { ctx });
   if (!r.ok) throw padError('revertPromotion', r);
-  appendActivity({ kind: 'estado', refId: id, title: cur.data.title, detail: `${status} (revertida)` }, ctx);
+  await appendActivity({ kind: 'estado', refId: id, title: cur.data.title, detail: `${status} (revertida)` }, ctx);
   const fresh = await getItem(id, { ctx });
   return lessonFromPadItem(fresh.ok ? fresh.data : { ...cur.data, fields }, readVerifyState(ownerFor(ctx)));
 }
@@ -458,7 +485,7 @@ export async function setDestination(id, destination, ctx = null) {
   const f = parseFields(cur.data);
   const r = await updateItem(id, { fields: { ...f, destination } }, { ctx });
   if (!r.ok) throw padError('setDestination', r);
-  appendActivity({ kind: 'redestinada', refId: id, title: cur.data.title, detail: destination }, ctx);
+  await appendActivity({ kind: 'redestinada', refId: id, title: cur.data.title, detail: destination }, ctx);
   const fresh = await getItem(id, { ctx });
   return lessonFromPadItem(fresh.ok ? fresh.data : { ...cur.data, fields: { ...f, destination } }, readVerifyState(ownerFor(ctx)));
 }
@@ -485,7 +512,7 @@ export async function markPromoted(id, target, ctx = null) {
     },
   }, { ctx });
   if (!r.ok) throw padError('markPromoted', r);
-  appendActivity({ kind: 'promovida', refId: id, title: cur.data.title, detail: target }, ctx);
+  await appendActivity({ kind: 'promovida', refId: id, title: cur.data.title, detail: target }, ctx);
   const fresh = await getItem(id, { ctx });
   return lessonFromPadItem(fresh.ok ? fresh.data : cur.data, readVerifyState(ownerFor(ctx)));
 }
@@ -522,7 +549,7 @@ export async function mergeLessons(keepId, mergeIds = [], ctx = null) {
   const newRec = (parseInt(kf.recurrence, 10) || 1) + addRec;
   const r = await updateItem(keepId, { fields: { ...kf, recurrence: String(newRec), sourceChats: chats.slice(0, 50), sourceRefs: refs } }, { ctx });
   if (!r.ok) throw padError('mergeLessons', r);
-  appendActivity({ kind: 'fusion', refId: keepId, title: keepR.data.title, detail: `+${mergedCount}` }, ctx);
+  await appendActivity({ kind: 'fusion', refId: keepId, title: keepR.data.title, detail: `+${mergedCount}` }, ctx);
   const fresh = await getItem(keepId, { ctx });
   return lessonFromPadItem(fresh.ok ? fresh.data : keepR.data, readVerifyState(ownerFor(ctx)));
 }
@@ -531,7 +558,7 @@ export async function deleteLesson(id, ctx = null) {
   if (!MC_ID_RE.test(id)) throw Object.assign(new Error('Id inválido.'), { badRequest: true });
   const r = await padDeleteItem(id, { ctx });
   if (!r.ok) throw notFoundOr500('deleteLesson', 'Lección', r);
-  appendActivity({ kind: 'borrada', refId: id, title: id }, ctx);
+  await appendActivity({ kind: 'borrada', refId: id, title: id }, ctx);
   return { ok: true };
 }
 
@@ -540,15 +567,18 @@ function loadActivity(owner) {
   try { const a = JSON.parse(fs.readFileSync(retroActivityFileFor(owner), 'utf8')); return Array.isArray(a) ? a : []; }
   catch { return []; }
 }
-export function listActivity(limit = 40, owner = hostUser()) {
+export function listActivity(limit = 40, owner = retroHostUser()) {
   return loadActivity(owner).slice(0, Math.max(1, Math.min(100, Number(limit) || 40)));
 }
-function appendActivity(ev, ctx = null) {
+async function appendActivity(ev, ctx = null) {
   try {
     const owner = ownerFor(ctx);
-    const list = loadActivity(owner);
-    list.unshift({ id: `E${Date.now()}-${Math.floor(Math.random() * 1000)}`, ts: Date.now(), ...ev });
-    fs.mkdirSync(userDataDir(owner), { recursive: true, mode: 0o700 });
-    writeJsonAtomic(retroActivityFileFor(owner), list.slice(0, ACTIVITY_MAX));
+    const activityFile = retroActivityFileFor(owner);
+    await withFileLock(`${activityFile}.lock`, async () => {
+      const list = loadActivity(owner);
+      list.unshift({ id: `E${Date.now()}-${Math.floor(Math.random() * 1000)}`, ts: Date.now(), ...ev });
+      fs.mkdirSync(retroDataDirFor(owner), { recursive: true, mode: 0o700 });
+      writeJsonAtomic(activityFile, list.slice(0, ACTIVITY_MAX));
+    });
   } catch { /* best-effort */ }
 }

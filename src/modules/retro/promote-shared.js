@@ -45,6 +45,9 @@ import {
 import { createItem, addLink, getItem, listItems, listLinks, updateItem } from '../../core/pad-service-client.js';
 import { appendLessonContract } from '../../core/pad-contracts.js';
 import { appendLearnedInvariant } from '../health/invariants.js';
+import { LEGACY_PROMOTE_TARGETS, PROMOTE_TARGETS } from './promote-targets.js';
+
+export { PROMOTE_TARGETS, LEGACY_PROMOTE_TARGETS } from './promote-targets.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const MEMORY_NOTE = 'mejora-continua.md';
@@ -58,13 +61,6 @@ function padSunApplies(ctx) {
   return !ws || ws === 'console';
 }
 
-// Destinos cableados. memoria+claude-md (Fase 2) · contexto (Fase 3) ·
-// convencion (regla activa en Pad) · contrato+invariante (PLAN-1936: destinos
-// VERIFICABLES, la lección deja de ser texto que el modelo puede ignorar).
-export const PROMOTE_TARGETS = ['memoria', 'claude-md', 'contexto', 'convencion', 'contrato', 'invariante'];
-// Compatibilidad de LECTURA: hay lecciones históricas selladas con estos
-// destinos. No se ofrecen ni pasan el gate de escritura de una promoción nueva.
-export const LEGACY_PROMOTE_TARGETS = ['playbook', 'registro'];
 // Destinos que necesitan un directorio de proyecto (escriben al filesystem del
 // repo). contexto decide por mundo y convencion escribe en Pad; ninguno necesita dir.
 export const TARGETS_NEED_DIR = ['memoria', 'claude-md'];
@@ -411,10 +407,14 @@ export const CONVENTION_TRIGGER_BY_CATEGORY = {
 };
 
 async function promoteToConvention(lesson, ctx = null) {
-  const content = `${lesson.body}\n\n---\n> Promovida desde la lección ${lesson.id} de Mejora Continua.`;
+  const originMarker = `Promovida desde la lección ${lesson.id}`;
+  const content = `${lesson.body}\n\n---\n> ${originMarker} de Mejora Continua.`;
   const listed = await listItems('conventions', { ctx });
   if (!listed.ok) throw Object.assign(new Error(`Pad local (listar convenciones): ${listed.error || 'error'}`), { padError: true });
-  const existing = listed.data.find((item) => item.title === lesson.title);
+  // Un título igual no prueba procedencia: una convención manual o nacida de
+  // otra lección no se puede sobrescribir.
+  const existing = listed.data.find((item) => item.title === lesson.title
+    && String(item.content || '').includes(originMarker));
   let item;
   if (existing) {
     const updated = await updateItem(existing.ref, { content }, { ctx });

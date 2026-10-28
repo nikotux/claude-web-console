@@ -300,21 +300,24 @@ async function pollTabStatus() {
     const killer = setTimeout(() => ac.abort(), 5000);
     const [tmux, chats] = await Promise.all([
       tabs.size
-        ? fetch('/api/tmux/sessions', { signal: ac.signal }).then((r) => r.json()).then((d) => d.sessions || []).catch(() => [])
+        ? fetch('/api/tmux/sessions', { signal: ac.signal }).then((r) => r.json()).then((d) => d.sessions || []).catch(() => null)
         : Promise.resolve([]),
-      fetch('/api/chat/list', { signal: ac.signal }).then((r) => r.json()).then((d) => d.chats || []).catch(() => []),
+      fetch('/api/chat/list', { signal: ac.signal }).then((r) => r.json()).then((d) => d.chats || []).catch(() => null),
     ]).finally(() => clearTimeout(killer));
     // En modo solo el WS ya pertenece únicamente al chat abierto; filtramos
     // también el catch-up del centro de permisos para evitar ruido ajeno.
-    permCenter?.syncFromList(SOLO_ID ? chats.filter((c) => tabs.has(c.id)) : chats);
-    intercomCenter?.syncFromList(chats);
-    const byName = new Map(tmux.map((s) => [s.name, s]));
-    const byChat = new Map(chats.map((c) => [c.id, c]));
+    if (chats !== null) {
+      permCenter?.syncFromList(SOLO_ID ? chats.filter((c) => tabs.has(c.id)) : chats);
+      intercomCenter?.syncFromList(chats);
+    }
+    const byName = new Map((tmux || []).map((s) => [s.name, s]));
+    const byChat = new Map((chats || []).map((c) => [c.id, c]));
     let titleChanged = false;
     for (const [id, entry] of tabs) {
       if (!entry.statusDot) continue;
       let cls = 'st-idle';
       if (entry.type === 'chat') {
+        if (chats === null) continue;
         const c = byChat.get(id);
         cls = c ? (c.status === 'working' ? 'st-working' : 'st-waiting') : 'st-idle';
         // Auto-título (IA) o renombre desde otro dispositivo: reflejarlo en
@@ -327,6 +330,7 @@ async function pollTabStatus() {
           titleChanged = true;
         }
       } else {
+        if (tmux === null) continue;
         const s = byName.get(`cwc-${id}`);
         const st = s?.state?.status;
         cls = st === 'working' ? 'st-working' : st === 'waiting' ? 'st-waiting' : s?.model ? 'st-idle' : 'st-shell';

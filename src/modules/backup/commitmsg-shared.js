@@ -18,6 +18,8 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo (cwd del SDK)
 
+// Excepción deliberada al estado per-user: backup y su generador son
+// admin/host-only, por eso los jobs y logs pertenecen al HOME del host.
 const DATA_DIR = path.join(os.homedir(), '.cwc-data', 'commitmsg');
 const LOG_FILE = path.join(os.homedir(), '.cwc-data', 'commitmsg.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-commitmsg-runner.js');
@@ -84,12 +86,40 @@ export function jobResult(job) {
 export function spawnCommitMsgRunner(id) {
   ensureDir();
   fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true, mode: 0o700 });
-  const logFd = fs.openSync(LOG_FILE, 'a');
-  const child = spawn(process.execPath, [RUNNER, id], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
-  });
-  child.unref();
-  fs.closeSync(logFd);
+  let logFd = null;
+  const markSpawnError = (error) => {
+    try {
+      writeCommitMsgJob(id, {
+        ...(readCommitMsgJob(id) || {}),
+        status: 'error', message: null, finishedAt: Date.now(),
+        error: `No se pudo lanzar el generador: ${error?.message || error}`,
+      });
+    } catch (writeError) {
+      console.error('[backup] no se pudo persistir el error de commit-message:', writeError?.message || writeError);
+    }
+  };
+  try {
+    logFd = fs.openSync(LOG_FILE, 'a');
+    const child = spawn(process.execPath, [RUNNER, id], {
+      detached: true,
+      stdio: ['ignore', logFd, logFd],
+      // Excepción host-only: el SDK usa deliberadamente la credencial/env del host.
+      env: process.env,
+    });
+    child.on('error', (error) => {
+      markSpawnError(error);
+      console.error('[backup] runner de commit-message no pudo arrancar:', error?.message || error);
+    });
+    child.unref();
+  } catch (error) {
+    markSpawnError(error);
+    throw error;
+  } finally {
+    if (logFd !== null) {
+      try { fs.closeSync(logFd); }
+      catch (error) { console.error('[backup] no se pudo cerrar commitmsg.log:', error?.message || error); }
+    }
+  }
 }
 
 export function commitMsgPrompt({ files, untracked, diff }) {

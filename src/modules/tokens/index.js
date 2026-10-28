@@ -283,7 +283,7 @@ export async function buildSummary(owner = hostUser()) {
       .filter((d) => d.isDirectory())
       .map((d) => d.name);
   } catch {
-    return { totals: emptyBucket(), today: emptyBucket(), projects: [], engines: [], updatedAt: today };
+    dirs = [];
   }
 
   // sessionIds de los chats de la consola (para atribuir transcripts al motor
@@ -605,7 +605,7 @@ async function cachedSummary(fresh, owner = hostUser()) {
       .then((result) => {
         slot.data = result;
         slot.at = Number(process.hrtime.bigint()) / 1e6;
-        mergeDaily(result.daily, owner); // snapshot al histórico (throttle interno 5 min)
+        mergeDaily(result.daily, owner).catch(() => {}); // snapshot best-effort (throttle interno 5 min)
         return result;
       })
       .finally(() => { slot.promise = null; });
@@ -1112,7 +1112,7 @@ export default {
       try {
         if (range === 'day') {
           const sum = await cachedSummary(!!req.query.fresh, owner);
-          const s = sum.hourlyToday[project] || sum.hourlyToday.all;
+          const s = sum.hourlyToday?.[project] || sum.hourlyToday?.all || buildSeries('day', []);
           return res.json({ ...s, project, updatedAt: sum.updatedAt });
         }
         res.json(await readSeries(range, project, owner));

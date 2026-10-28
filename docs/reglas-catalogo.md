@@ -154,8 +154,13 @@ a propósito: el harness NO lo auto-carga, así que no pesa en cada sesión.
    `bin/cwc-healthfix-runner.js` resuelve AUTÓNOMAMENTE un hallazgo de la
    revisión — edita el código de la consola sin supervisión. Es la única
    corrida que escribe código. Blindada por las DOS capas con `fixToolAllowed`
-   (health/shared.js): allow Read/Grep/Glob/Edit/Write/MultiEdit + Bash SOLO
+   (health/shared.js): allow Read/Grep/Glob/TodoWrite + Bash SOLO
    si el comando matchea `node --check`/`node -c` (verificación de sintaxis);
+   Edit/Write/MultiEdit/NotebookEdit solo pasan si `file_path`/`notebook_path`
+   resuelve dentro del root de la corrida (ROOT en el runner suelto, worktree
+   en el orquestador), usando `path.relative` + realpath del ancestro existente;
+   sin root falla cerrado. Ambas capas salen de `fixQueryOptions()` en
+   `health/shared.js`, con el mismo predicado y root;
    git, rm, systemctl, npm, curl, kill y todo lo demás DENEGADO. NUNCA
    reinicia el servicio (un fix malo queda en el working tree, revertible con
    git; el usuario reinicia al revisar). Admin-only, uno a la vez (lock

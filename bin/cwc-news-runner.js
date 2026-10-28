@@ -16,6 +16,7 @@ import {
   makePublishedNewsEntry,
   parseNewsResponse,
   readNewsJob,
+  writeNewsCursor,
   writeNewsJob,
 } from '../src/modules/news/news-shared.js';
 
@@ -132,7 +133,14 @@ async function main() {
       // Un push suele reunir medio día de trabajo con varias features visibles;
       // un techo de tres recortaba novedades reales.
       .slice(0, 6);
-    if (entries.length) appendEntries(entries);
+    if (entries.length) await appendEntries(entries);
+
+    // El cursor avanza también cuando la respuesta válida es []; así el mismo
+    // rango interno no vuelve a consumir tokens en la próxima generación.
+    const lastCommit = [...(job.commits || [])].reverse()
+      .find((commit) => /^[a-f0-9]{7,40}$/i.test(String(commit?.sha || '').trim()));
+    if (!lastCommit) throw new Error('El job no contiene un commit válido para avanzar el cursor.');
+    writeNewsCursor(lastCommit.sha);
 
     writeNewsJob(id, {
       ...job,

@@ -20,10 +20,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
-import { resolveDataDir } from '../../core/data-dir.js';
-import {
-  hostUser, readUserOauthToken, userDataDir, userRunnerEnv,
-} from '../../core/user-space.js';
+import { retroDataDirFor, retroRunnerEnvFor } from './owner-dirs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..', '..', '..');
@@ -42,22 +39,11 @@ export const emailReadAllowed = (name) => {
   return EMAIL_READ_TOOLS.has(m[1]);
 };
 
-function dataDirFor(owner = null) { return owner ? userDataDir(owner) : resolveDataDir(); }
+function dataDirFor(owner = null) { return retroDataDirFor(owner); }
 function scanFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-email-scan.json'); }
 function lockFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-email.lock'); }
 function logFileFor(owner = null) { return path.join(dataDirFor(owner), 'retro-email.log'); }
 function ensureDir(owner = null) { try { fss.mkdirSync(dataDirFor(owner), { recursive: true, mode: 0o700 }); } catch { /* noop */ } }
-function runnerEnvFor(owner) {
-  if (!owner || owner === hostUser()) return process.env;
-  const oauthToken = readUserOauthToken(owner);
-  if (!oauthToken) {
-    const error = new Error('Necesitás conectar tu cuenta de Claude para traer feedback del correo.');
-    error.conflict = true;
-    throw error;
-  }
-  return userRunnerEnv(owner, { oauthToken });
-}
-
 export function readEmailScan(owner = null) {
   try { return JSON.parse(fss.readFileSync(scanFileFor(owner), 'utf8')); } catch { return { items: [], lastReceivedAt: null, scannedAt: 0, error: null }; }
 }
@@ -85,17 +71,22 @@ export function isEmailScanRunning(owner = null) { return !!readEmailLock(owner)
 export function spawnRetroEmailRunner(owner) {
   ensureDir(owner);
   const logFile = logFileFor(owner);
-  const logFd = fss.openSync(logFile, 'a');
-  const child = spawn(process.execPath, [RUNNER], {
-    detached: true, stdio: ['ignore', logFd, logFd], env: runnerEnvFor(owner),
-  });
-  writeEmailLock({ pid: child.pid }, owner);
-  child.on('error', (err) => {
-    try { fss.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`); } catch { /* noop */ }
-    try { clearEmailLock(owner); } catch { /* noop */ }
-  });
-  child.unref();
-  fss.closeSync(logFd);
+  let logFd = null;
+  try {
+    logFd = fss.openSync(logFile, 'a');
+    const child = spawn(process.execPath, [RUNNER], {
+      detached: true, stdio: ['ignore', logFd, logFd],
+      env: retroRunnerEnvFor(owner, { missingOauthMessage: 'Necesitás conectar tu cuenta de Claude para traer feedback del correo.' }),
+    });
+    writeEmailLock({ pid: child.pid }, owner);
+    child.on('error', (err) => {
+      try { fss.appendFileSync(logFile, `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`); } catch { /* noop */ }
+      try { clearEmailLock(owner); } catch { /* noop */ }
+    });
+    child.unref();
+  } finally {
+    if (logFd !== null) { try { fss.closeSync(logFd); } catch { /* noop */ } }
+  }
 }
 
 export function emailScanPrompt(contact, self, sinceIso) {

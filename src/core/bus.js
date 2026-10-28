@@ -28,8 +28,9 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
+import { writeJsonAtomic } from './atomic-write.js';
 import { runTmux, tmuxDir } from './tmux.js';
-import { loadTitles, titleKey } from './session-names.js';
+import { loadTitles, ownerForSession, titleKey } from './session-names.js';
 import { worldLabelFor } from './worlds.js';
 // Registro de paquetes-sesión (F2b, session-packages.json) — para direccionar por
 // ref estable PKG-N en el interfono (PLAN-469 · 1a). Lee el JSON directo, como
@@ -64,7 +65,7 @@ function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 function writeJson(file, obj) {
-  try { fs.writeFileSync(file, JSON.stringify(obj)); return true; } catch { return false; }
+  try { writeJsonAtomic(file, obj); return true; } catch { return false; }
 }
 function listJson(dir) {
   let names = [];
@@ -115,10 +116,26 @@ export function tmuxHasSession(name) {
 }
 
 // ===== Directorio de sesiones (nombre amigable <-> handle) =====
+function callerTenant() {
+  const processHome = process.env.HOME || os.homedir();
+  const usersRoots = new Set([path.join(config.home, '.cwc-users')]);
+  try {
+    // El hook del inquilino puede no tener CWC_HOME; usamos también el home de passwd.
+    usersRoots.add(path.join(os.userInfo().homedir, '.cwc-users'));
+  } catch {}
+  for (const usersRoot of usersRoots) {
+    const relative = path.relative(usersRoot, processHome);
+    const segments = relative.split(path.sep);
+    if (relative && !path.isAbsolute(relative) && segments[0] !== '..') return segments[0];
+  }
+  return null;
+}
+
 // Reconstruye, SIN estado del server, el mismo mapa que muestran las tarjetas
 // de "Sesiones": TUIs tmux (nombre = título custom || basename del cwd) + chats
 // del SDK (de chats.json). Cada entrada trae su handle canónico para ruteo.
-export function buildDirectory() {
+export function buildDirectory({ owner } = {}) {
+  const scope = owner !== undefined ? owner : callerTenant();
   const entries = [];
   // --- TUIs tmux del socket cwc ---
   const titles = loadTitles();
@@ -127,6 +144,8 @@ export function buildDirectory() {
     if (!line.trim()) continue;
     const [name, cwd, pid] = line.split('\t');
     if (!name) continue;
+    // Invariante multi-tenant: un inquilino sólo descubre sus propias sesiones.
+    if (scope && ownerForSession(name) !== scope) continue;
     const isBare = name.startsWith('cwct-'); // vistas TUI de conversaciones
     const friendly = titles[titleKey(config.tmuxSocket, name)] || path.basename(cwd || '') || name;
     entries.push({
@@ -145,6 +164,7 @@ export function buildDirectory() {
   if (Array.isArray(chats)) {
     for (const c of chats) {
       if (!c || !c.sessionId) continue;
+      if (scope && c.owner !== scope) continue;
       // Un chat en modo TUI ya aparece como sesión tmux bare: no duplicar.
       if (c.viewMode === 'tui') continue;
       entries.push({
@@ -185,22 +205,27 @@ export function parseSendArgs(rawArgs) {
 // Resuelve el argumento de `/btw <destino>` a un handle (o 'all').
 // Acepta: "all"/"todos" (broadcast); un handle explícito (tmux:… / claude:…);
 // o un nombre amigable (case-insensitive, match exacto y luego por inclusión).
-export function resolveTarget(arg) {
+export function resolveTarget(arg, { owner } = {}) {
   const q = String(arg || '').trim();
   if (!q) return { error: 'Falta el destino' };
   if (/^(all|todos|todas|broadcast)$/i.test(q)) return { handle: 'all', name: 'todas las sesiones' };
   if (/^(tmux|claude):/.test(q)) return { handle: q, name: q };
+  // El server corre como host y conserva la vista completa; sólo el HOME de un
+  // inquilino activa el alcance, pues el panel ya filtra por handles propios.
+  const scope = owner !== undefined ? owner : callerTenant();
   // PLAN-469 · 1a: direccionar por REF ESTABLE del paquete-sesión (PKG-N). Es
   // inmune a renames y a los moves entre mundos (el nombre es frágil, el ref no).
   const pkgMatch = q.match(/^(PKG-\d+)$/i);
   if (pkgMatch) {
     const ref = pkgMatch[1].toUpperCase();
     const rec = readPackages()[ref];
-    if (!rec || !rec.sessionId) return { error: `No encontré el paquete ${ref} (o aún no tiene sesión).` };
+    if (!rec || !rec.sessionId || (scope && rec.owner !== scope)) {
+      return { error: `No encontré el paquete ${ref} (o aún no tiene sesión).` };
+    }
     const name = `${rec.title || ref} [${ref}]`;
     return { handle: `claude:${rec.sessionId}`, name, entry: { ...rec, handle: `claude:${rec.sessionId}`, name } };
   }
-  const dir = buildDirectory();
+  const dir = buildDirectory({ owner });
   const lc = q.toLowerCase();
   const exact = dir.filter((e) => e.name.toLowerCase() === lc);
   let hit = exact.find((e) => !e.archived) || exact[0];
@@ -217,7 +242,7 @@ export function resolveTarget(arg) {
       return { error: `"${q}" es ambiguo: ${pool.map((e) => e.name).join(', ')}` };
     }
   }
-  if (!hit) return { error: `No encontré una sesión llamada "${q}". Sesiones: ${dir.map((e) => e.name).join(', ') || '(ninguna)'}` };
+  if (!hit) return { error: `No encontré una sesión llamada "${q}". Listá las disponibles con \`cwc-bus.js list\` o usá un handle explícito (tmux:… / claude:…).` };
   return { handle: hit.handle, name: hit.name, entry: hit };
 }
 
@@ -271,9 +296,12 @@ export function pendingFor(handles) {
 export function markDelivered(messages, handles) {
   const now = Date.now();
   for (const m of messages) {
-    m.deliveredTo = m.deliveredTo || {};
-    for (const h of handles) m.deliveredTo[h] = now;
-    writeJson(m._file || path.join(MSG_DIR, `${m.id}.json`), stripMeta(m));
+    const file = m._file || path.join(MSG_DIR, `${m.id}.json`);
+    const current = readJson(file);
+    if (!current) continue; // gc pudo borrar el mensaje desde que se listó.
+    const deliveredTo = { ...(current.deliveredTo || {}) };
+    for (const h of handles) deliveredTo[h] = now;
+    writeJson(file, { ...current, deliveredTo });
   }
 }
 function stripMeta(o) { const { _file, ...rest } = o; return rest; }
@@ -361,9 +389,12 @@ export function tombstonesFor(handles) {
     now - (t.ts || 0) <= TOMB_TTL_MS && set.has(t.formerHandle) && !(t.delivered));
 }
 export function markTombstonesDelivered(tombs) {
+  const now = Date.now();
   for (const t of tombs) {
-    t.delivered = Date.now();
-    writeJson(t._file || path.join(TOMB_DIR, `${t.id}.json`), stripMeta(t));
+    const file = t._file || path.join(TOMB_DIR, `${t.id}.json`);
+    const current = readJson(file);
+    if (!current) continue; // gc pudo borrar la lápida desde que se listó.
+    writeJson(file, { ...current, delivered: current.delivered || now });
   }
 }
 

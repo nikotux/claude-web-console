@@ -3,6 +3,7 @@ import { openZoomViewer } from '../ui/zoom-viewer.js';
 import { PLACES, resolvePlace } from '../ui/places.js';
 import { icon } from '../ui/icons.js';
 import { t } from '../ui/i18n.js';
+import { confirmDialog, promptDialog } from '../ui/dialog.js';
 
 let dispose = () => {};
 let mountGeneration = 0;
@@ -138,18 +139,15 @@ function readFolderOpen(id) {
 }
 
 function folderIcon() {
-  return '<svg class="cab-fs-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 4h5l2 2h7v8H2z"></path></svg>';
+  return icon('folder', { className: 'cab-fs-icon' });
 }
 
 function conversationIcon() {
-  return '<svg class="cab-fs-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 3h12v9H8l-3 3v-3H3z"></path></svg>';
+  return icon('room', { className: 'cab-fs-icon' });
 }
 
 function floatingPanelIcon(name) {
-  const body = name === 'acta'
-    ? '<path d="M3 3h10M3 8h10M3 13h10"></path><path d="M1 3h.01M1 8h.01M1 13h.01"></path>'
-    : '<path d="M3 1h7l3 3v11H3z"></path><path d="M10 1v4h3M6 9h4M6 12h4"></path>';
-  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+  return icon(name === 'acta' ? 'list' : 'fileGeneric', { size: 16 });
 }
 
 function rowHtml(chat, ctx, container, { draggable = true } = {}) {
@@ -390,7 +388,9 @@ async function mountList(el, ctx, isCurrent) {
   };
 
   const createFolder = async (world) => {
-    const proposed = window.prompt(t('cabina.conversaciones.newFolderName', 'Nombre de la nueva carpeta en {world}:', { world: worldLabel(world) }));
+    const proposed = await promptDialog({
+      title: t('cabina.conversaciones.newFolderName', 'Nombre de la nueva carpeta en {world}:', { world: worldLabel(world) }),
+    });
     if (proposed === null) return;
     const name = proposed.trim();
     if (!name) {
@@ -407,7 +407,10 @@ async function mountList(el, ctx, isCurrent) {
   };
 
   const renameFolder = async (folder) => {
-    const proposed = window.prompt(t('cabina.conversaciones.renameFolderPrompt', 'Nuevo nombre de la carpeta:'), folder.name || '');
+    const proposed = await promptDialog({
+      title: t('cabina.conversaciones.renameFolderPrompt', 'Nuevo nombre de la carpeta:'),
+      value: folder.name || '',
+    });
     if (proposed === null) return;
     const name = proposed.trim();
     if (!name) {
@@ -424,11 +427,14 @@ async function mountList(el, ctx, isCurrent) {
   };
 
   const deleteFolder = async (folder) => {
-    const confirmed = window.confirm(t(
-      'cabina.conversaciones.deleteFolderConfirm',
-      '¿Eliminar la carpeta “{name}”?\n\nLas conversaciones y terminales no se borrarán: quedarán fuera de la carpeta.',
-      { name: folder.name },
-    ));
+    const confirmed = await confirmDialog({
+      message: t(
+        'cabina.conversaciones.deleteFolderConfirm',
+        '¿Eliminar la carpeta “{name}”?\n\nLas conversaciones y terminales no se borrarán: quedarán fuera de la carpeta.',
+        { name: folder.name },
+      ),
+      danger: true,
+    });
     if (!confirmed) return;
     try {
       await ctx.api.post('/api/folders/delete', { id: folder.id });
@@ -447,7 +453,10 @@ async function mountList(el, ctx, isCurrent) {
   };
 
   const renameChat = async (chat) => {
-    const proposed = window.prompt(t('cabina.conversaciones.renameConversationPrompt', 'Nuevo nombre de la conversación:'), chat.title || '');
+    const proposed = await promptDialog({
+      title: t('cabina.conversaciones.renameConversationPrompt', 'Nuevo nombre de la conversación:'),
+      value: chat.title || '',
+    });
     if (proposed === null) return;
     try {
       const data = await ctx.api.post('/api/chat/title', { id: chat.id, title: proposed.trim() });
@@ -470,11 +479,13 @@ async function mountList(el, ctx, isCurrent) {
   };
 
   const archiveChat = async (chat) => {
-    const confirmed = window.confirm(t(
-      'cabina.conversaciones.archiveConfirm',
-      '¿Archivar “{title}”?\n\nPodrás recuperarla más adelante desde la consola.',
-      { title: chat.title || t('cabina.conversaciones.thisConversation', 'esta conversación') },
-    ));
+    const confirmed = await confirmDialog({
+      message: t(
+        'cabina.conversaciones.archiveConfirm',
+        '¿Archivar “{title}”?\n\nPodrás recuperarla más adelante desde la consola.',
+        { title: chat.title || t('cabina.conversaciones.thisConversation', 'esta conversación') },
+      ),
+    });
     if (!confirmed) return;
     try {
       const data = await ctx.api.post('/api/chat/archive', { id: chat.id });
@@ -499,11 +510,14 @@ async function mountList(el, ctx, isCurrent) {
   // retención). Cabina NO tiene pantalla de papelera: por eso el texto no
   // promete un botón que acá no existe y remite a quien dio el acceso.
   const deleteChat = async (chat) => {
-    const confirmed = window.confirm(t(
-      'cabina.conversaciones.deleteChatConfirm',
-      '¿Borrar “{title}”?\n\nSe va a la papelera y se puede recuperar durante 30 días. Para recuperarla, pedísela a quien te dio el acceso.',
-      { title: chat.title || t('cabina.conversaciones.thisConversation', 'esta conversación') },
-    ));
+    const confirmed = await confirmDialog({
+      message: t(
+        'cabina.conversaciones.deleteChatConfirm',
+        '¿Borrar “{title}”?\n\nSe va a la papelera y se puede recuperar durante 30 días. Para recuperarla, pedísela a quien te dio el acceso.',
+        { title: chat.title || t('cabina.conversaciones.thisConversation', 'esta conversación') },
+      ),
+      danger: true,
+    });
     if (!confirmed) return;
     try {
       await ctx.api.post('/api/chat/close', { id: chat.id });

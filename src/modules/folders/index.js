@@ -41,8 +41,12 @@ function storeFile(owner) {
 }
 
 function ownerOf(req) {
-  const owner = principalOf(req).username || hostUser();
-  return owner;
+  const principal = principalOf(req);
+  if (principal?.username) return principal.username;
+  if (principal?.type === 'token') return hostUser();
+  const error = new Error('No autorizado.');
+  error.statusCode = 401;
+  throw error;
 }
 
 function cleanName(value) {
@@ -144,10 +148,27 @@ function sanitizeStore(raw) {
 }
 
 function readStore(owner) {
+  const file = storeFile(owner);
+  let contents;
   try {
-    const raw = JSON.parse(fs.readFileSync(storeFile(owner), 'utf8'));
-    return sanitizeStore(raw);
-  } catch {
+    contents = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return emptyStore();
+    throw error;
+  }
+
+  try {
+    return sanitizeStore(JSON.parse(contents));
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    const backup = `${file}.corrupt-${Date.now()}.bak`;
+    try {
+      fs.renameSync(file, backup);
+    } catch (renameError) {
+      console.error('[folders] no se pudo respaldar el store corrupto:', renameError);
+      throw renameError;
+    }
+    console.error(`[folders] JSON inválido respaldado en ${backup}:`, error.message);
     return emptyStore();
   }
 }
@@ -168,6 +189,21 @@ function writeFailed(res) {
   return res.status(500).json({ error: 'no se pudo guardar' });
 }
 
+function requestStore(req, res) {
+  try {
+    const owner = ownerOf(req);
+    return { owner, store: readStore(owner) };
+  } catch (error) {
+    if (error?.statusCode === 401) {
+      res.status(401).json({ error: error.message });
+      return null;
+    }
+    console.error('[folders] no se pudo leer el store:', error);
+    res.status(500).json({ error: 'no se pudo leer' });
+    return null;
+  }
+}
+
 export default {
   name: 'folders',
 
@@ -179,8 +215,9 @@ export default {
     const r = express.Router();
 
     r.get('/list', (req, res) => {
-      const owner = ownerOf(req);
-      const store = readStore(owner);
+      const state = requestStore(req, res);
+      if (!state) return;
+      const { store } = state;
       res.json({ folders: store.folders, items: store.items, order: store.order });
     });
 
@@ -199,8 +236,9 @@ export default {
         return invalid(res, 'orden inválido');
       }
 
-      const owner = ownerOf(req);
-      const store = readStore(owner);
+      const state = requestStore(req, res);
+      if (!state) return;
+      const { owner, store } = state;
       if (store.folders.length >= MAX_FOLDERS) return invalid(res, 'límite de carpetas alcanzado');
 
       const parentId = requestedParentId ?? null;
@@ -233,8 +271,9 @@ export default {
       if (typeof id !== 'string' || !FOLDER_ID_RE.test(id)) return invalid(res, 'id inválido');
       if (!validName(name)) return invalid(res, 'nombre inválido');
 
-      const owner = ownerOf(req);
-      const store = readStore(owner);
+      const state = requestStore(req, res);
+      if (!state) return;
+      const { owner, store } = state;
       const folder = store.folders.find((item) => item.id === id);
       if (!folder) return missing(res);
       folder.name = name;
@@ -250,8 +289,9 @@ export default {
       const id = req.body?.id;
       if (typeof id !== 'string' || !FOLDER_ID_RE.test(id)) return invalid(res, 'id inválido');
 
-      const owner = ownerOf(req);
-      const store = readStore(owner);
+      const state = requestStore(req, res);
+      if (!state) return;
+      const { owner, store } = state;
       if (!store.folders.some((folder) => folder.id === id)) return missing(res);
 
       const deletedIds = new Set(
@@ -285,8 +325,9 @@ export default {
         return invalid(res, 'id inválido');
       }
 
-      const owner = ownerOf(req);
-      const store = readStore(owner);
+      const state = requestStore(req, res);
+      if (!state) return;
+      const { owner, store } = state;
       if (folderId === null || folderId === '') {
         delete store.items[key];
       } else {
@@ -318,8 +359,9 @@ export default {
         seenKeys.add(key);
       }
 
-      const owner = ownerOf(req);
-      const store = readStore(owner);
+      const state = requestStore(req, res);
+      if (!state) return;
+      const { owner, store } = state;
       if (FOLDER_CONTAINER_RE.test(container)) {
         const folderId = container.slice('folder:'.length);
         if (!store.folders.some((folder) => folder.id === folderId)) return missing(res);

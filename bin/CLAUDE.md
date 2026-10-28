@@ -280,17 +280,22 @@ causa raíz de los canjes que morían en `exchanging`.
 SIGTERM/SIGINT dejan `error:cancelado` y matan el PTY; timeout duro: 10 min.
 ### bin/cwc-sponsor-token-runner.js  CANJE GUIADO del token PROPIO de patrocinio:
 runner PTY desacoplado de `claude setup-token`, con estado en
-`~/.cwc-data/sponsor-token-jobs/<user>.json` + `<user>.code` + `<user>.log`,
-todos mode 600; el log sin ANSI pasa siempre por redacción obligatoria de
-`sk-ant-*` y el secreto se escribe SOLO en `userOauthTokenPath(user)`, nunca en
-estado/log. Corre con HOME DESCARTABLE
-`~/.cwc-data/sponsor-token-jobs/<user>.home` mode 0700 y lo borra al terminar,
-fallar, cancelar o vencer el timeout: para el HOST el HOME real es `~` y
+`userDataDir(username)/sponsor-token-jobs`: `<user>.json` + `<user>.code` +
+`<user>.log`, todos mode 600; para el host coincide con
+`~/.cwc-data/sponsor-token-jobs`. La lectura conserva fallback a esa ruta
+global vieja para no perder jobs en vuelo, pero todo job nuevo vive en el
+directorio del usuario. El log sin ANSI pasa siempre por redacción obligatoria
+de `sk-ant-*` y el secreto se escribe SOLO en `userOauthTokenPath(user)`, nunca
+en estado/log. Corre con HOME DESCARTABLE `<jobs>/<user>.home` mode 0700 y lo
+borra al terminar, fallar, cancelar o vencer el timeout: para el HOST el HOME
+real es `~` y
 `claude setup-token` podría tocar `~/.claude/.credentials.json`, la credencial
 VIVA de toda la consola; el scratch impide rozarla sin alterar el token, que
 depende de la cuenta autorizada en el navegador y no del HOME. Publica
 `starting` → `awaiting-code` (`url` y `note` a los 20 s) → `exchanging` →
-`done|error`; timeout duro de 10 min y limpieza en SIGTERM/SIGINT. El parseo
+`done|error`; cancelar crea `<user>.cancel` junto al job y el runner lo respeta
+antes de guardar el token o persistir nuevos estados no terminales. Timeout
+duro de 10 min y limpieza en SIGTERM/SIGINT. El parseo
 del PTY (`cols:1000`, Enter diferido 300 ms, `stripAnsi`, `outputNote()`) está
 DUPLICADO a propósito con `cwc-onboard-runner.js`: cualquier cambio debe
 actualizar ambos.

@@ -344,14 +344,23 @@ export function claimScanTarget(
     // El rescate y el claim comparten el mismo lock: ningún worker puede leer
     // el candidato antes de que el dueño anterior quede efectivamente apartado.
     reclaimStaleInTransaction(writeDb, runUid, staleMs);
+    const exhaustedAt = new Date().toISOString();
+    writeDb.prepare(`
+      UPDATE scan_queue
+      SET status = 'failed', finished_at = ?, error = 'max-attempts',
+          worker_id = NULL, worker_pid = NULL,
+          claimed_at = NULL, heartbeat_at = NULL
+      WHERE run_uid = ? AND status = 'pending' AND attempts >= ?
+    `).run(exhaustedAt, runUid, maxAttempts);
     const row = writeDb.prepare(`
       SELECT ticket_workflow_id, listed_json, attempts
       FROM scan_queue
       WHERE run_uid = ?
-        AND (status = 'pending' OR (status = 'failed' AND attempts < ?))
+        AND ((status = 'pending' AND attempts < ?)
+          OR (status = 'failed' AND attempts < ?))
       ORDER BY attempts ASC, rowid ASC
       LIMIT 1
-    `).get(runUid, maxAttempts);
+    `).get(runUid, maxAttempts, maxAttempts);
     if (!row) return null;
     const now = new Date().toISOString();
     writeDb.prepare(`
@@ -890,11 +899,13 @@ export function migrateFromJson(db, paths, { force = false } = {}) {
     }, errors.length > 0 ? `${errors.length} errores durante la importación` : null);
   }
 
-  withWrite(db, (writeDb) => {
-    writeDb.prepare(`
-      INSERT INTO meta (key, value) VALUES ('json_import_done', '1')
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run();
-  });
+  if (errors.length === 0) {
+    withWrite(db, (writeDb) => {
+      writeDb.prepare(`
+        INSERT INTO meta (key, value) VALUES ('json_import_done', '1')
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).run();
+    });
+  }
   return summary;
 }

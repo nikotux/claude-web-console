@@ -22,6 +22,8 @@ import { manager } from '../chat/index.js';
 import { hostUser, userDataDir, userClaudeDir } from '../../core/user-space.js';
 
 let prevCpu = null; // { idle, total }
+let prevCpuAt = 0;
+let lastCpuPct = 0;
 
 function cpuSnapshot() {
   let idle = 0;
@@ -33,8 +35,11 @@ function cpuSnapshot() {
   return { idle, total };
 }
 
-// % de uso de CPU desde la última llamada (0 en la primera).
+// % de uso de CPU desde la última muestra útil (0 en la primera). Las llamadas
+// separadas por menos de 1 s reutilizan el último porcentaje sin mover la base.
 function cpuPercent() {
+  const now = Date.now();
+  if (prevCpu && now - prevCpuAt < 1000) return lastCpuPct;
   const cur = cpuSnapshot();
   let pct = 0;
   if (prevCpu) {
@@ -43,7 +48,9 @@ function cpuPercent() {
     if (dTotal > 0) pct = Math.max(0, Math.min(100, (1 - dIdle / dTotal) * 100));
   }
   prevCpu = cur;
-  return pct;
+  prevCpuAt = now;
+  lastCpuPct = pct;
+  return lastCpuPct;
 }
 
 // Memoria real desde /proc/meminfo (MemAvailable es más fiel que os.freemem).
@@ -109,6 +116,9 @@ export async function systemSnapshot() {
 // sería carísimo de recorrer) → diskBytes null.
 const USERS_ROOT = path.join(config.home, '.cwc-users');
 const CHATS_DIR = path.join(config.home, '.cwc-data', 'chats'); // los spawnlock los escribe el server (host) para TODOS los chats
+const DISK_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_DISK_CACHE_USERS = 100;
+const diskBytesCache = new Map(); // userId -> { value, expiresAt, inFlight }
 
 // VmRSS (kB) de un pid, o 0 si no se puede leer. Async (fs.promises): esto se
 // llama por cada pid vivo dentro de un handler HTTP — bloquear el event loop
@@ -151,6 +161,47 @@ async function dirSizeBytes(dir, budget) {
   return total;
 }
 
+function touchDiskCache(userId, entry) {
+  diskBytesCache.delete(userId);
+  diskBytesCache.set(userId, entry);
+  while (diskBytesCache.size > MAX_DISK_CACHE_USERS) {
+    diskBytesCache.delete(diskBytesCache.keys().next().value);
+  }
+}
+
+async function diskBytesForUser(userId) {
+  const now = Date.now();
+  const cached = diskBytesCache.get(userId);
+  if (cached?.expiresAt > now) {
+    touchDiskCache(userId, cached);
+    return cached.value;
+  }
+  if (cached?.inFlight) return cached.inFlight;
+
+  const entry = cached || { value: 0, expiresAt: 0, inFlight: null };
+  const inFlight = (async () => {
+    const budget = { files: 0 };
+    return (await dirSizeBytes(userDataDir(userId), budget))
+         + (await dirSizeBytes(userClaudeDir(userId), budget));
+  })();
+  entry.inFlight = inFlight;
+  touchDiskCache(userId, entry);
+
+  try {
+    const value = await inFlight;
+    if (diskBytesCache.get(userId) === entry) {
+      entry.value = value;
+      entry.expiresAt = Date.now() + DISK_CACHE_TTL_MS;
+      entry.inFlight = null;
+      touchDiskCache(userId, entry);
+    }
+    return value;
+  } catch (e) {
+    if (diskBytesCache.get(userId) === entry) diskBytesCache.delete(userId);
+    throw e;
+  }
+}
+
 // Snapshot por-usuario. Contrato: [{ userId, liveSessions, runners, rssMB, diskBytes }].
 export async function perUserSnapshot() {
   const host = hostUser();
@@ -167,13 +218,17 @@ export async function perUserSnapshot() {
     }
   } catch { /* aún sin inquilinos */ }
   ensure(host); // el host siempre aparece
-  // conversaciones VIVAS por dueño (owner null = host)
-  for (const c of manager.chats.values()) {
-    if (c.closed || c.archived) continue;
+  // conversaciones VIVAS por dueño (owner null = host). Los spawnlocks se
+  // leen en paralelo para que el costo no crezca linealmente con los chats.
+  const liveChats = [...manager.chats.values()].filter((c) => !c.closed && !c.archived);
+  const chatsWithPid = await Promise.all(liveChats.map(async (c) => ({
+    chat: c,
+    pid: await pidForChat(c.id),
+  })));
+  for (const { chat: c, pid } of chatsWithPid) {
     const e = ensure(c.owner || host);
     e.liveSessions += 1;
     if (c.viewMode !== 'tui') e.runners += 1; // un chat en modo chat tiene runner; una TUI no
-    const pid = await pidForChat(c.id);
     if (pid) e._pids.push(pid);
   }
   // RSS agregado + disco del espacio (solo inquilinos)
@@ -185,12 +240,7 @@ export async function perUserSnapshot() {
     e.rssMB = Math.round(rssKb / 1024);
     if (e.userId !== host) {
       try {
-        // Budget COMPARTIDO entre los dos subárboles: el tope de 200.000
-        // archivos aplica al espacio COMPLETO del usuario, no a cada subárbol
-        // por separado (si no, el walk podía llegar a 400.000 en un request).
-        const budget = { files: 0 };
-        e.diskBytes = (await dirSizeBytes(userDataDir(e.userId), budget))
-                    + (await dirSizeBytes(userClaudeDir(e.userId), budget));
+        e.diskBytes = await diskBytesForUser(e.userId);
       } catch { e.diskBytes = 0; }
     } else {
       e.diskBytes = null; // host: home completo, no medido

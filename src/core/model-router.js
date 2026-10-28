@@ -55,11 +55,12 @@
 // (downStreak, cooldown). El nivel se deriva de chat.model, no se duplica.
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { resolveDataDir } from './data-dir.js';
 
-const LOG_FILE = path.join(os.homedir(), '.cwc-data', 'model-router-log.jsonl');
-const TURN_LOG_FILE = path.join(os.homedir(), '.cwc-data', 'model-router-turns.jsonl');
+function routerLogFile(dataDir) { return path.join(dataDir || resolveDataDir(), 'model-router-log.jsonl'); }
+function routerTurnsFile(dataDir) { return path.join(dataDir || resolveDataDir(), 'model-router-turns.jsonl'); }
+function planLimitsFile(dataDir) { return path.join(dataDir || resolveDataDir(), 'plan-limits.json'); }
 const LOG_MAX_BYTES = 2 * 1024 * 1024; // tope crudo — ver poda
 
 function appendCapped(file, obj) {
@@ -78,14 +79,15 @@ function appendCapped(file, obj) {
 // Registro append-only de UN cambio de modelo decidido por el router. `entry`:
 // { chatId, sessionId, source: 'heuristic'|'classifier'|'reactive'|'override'|
 //   'insufficiency'|'idle'|'guard', from, to, text }.
-export function logDecision(entry) { appendCapped(LOG_FILE, entry); }
+// El llamador debe pasar el dataDir del DUEÑO del chat; sin él cae al data-dir del proceso.
+export function logDecision(entry, { dataDir } = {}) { appendCapped(routerLogFile(dataDir), entry); }
 
 // Registro por TURNO (para calibrar: distribución de turnos por nivel + tasa de
 // rebote — v1 solo logueaba CAMBIOS, así que Haiko 0% era invisible). Liviano.
 // Enriquecido (PEND-391 #2/#4): { chatId, model, modelChoice, switchedFromPrev,
 // prevModel, effort, ranLevel, base, override, toolCalls, toolErrors,
 // cacheCreate, cacheRead, input, output }.
-export function logTurn(entry) { appendCapped(TURN_LOG_FILE, entry); }
+export function logTurn(entry, { dataDir } = {}) { appendCapped(routerTurnsFile(dataDir), entry); }
 
 // Métricas de calibración (PEND-391 #4): lee model-router-turns.jsonl (0 tokens,
 // solo disco) y computa lo que la investigación pidió medir — distribución de
@@ -94,10 +96,10 @@ export function logTurn(entry) { appendCapped(TURN_LOG_FILE, entry); }
 // NO, ¿cuánto cae cache_read y cuánto sube cache_creation? Si el switch invalida
 // el caché, los turnos con switch tendrán cacheRead≈0 y cacheCreate alto — eso
 // CONFIRMA que rebotar de tier cuesta tokens de la ventana de rate-limit.
-export function readTurnMetrics({ limit = 4000 } = {}) {
+export function readTurnMetrics({ limit = 4000, dataDir } = {}) {
   let lines = [];
   try {
-    lines = fs.readFileSync(TURN_LOG_FILE, 'utf8').split('\n').filter(Boolean);
+    lines = fs.readFileSync(routerTurnsFile(dataDir), 'utf8').split('\n').filter(Boolean);
   } catch { return { turns: 0, byModel: {}, bounceRate: 0, cache: null, note: 'sin datos aún' }; }
   const rows = lines.slice(-limit).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   const byModel = {};
@@ -204,15 +206,14 @@ export function decideUpAxis({ hard = false, level = -1, effortIndex = -1, lastC
 
 // F4 (PEND-405): presión de la ventana de rate-limit (0 tokens — solo lee el
 // snapshot plan-limits.json que el módulo tokens persiste). El llamador pasa el
-// data-dir del dueño; sin argumento conserva el archivo del HOST. Este núcleo NO
+// data-dir del DUEÑO del chat; sin él cae al data-dir del proceso. Este núcleo NO
 // importa user-space a propósito: también lo consume bin/cwc-test-model-router.js.
 // Devuelve el % MÁXIMO usado entre las ventanas (sesión 5h / semanal), 0..100, o
 // null si no hay dato. El router se pone conservador al superar el umbral.
-const PLAN_LIMITS_FILE = path.join(os.homedir(), '.cwc-data', 'plan-limits.json');
 export const WINDOW_PRESSURE_CONSERVE = 75; // ≥75% usado ⇒ conservar (effort, no tier)
 export function readWindowPressure(dataDir = null) {
   try {
-    const file = dataDir ? path.join(dataDir, 'plan-limits.json') : PLAN_LIMITS_FILE;
+    const file = planLimitsFile(dataDir);
     const obj = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!obj || !Array.isArray(obj.limits)) return null;
     const pcts = obj.limits.map((l) => (typeof l.percent === 'number' ? l.percent : null)).filter((p) => p != null);
@@ -356,13 +357,13 @@ export function insufficiencyEscalation({ baseLevel, toolCalls = 0, toolErrors =
 const CALIB_MIN_DECISIONS = 400;   // menos que esto ⇒ señales aprendidas OFF (ruido)
 const CALIB_MIN_SUPPORT = 6;       // ocurrencias mínimas de un keyword para confiar
 const STOPWORDS = new Set(['para','pero','como','esto','esta','este','que','con','los','las','del','una','uno','por','the','and','for','you','are','con','más','muy','sin','sus','han','hay','fue','ver','así','solo','todo','cada']);
-export function analyzeCalibration({ decisionsLimit = 8000, turnsLimit = 8000 } = {}) {
+export function analyzeCalibration({ decisionsLimit = 8000, turnsLimit = 8000, dataDir } = {}) {
   const readJsonl = (file, lim) => {
     try { return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-lim).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
     catch { return []; }
   };
-  const decisions = readJsonl(LOG_FILE, decisionsLimit);
-  const turns = readJsonl(TURN_LOG_FILE, turnsLimit);
+  const decisions = readJsonl(routerLogFile(dataDir), decisionsLimit);
+  const turns = readJsonl(routerTurnsFile(dataDir), turnsLimit);
   const proposals = [];
 
   // (1) Fuentes de decisión (para ver qué domina).
@@ -428,23 +429,26 @@ export function analyzeCalibration({ decisionsLimit = 8000, turnsLimit = 8000 } 
 // Caché TTL de las señales aprendidas (F5b): la heurística las consulta ANTES de
 // gastar el clasificador Haiku. Se refresca cada 30 min (analyzeCalibration lee
 // archivos). Con pocos datos la lista viene vacía ⇒ null ⇒ sin efecto (seguro).
-let _sigCache = { at: 0, sig: null };
+const _sigCache = new Map();
 const SIG_TTL_MS = 30 * 60 * 1000;
-function getLearnedSignals(nowMs) {
+function getLearnedSignals(nowMs, dataDir) {
   // nowMs se pasa desde el llamador (Date.now() está prohibido en el core-workflow
   // pero NO en runtime del server; igual lo recibimos para testeabilidad).
   const now = nowMs || 0;
-  if (!_sigCache.sig || (now && now - _sigCache.at > SIG_TTL_MS)) {
-    try { _sigCache = { at: now, sig: analyzeCalibration().learnedSignals || [] }; }
-    catch { _sigCache = { at: now, sig: [] }; }
+  const resolvedDataDir = dataDir || resolveDataDir();
+  let cached = _sigCache.get(resolvedDataDir);
+  if (!cached?.sig || (now && now - cached.at > SIG_TTL_MS)) {
+    try { cached = { at: now, sig: analyzeCalibration({ dataDir: resolvedDataDir }).learnedSignals || [] }; }
+    catch { cached = { at: now, sig: [] }; }
+    _sigCache.set(resolvedDataDir, cached);
   }
-  return _sigCache.sig;
+  return cached.sig;
 }
 // Devuelve 'up' si el texto matchea una señal aprendida 'up' con soporte, o null.
 // Solo actúa cuando HAY señales (datos suficientes); si no, null (heurística sigue
 // su curso hacia el clasificador Haiku). Alternativa determinística al #6.
-export function learnedSignalBias(text, nowMs = 0) {
-  const sig = getLearnedSignals(nowMs);
+export function learnedSignalBias(text, nowMs = 0, { dataDir } = {}) {
+  const sig = getLearnedSignals(nowMs, dataDir);
   if (!sig || !sig.length) return null;
   const t = String(text || '').toLowerCase();
   for (const s of sig) { if (s.dir === 'up' && t.includes(s.keyword)) return 'up'; }

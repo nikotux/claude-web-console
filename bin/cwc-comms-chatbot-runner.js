@@ -153,7 +153,11 @@ async function run() {
       return;
     }
     log(`fase 1: leyendo el chat del bot ${bot.name} vía Graph…`);
-    let res = await fetchBotRaw(bot);
+    const rawRes = await fetchBotRaw(bot);
+    // El backoff debe mirar el resultado real de Graph, antes de que el
+    // fallback lo convierta en found:true o la rama sin datos haga return.
+    if (!rawRes.found && /429|overload|rate.?limit/i.test(rawRes.note || '')) ctl.backoff();
+    let res = rawRes;
     // Fallback: si Graph falla, usar lo que ya está en teams.json para ese bot.
     if (!res.found || !res.thread) {
       const t = (teams.threads || []).find((x) => x.contactId === bot.id);
@@ -166,8 +170,6 @@ async function run() {
       }
     }
     resByIdx[i] = { bot, thread: res.thread };
-    // Rate-limit/overload del API ⇒ pedirle al pool que baje concurrencia (parity teams-runner).
-    if (!res.found && /429|overload|rate.?limit/i.test(res.note || '')) ctl.backoff();
     beat();
   }, { min: 1, start: 2 });
   // Acumulación SERIAL y determinística en el orden de la lista de bots.

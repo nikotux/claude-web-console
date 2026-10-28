@@ -8,7 +8,7 @@
     "start": "node src/server.js"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.296",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.312",
     "@xterm/addon-clipboard": "^0.2.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
@@ -16,21 +16,21 @@
     "archiver": "^8.0.0",
     "baileys": "6.7.23",
     "better-sqlite3": "^13.0.3",
-    "chart.js": "^4.5.1",
+    "chart.js": "^4.6.1",
     "compression": "^1.8.2",
     "cookie": "^2.0.1",
     "dotenv": "^17.4.2",
     "express": "^5.3.0",
     "highlight.js": "^11.12.0",
-    "marked": "^18.1.1",
+    "marked": "^18.1.2",
     "mermaid": "^11.17.2",
-    "multer": "^2.2.0",
+    "multer": "^2.5.0",
     "node-pty": "^1.0.0",
     "pino": "^10.4.0",
     "qrcode": "^1.5.4",
     "ws": "^8.22.0"
   },
   "devDependencies": {
-    "playwright-core": "^1.64.0"
+    "playwright-core": "^1.64.1"
   }
 }

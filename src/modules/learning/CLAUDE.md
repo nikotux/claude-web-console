@@ -16,8 +16,11 @@ Se conservan `learningId` en el shell y su aceptación por el backend de Chat.
 `store.js` no importa `session-log.js` ni ningún archivo archivado. Usa
 `core/pad-service-client.js` para las colecciones locales
 `temas-de-aprendizaje` y `rutas-de-aprendizaje`, `core/atomic-write.js`
-para el log y `core/user-space.js` para resolver dueño y directorio por
-operación. No congelar rutas del host ni cambiar el aislamiento por usuario.
+para escribir el log atómicamente y `core/user-space.js` para resolver dueño y
+directorio por operación. El read-modify-write de actividad se serializa entre
+procesos con el lock vecino `learning-activity.json.lock`; conserva el JSON
+existente como formato público. No congelar rutas del host ni cambiar el
+aislamiento por usuario.
 
 Los helpers de análisis, contexto, explicaciones y registro de session ids
 quedaron archivados. `tokens/index.js` sigue leyendo el histórico

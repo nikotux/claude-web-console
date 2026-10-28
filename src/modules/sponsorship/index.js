@@ -1,13 +1,13 @@
 // modules/sponsorship/index.js — adopción self-service de perfiles patrocinados.
 //
 // HTTP (autenticado):
-//   GET  /api/sponsorship/candidates -> perfiles que esperan sponsor
+//   GET  /api/sponsorship/candidates -> perfiles que esperan sponsor si puede patrocinar
 //   GET  /api/sponsorship/mine       -> capacidad, token y patrocinados propios
-//   POST /api/sponsorship/adopt      -> adopta { username }
+//   POST /api/sponsorship/adopt      -> adopta { username } con token propio listo
 //   POST /api/sponsorship/release    -> suelta { username }
 //   POST /api/sponsorship/token/start  -> inicia setup-token propio
 //   GET  /api/sponsorship/token/status -> consulta el estado sin exponer secretos
-//   POST /api/sponsorship/token/code   -> entrega { code } al runner propio
+//   POST /api/sponsorship/token/code   -> entrega { code } al runner propio que lo espera
 //   POST /api/sponsorship/token/cancel -> cancela el setup-token propio
 //   POST /api/sponsorship/admin/assign   -> admin asigna { username, sponsor? }
 //   POST /api/sponsorship/admin/release  -> admin suelta { username }
@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { sponsorTokenReady } from '../../core/sponsorship.js';
+import { sanitizeUserId, userDataDir } from '../../core/user-space.js';
 import {
   listUsers,
   setAwaitingSponsor,
@@ -29,28 +30,86 @@ import {
 import { withLocalUsage } from '../tokens/index.js';
 
 const DEFAULT_WARN_USD = 10;
-const JOBS_DIR = path.join(os.homedir(), '.cwc-data', 'sponsor-token-jobs');
-const jobFile = (u) => path.join(JOBS_DIR, `${u}.json`);
-const codeFile = (u) => path.join(JOBS_DIR, `${u}.code`);
+const LEGACY_JOBS_DIR = path.join(os.homedir(), '.cwc-data', 'sponsor-token-jobs');
 const RUNNER = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '..', '..', '..', 'bin', 'cwc-sponsor-token-runner.js',
 );
 
-function readJob(username) {
-  try { return JSON.parse(fs.readFileSync(jobFile(username), 'utf8')); }
+function safeUser(username) {
+  const user = sanitizeUserId(username);
+  if (user === '.' || user === '..') throw new Error('Usuario inválido.');
+  return user;
+}
+
+function jobsDirFor(username) {
+  return path.join(userDataDir(safeUser(username)), 'sponsor-token-jobs');
+}
+
+function contained(dir, file) {
+  const rel = path.relative(dir, file);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error('Ruta fuera del directorio de jobs.');
+  }
+  return file;
+}
+
+function jobPaths(dir, username) {
+  const user = safeUser(username);
+  return {
+    job: contained(dir, path.join(dir, `${user}.json`)),
+    code: contained(dir, path.join(dir, `${user}.code`)),
+    cancel: contained(dir, path.join(dir, `${user}.cancel`)),
+  };
+}
+
+function readJobFile(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch { return { status: 'idle' }; }
+}
+
+function locateJob(username) {
+  const user = safeUser(username);
+  const dir = jobsDirFor(user);
+  const { job } = jobPaths(dir, user);
+  if (fs.existsSync(job)) return { dir, job: readJobFile(job) };
+
+  const legacyJob = jobPaths(LEGACY_JOBS_DIR, user).job;
+  if (fs.existsSync(legacyJob)) {
+    return { dir: LEGACY_JOBS_DIR, job: readJobFile(legacyJob) };
+  }
+  return { dir, job: { status: 'idle' } };
 }
 
 function jobAlive(job) {
   if (['done', 'error'].includes(job?.status)) return false;
+  if (!job?.pid && job?.status === 'starting') {
+    const age = Date.now() - Number(job?.ts);
+    return Number.isFinite(age) && age >= 0 && age < 15000;
+  }
   const pid = Number(job?.pid);
-  if (!pid) return false;
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
-    return true;
+    const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ');
+    return cmdline.includes('cwc-sponsor-token-runner');
   } catch {
     return false;
+  }
+}
+
+function publicJob(job) {
+  return {
+    status: job?.status || null,
+    url: job?.url || null,
+    note: job?.note || null,
+    error: job?.error || null,
+  };
+}
+
+function unlinkIfExists(file) {
+  try { fs.unlinkSync(file); } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
   }
 }
 
@@ -100,25 +159,87 @@ export default {
     const r = express.Router();
 
     r.post('/token/start', (req, res) => {
+      let reservedJobFile = null;
+      let reservedUser = null;
       try {
         const username = principalUsername(req, res);
         if (!username) return;
-        const job = readJob(username);
-        if (jobAlive(job)) return res.json({ ...job, alreadyRunning: true });
+        let user;
+        try { user = safeUser(username); } catch {
+          return res.status(400).json({ error: 'Usuario inválido.' });
+        }
+        const current = locateJob(user).job;
+        if (jobAlive(current)) {
+          return res.json({ ...publicJob(current), alreadyRunning: true });
+        }
 
-        try { fs.unlinkSync(codeFile(username)); } catch (err) {
-          if (err?.code !== 'ENOENT') throw err;
+        const dir = jobsDirFor(user);
+        const paths = jobPaths(dir, user);
+        const legacyPaths = jobPaths(LEGACY_JOBS_DIR, user);
+        unlinkIfExists(paths.code);
+        unlinkIfExists(paths.job);
+        unlinkIfExists(paths.cancel);
+        unlinkIfExists(legacyPaths.code);
+        unlinkIfExists(legacyPaths.cancel);
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+        let fd;
+        try {
+          fd = fs.openSync(paths.job, 'wx', 0o600);
+          reservedJobFile = paths.job;
+          reservedUser = user;
+          fs.writeFileSync(fd, JSON.stringify({ status: 'starting', user, ts: Date.now() }));
+        } catch (err) {
+          if (err?.code === 'EEXIST') {
+            return res.json({ status: 'starting', alreadyRunning: true });
+          }
+          throw err;
+        } finally {
+          if (fd !== undefined) fs.closeSync(fd);
         }
-        try { fs.unlinkSync(jobFile(username)); } catch (err) {
-          if (err?.code !== 'ENOENT') throw err;
-        }
-        const child = spawn(process.execPath, [RUNNER, '--user', username], {
+
+        const child = spawn(process.execPath, [RUNNER, '--user', user], {
           detached: true,
           stdio: 'ignore',
         });
+        child.on('error', (err) => {
+          try {
+            const job = readJobFile(paths.job);
+            if (job.pid && job.pid !== child.pid) return;
+            fs.writeFileSync(
+              paths.job,
+              JSON.stringify({
+                status: 'error',
+                error: 'No se pudo lanzar el runner: ' + err.message,
+                user,
+                ts: Date.now(),
+              }),
+              { mode: 0o600 },
+            );
+          } catch { /* el error de spawn nunca puede tumbar el server */ }
+        });
         child.unref();
+
+        const state = child.pid
+          ? { status: 'starting', user, pid: child.pid, ts: Date.now() }
+          : { status: 'error', error: 'No se pudo lanzar el runner.', user, ts: Date.now() };
+        fs.writeFileSync(paths.job, JSON.stringify(state), { mode: 0o600 });
         res.json({ status: 'starting' });
       } catch (err) {
+        if (reservedJobFile) {
+          try {
+            fs.writeFileSync(
+              reservedJobFile,
+              JSON.stringify({
+                status: 'error',
+                error: err.message || 'No se pudo iniciar la generación del token.',
+                user: reservedUser,
+                ts: Date.now(),
+              }),
+              { mode: 0o600 },
+            );
+          } catch { /* best-effort después de reservar */ }
+        }
         res.status(500).json({ error: err.message || 'No se pudo iniciar la generación del token.' });
       }
     });
@@ -127,13 +248,17 @@ export default {
       try {
         const username = principalUsername(req, res);
         if (!username) return;
-        const job = readJob(username);
+        let user;
+        try { user = safeUser(username); } catch {
+          return res.status(400).json({ error: 'Usuario inválido.' });
+        }
+        const { job } = locateJob(user);
         res.json({
           status: job.status,
           url: job.url || null,
           note: job.note || null,
           error: job.error || null,
-          ready: sponsorTokenReady(username),
+          ready: sponsorTokenReady(user),
         });
       } catch (err) {
         res.status(500).json({ error: err.message || 'No se pudo consultar la generación del token.' });
@@ -144,10 +269,23 @@ export default {
       try {
         const username = principalUsername(req, res);
         if (!username) return;
+        let user;
+        try { user = safeUser(username); } catch {
+          return res.status(400).json({ error: 'Usuario inválido.' });
+        }
         const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
         if (!code) return res.status(400).json({ error: 'code debe ser un string no vacío.' });
-        fs.mkdirSync(JOBS_DIR, { recursive: true });
-        fs.writeFileSync(codeFile(username), code, { mode: 0o600 });
+        if (code.length > 512) {
+          return res.status(400).json({ error: 'code demasiado largo (máx. 512).' });
+        }
+        const { dir, job } = locateJob(user);
+        if (!jobAlive(job) || !['awaiting-code', 'exchanging'].includes(job.status)) {
+          return res.status(409).json({
+            error: 'No hay un flujo de autorización esperando un código.',
+          });
+        }
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(jobPaths(dir, user).code, code, { mode: 0o600 });
         res.json({ ok: true });
       } catch (err) {
         res.status(500).json({ error: err.message || 'No se pudo guardar el código.' });
@@ -158,17 +296,21 @@ export default {
       try {
         const username = principalUsername(req, res);
         if (!username) return;
-        const job = readJob(username);
-        if (jobAlive(job)) {
+        let user;
+        try { user = safeUser(username); } catch {
+          return res.status(400).json({ error: 'Usuario inválido.' });
+        }
+        const { dir, job } = locateJob(user);
+        const paths = jobPaths(dir, user);
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(paths.cancel, String(Date.now()), { mode: 0o600 });
+        if (jobAlive(job) && job.pid) {
           try { process.kill(Number(job.pid), 'SIGTERM'); } catch { /* ya terminó */ }
         }
-        try { fs.unlinkSync(codeFile(username)); } catch (err) {
-          if (err?.code !== 'ENOENT') throw err;
-        }
-        fs.mkdirSync(JOBS_DIR, { recursive: true });
+        unlinkIfExists(paths.code);
         fs.writeFileSync(
-          jobFile(username),
-          JSON.stringify({ status: 'error', error: 'cancelado', user: username, ts: Date.now() }),
+          paths.job,
+          JSON.stringify({ status: 'error', error: 'cancelado', user, ts: Date.now() }),
           { mode: 0o600 },
         );
         res.json({ ok: true });
@@ -178,8 +320,12 @@ export default {
     });
 
     r.get('/candidates', (req, res) => {
-      if (!principalUsername(req, res)) return;
+      const principal = principalUsername(req, res);
+      if (!principal) return;
       try {
+        if (sponsorshipState(principal) !== 'none' || !sponsorTokenReady(principal)) {
+          return res.json({ candidates: [] });
+        }
         const candidates = listUsers()
           .filter((user) => user.sponsorshipState === 'awaiting-sponsor')
           .map((user) => ({ username: user.username }));
@@ -225,6 +371,11 @@ export default {
         }
         if (sponsorshipState(principal) !== 'none') {
           return res.status(400).json({ error: 'Un usuario patrocinado no puede patrocinar a otro usuario.' });
+        }
+        if (!sponsorTokenReady(principal)) {
+          return res.status(400).json({
+            error: 'Primero generá tu token propio de patrocinio para poder adoptar.',
+          });
         }
 
         setUserSponsor(target, principal);
@@ -282,6 +433,14 @@ export default {
       }
 
       try {
+        if (target === sponsor) {
+          return res.status(400).json({ error: 'Un usuario no puede patrocinarse a sí mismo.' });
+        }
+        if (sponsorshipState(sponsor) !== 'none') {
+          return res.status(400).json({
+            error: 'Un usuario patrocinado no puede patrocinar a otro usuario.',
+          });
+        }
         setUserSponsor(target, sponsor);
         const user = listUsers().find((item) => item.username === target);
         res.json({

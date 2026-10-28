@@ -116,6 +116,8 @@ export function effortLabel(effort, pinned) {
 // criterio que ROUTER_MANAGED_MODELS). Si cambia allá, cambiá acá.
 export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol';
 export const CODEX_MODEL_OPTIONS = [
+  ['gpt-6.1-sol', 'GPT-6.1 Sol'],
+  ['gpt-6.1-terra', 'GPT-6.1 Terra'],
   ['gpt-6-astra', 'GPT-6 Astra'],
   ['gpt-6-sol', 'GPT-6 Sol'],
   ['gpt-6-luna', 'GPT-6 Luna'],
@@ -126,6 +128,8 @@ export const CODEX_MODEL_OPTIONS = [
   ['gpt-5.3-codex-spark', 'GPT-5.3 Spark'],
 ];
 const CODEX_EFFORTS_BY_MODEL = {
+  'gpt-6.1-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-6.1-terra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   'gpt-6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],

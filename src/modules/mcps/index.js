@@ -28,7 +28,12 @@ import { systemScopeFor } from '../../core/system-scope.js';
 import {
   commandEnvFor, spawnLogin, readLoginJob, writeLoginCode, worldCwd, WORLDS, runMcpGet,
 } from './login-shared.js';
-import { buildKeyring, refreshDerived } from './keyring-shared.js';
+import {
+  KEYRING_EXPENSIVE_PROBES,
+  buildKeyring,
+  itemsForProbe,
+  refreshDerived,
+} from './keyring-shared.js';
 import {
   spawnInfisicalLogin,
   readInfisicalLoginJob,
@@ -132,8 +137,9 @@ export function mcpsPathsFor(scope) {
 }
 
 const CHECK_TIMEOUT_MS = 15000;
-// Abrir el panel no debe costar consultas de red ni subprocesos: el estado de
-// una conexión no cambia minuto a minuto, y para urgencias existe Re-verificar.
+// El estado vivo se renueva cada 2 minutos; las sondas caras (hoy Infisical)
+// se reutilizan hasta 12 horas. `?fresh=1` fuerza un build completo.
+const KEYRING_LIVE_TTL_MS = 2 * 60 * 1000;
 const AUTO_RECHECK_MS = 12 * 60 * 60 * 1000;
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
 // Allowlist CERRADA de unidades systemd reiniciables desde el panel. El nombre
@@ -356,8 +362,11 @@ async function getKeyring(scope, { fresh = false } = {}) {
     const snap = readJson(keyringFile);
     if (validKeyringSnapshot(snap)) state.keyringMemo = snap;
   }
-  const ageMs = state.keyringMemo?.generatedAt ? now - state.keyringMemo.generatedAt : Infinity;
-  if (!fresh && state.keyringMemo && ageMs < AUTO_RECHECK_MS) return hydrateKeyringSnapshot(state.keyringMemo);
+  const memo = state.keyringMemo;
+  const fullAt = memo?.fullAt || memo?.generatedAt || null;
+  const needsFull = fresh || !memo || now - fullAt >= AUTO_RECHECK_MS;
+  const liveAgeMs = memo?.generatedAt ? now - memo.generatedAt : Infinity;
+  if (!needsFull && liveAgeMs < KEYRING_LIVE_TTL_MS) return hydrateKeyringSnapshot(memo);
   if (state.keyringInFlight) {
     try {
       return hydrateKeyringSnapshot(await state.keyringInFlight);
@@ -367,7 +376,19 @@ async function getKeyring(scope, { fresh = false } = {}) {
     }
   }
   state.keyringInFlight = (async () => {
-    const data = await buildKeyring(scope);
+    let data;
+    if (needsFull) {
+      const built = await buildKeyring(scope);
+      data = { ...built, fullAt: built.generatedAt };
+    } else {
+      const reuse = {};
+      for (const probeKey of KEYRING_EXPENSIVE_PROBES) {
+        const reused = itemsForProbe(memo.items, probeKey);
+        if (reused.length > 0) reuse[probeKey] = reused;
+      }
+      const built = await buildKeyring(scope, { reuse });
+      data = { ...built, fullAt };
+    }
     state.keyringMemo = data;
     try { writeJsonAtomic(keyringFile, keyringSnapshotForDisk(data), { space: 2 }); } catch { /* best-effort: el snapshot no bloquea la respuesta */ }
     return data;

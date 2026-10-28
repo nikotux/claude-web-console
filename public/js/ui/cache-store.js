@@ -7,6 +7,7 @@
 // /api/tokens/flow, etc.).
 const NS = 'cwc.cache.';
 const BUILD = (typeof window !== 'undefined' && window.__CWC_BUILD__) || 'dev';
+const FETCH_TIMEOUT_MS = 10000;
 
 // Devuelve { v, t, data } o null (inexistente / de otra versión / corrupto).
 export function readCache(key) {
@@ -35,7 +36,10 @@ export function cachedGet(url, { key, ttl = 0, onData } = {}) {
   if (hit && (!ttl || Date.now() - hit.t < ttl)) {
     try { onData?.(hit.data, { fromCache: true }); } catch { /* noop */ }
   }
-  return fetch(url)
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, { signal: ac.signal })
     .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-    .then((data) => { writeCache(k, data); try { onData?.(data, { fromCache: false }); } catch { /* noop */ } return data; });
+    .then((data) => { writeCache(k, data); try { onData?.(data, { fromCache: false }); } catch { /* noop */ } return data; })
+    .finally(() => clearTimeout(timer));
 }

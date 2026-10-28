@@ -3,15 +3,21 @@
 // patrocinio. Corre `claude setup-token` con un HOME DESCARTABLE para no tocar
 // las credenciales vivas del usuario, espera el código en <user>.code, captura
 // el token y lo guarda en userOauthTokenPath (mode 600). Estado persistente en
-// ~/.cwc-data/sponsor-token-jobs/<user>.json: si el server se reinicia, el job
-// desacoplado sigue vivo y el panel puede reanudar el polling.
+// <userDataDir(user)>/sponsor-token-jobs/<user>.json (para el host coincide con
+// ~/.cwc-data/sponsor-token-jobs/): si el server se reinicia, el job desacoplado
+// sigue vivo y el panel puede reanudar el polling.
 // El parseo del PTY de `claude setup-token` está duplicado con
 // bin/cwc-onboard-runner.js; si cambia, hay que actualizar los dos.
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import pty from 'node-pty';
-import { userRunnerEnv, userOauthTokenPath, ensureUserSpace } from '../src/core/user-space.js';
+import {
+  ensureUserSpace,
+  sanitizeUserId,
+  userDataDir,
+  userOauthTokenPath,
+  userRunnerEnv,
+} from '../src/core/user-space.js';
 
 const args = {};
 for (let i = 2; i < process.argv.length - 1; i += 2) {
@@ -27,12 +33,34 @@ try {
   process.exit(1);
 }
 
-const JOBS_DIR = path.join(os.homedir(), '.cwc-data', 'sponsor-token-jobs');
+try {
+  sanitizeUserId(USER);
+  if (USER === '.' || USER === '..') throw new Error('usuario reservado');
+} catch (e) {
+  console.error('[sponsor-token-runner] usuario inválido:', e.message);
+  process.exit(1);
+}
+
+const JOBS_DIR = path.join(userDataDir(USER), 'sponsor-token-jobs');
 const jobFile = path.join(JOBS_DIR, `${USER}.json`);
 const codeFile = path.join(JOBS_DIR, `${USER}.code`);
 const logFile = path.join(JOBS_DIR, `${USER}.log`);
 const scratchHome = path.join(JOBS_DIR, `${USER}.home`);
-fs.mkdirSync(JOBS_DIR, { recursive: true });
+const cancelFile = path.join(JOBS_DIR, `${USER}.cancel`);
+
+try {
+  for (const file of [jobFile, codeFile, logFile, scratchHome, cancelFile]) {
+    const rel = path.relative(JOBS_DIR, file);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+      throw new Error('ruta fuera del directorio de jobs');
+    }
+  }
+} catch (e) {
+  console.error('[sponsor-token-runner] ruta inválida:', e.message);
+  process.exit(1);
+}
+
+fs.mkdirSync(JOBS_DIR, { recursive: true, mode: 0o700 });
 
 function cleanupScratch() {
   try { fs.rmSync(scratchHome, { recursive: true, force: true }); }
@@ -53,7 +81,23 @@ function logLine(s) {
   catch { /* el log nunca puede tumbar el runner */ }
 }
 
+let proc;
+let done = false;
+let watchTimer = null;
+let cancelling = false;
+
+function cancelRequested() {
+  try { return fs.existsSync(cancelFile); } catch { return false; }
+}
+
 function writeState(s) {
+  if (cancelRequested() && s.status !== 'error') {
+    if (!cancelling) {
+      cancelling = true;
+      cancel();
+    }
+    return;
+  }
   logLine(`[estado] ${s.status || 'desconocido'}`);
   try { fs.writeFileSync(jobFile, JSON.stringify({ ...s, user: USER, pid: process.pid, ts: Date.now() }), { mode: 0o600 }); }
   catch (e) { console.error('[sponsor-token-runner] no pude escribir estado:', e.message); }
@@ -73,7 +117,6 @@ const env = userRunnerEnv(USER); // env limpio por allowlist
 env.HOME = scratchHome; // HOME descartable, NO el del usuario
 delete env.CLAUDE_CODE_OAUTH_TOKEN; // login FRESCO
 
-let proc;
 try {
   proc = pty.spawn('claude', ['setup-token'], {
     name: 'xterm-color', cols: 1000, rows: 50,
@@ -90,8 +133,6 @@ let currentUrl = null;
 let urlSent = false;
 let codesSent = 0;
 let pendingSince = 0;
-let done = false;
-let watchTimer = null;
 
 function outputNote() {
   const lines = stripAnsi(buf)
@@ -125,6 +166,10 @@ function outputNote() {
 
 function watchForCode() {
   watchTimer = setInterval(() => {
+    if (cancelRequested()) {
+      cancel();
+      return;
+    }
     if (done) return;
     if (pendingSince && Date.now() - pendingSince > 20000) {
       pendingSince = 0;
@@ -146,6 +191,8 @@ function watchForCode() {
 }
 
 function cancel() {
+  if (cancelling && done) return;
+  cancelling = true;
   done = true;
   if (watchTimer) clearInterval(watchTimer);
   writeState({ status: 'error', error: 'cancelado' });
@@ -174,6 +221,10 @@ proc.onData((data) => {
     if (codesSent > 0 && !done) {
       const t = clean.match(TOKEN_RE);
       if (t) {
+        if (cancelRequested()) {
+          cancel();
+          return;
+        }
         done = true;
         pendingSince = 0;
         try {

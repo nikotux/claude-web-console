@@ -37,7 +37,9 @@ export function skillSourcesFor(scope) {
   const sources = scope.isHost
     ? [
         { world: 'console', label: '🏠 Mi Consola', dir: CATALOG_DIR, scope: 'project' },
-        { world: 'tolkien', label: '🌳 Tolkien', dir: path.join(config.projectDir || '', '.claude', 'skills'), scope: 'project' },
+        ...(config.projectDir
+          ? [{ world: 'tolkien', label: '🌳 Tolkien', dir: path.join(config.projectDir, '.claude', 'skills'), scope: 'project' }]
+          : []),
         { world: 'global', label: '🌐 Global (usuario)', dir: path.join(scope.claudeDir, 'skills'), scope: 'user' },
       ]
     : [
@@ -86,6 +88,12 @@ function readSkillDir({ world, label, dir, scope }, home) {
 
 function parsePadFields(raw) {
   try { return typeof raw === 'string' ? JSON.parse(raw) : (raw || {}); } catch { return {}; }
+}
+
+function catalogErrorStatus(code) {
+  if (code === 'not_found') return 404;
+  if (code === 'user_owned') return 409;
+  return 400;
 }
 
 export default {
@@ -162,7 +170,7 @@ export default {
         const scope = systemScopeFor(req);
         const result = installSkill(scope.claudeDir, req.body?.dirName);
         if (!result.ok) {
-          return res.status(400).json({ error: result.error, code: result.code });
+          return res.status(catalogErrorStatus(result.code)).json({ error: result.error, code: result.code });
         }
         return res.json(result);
       } catch (e) {
@@ -181,7 +189,7 @@ export default {
         const scope = systemScopeFor(req);
         const result = uninstallSkill(scope.claudeDir, req.body?.dirName);
         if (!result.ok) {
-          return res.status(400).json({ error: result.error, code: result.code });
+          return res.status(catalogErrorStatus(result.code)).json({ error: result.error, code: result.code });
         }
         return res.json(result);
       } catch (e) {

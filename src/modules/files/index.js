@@ -33,7 +33,9 @@ const ALWAYS_HIDDEN = new Set(['node_modules', '.git', 'dist', TRASH_DIRNAME]);
 const MAX_READ_BYTES = 2 * 1024 * 1024;
 const BINARY_SNIFF_BYTES = 8192;
 const MAX_ZIP_ITEMS = 1000;
+const MAX_ZIP_ENTRIES = 20000;
 const MAX_DIR_CHILD_COUNT = 200;
+const DIR_COUNT_CONCURRENCY = 16;
 
 // Deriva el status HTTP de una excepción NO anticipada dentro de un catch
 // genérico (invariante 34): solo cae a 4xx si el error trae una marca
@@ -74,11 +76,19 @@ function safeAttachmentName(name) {
   return n || 'file';
 }
 
-// Root de archivos del usuario que hace el request: host → home completo
-// (retrocompat); inquilino → su workspace (confinado, sin acceso al home ajeno).
+// Dueño de archivos resuelto una sola vez por request. Solo el token maestro
+// representa explícitamente al host sin username; cualquier principal degradado
+// falla cerrado en el middleware del módulo.
+const REQUEST_OWNER = Symbol('filesOwner');
+function resolveReqOwner(req) {
+  const principal = principalOf(req);
+  if (principal?.username) return principal.username;
+  if (principal?.type === 'token') return hostUser();
+  return null;
+}
+
 function reqOwner(req) {
-  const username = (principalOf(req).username) || hostUser();
-  return username;
+  return req[REQUEST_OWNER] || null;
 }
 
 function reqFileRoot(req) {
@@ -115,7 +125,7 @@ function rootReal(root) {
 function statSafeSync(abs, root = config.home) {
   const real = fss.realpathSync(abs); // ENOENT si no existe
   const relFromRoot = path.relative(rootReal(root), real);
-  if (relFromRoot.startsWith('..') || path.isAbsolute(relFromRoot)) return null;
+  if (relFromRoot === '..' || relFromRoot.startsWith('..' + path.sep) || path.isAbsolute(relFromRoot)) return null;
   return fss.statSync(abs);
 }
 
@@ -153,12 +163,12 @@ function uniqueZipName(usedNames, name) {
 // Cuenta hijos directos sin materializar el directorio completo. Se lee una
 // entrada adicional para distinguir "exactamente 200" de "más de 200".
 // Un error queda confinado a esa carpeta; null significa conteo desconocido.
-function countDirChildren(abs) {
+async function countDirChildren(abs) {
   let dir;
   try {
-    dir = fss.opendirSync(abs);
+    dir = await fs.opendir(abs);
     let childCount = 0;
-    while (dir.readSync()) {
+    while (await dir.read()) {
       if (childCount === MAX_DIR_CHILD_COUNT) {
         return { childCount, childCountCapped: true };
       }
@@ -168,7 +178,7 @@ function countDirChildren(abs) {
   } catch {
     return { childCount: null, childCountCapped: null };
   } finally {
-    try { dir?.closeSync(); } catch { /* noop */ }
+    try { await dir?.close(); } catch { /* noop */ }
   }
 }
 
@@ -209,12 +219,23 @@ async function listDir(abs, showHidden) {
     }
     const entry = { name, type, size, mtimeMs, symlink };
     if (type === 'dir') {
-      Object.assign(entry, symlink
-        ? { childCount: null, childCountCapped: null }
-        : countDirChildren(path.join(abs, name)));
+      Object.assign(entry, { childCount: null, childCountCapped: null });
     }
     entries.push(entry);
   }
+  const dirsToCount = entries.filter((entry) => entry.type === 'dir' && !entry.symlink);
+  let nextDir = 0;
+  async function countNextDir() {
+    while (nextDir < dirsToCount.length) {
+      const entry = dirsToCount[nextDir];
+      nextDir += 1;
+      Object.assign(entry, await countDirChildren(path.join(abs, entry.name)));
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(DIR_COUNT_CONCURRENCY, dirsToCount.length) },
+    () => countNextDir(),
+  ));
   entries.sort((a, b) =>
     a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1,
   );
@@ -260,12 +281,23 @@ export default {
   init() {
     // Al iniciar solo se hace higiene de la papelera del host; cada papelera
     // de inquilino también se depura al listarse.
-    const n = autoPurge(config.home);
-    if (n > 0) console.log(`[files] Papelera: purgados ${n} ítem(s) vencido(s).`);
+    try {
+      const n = autoPurge(config.home);
+      if (n > 0) console.log(`[files] Papelera: purgados ${n} ítem(s) vencido(s).`);
+    } catch (e) {
+      console.error('[files] No se pudo depurar la papelera al iniciar:', e);
+    }
   },
 
   registerHttp(router) {
     const r = express.Router();
+
+    r.use((req, res, next) => {
+      const owner = resolveReqOwner(req);
+      if (!owner) return res.status(401).json({ error: 'No autorizado.' });
+      req[REQUEST_OWNER] = owner;
+      next();
+    });
 
     r.get('/list', async (req, res) => {
       const root = reqFileRoot(req);
@@ -394,13 +426,32 @@ export default {
         if (!st.isDirectory()) return res.status(400).json({ error: 'No es una carpeta.' });
         const name = path.basename(abs) || 'home';
         res.setHeader('Content-Type', 'application/zip');
-        res.setHeader('Content-Disposition', `attachment; filename="${name}.zip"`);
+        res.setHeader('Content-Disposition', `attachment; filename="${safeAttachmentName(name)}.zip"`);
         const archive = new ZipArchive({ zlib: { level: 6 } });
+        let entryCount = 0;
+        let entryLimitExceeded = false;
         archive.on('error', () => {
           try {
-            if (!res.headersSent) return res.status(500).json({ error: 'No se pudo generar el zip.' });
+            if (!res.headersSent) {
+              res.removeHeader('Content-Type');
+              res.removeHeader('Content-Disposition');
+              return res.status(500).json({ error: 'No se pudo generar el zip.' });
+            }
             res.destroy();
           } catch { /* noop */ }
+        });
+        archive.on('entry', () => {
+          entryCount += 1;
+          if (entryCount > MAX_ZIP_ENTRIES && !entryLimitExceeded) {
+            entryLimitExceeded = true;
+            const err = new Error(`El zip excede el máximo de ${MAX_ZIP_ENTRIES} entradas.`);
+            console.error('[files] Zip de carpeta abortado:', err.message);
+            archive.abort();
+            archive.emit('error', err);
+          }
+        });
+        res.on('close', () => {
+          if (!res.writableFinished) archive.abort();
         });
         archive.pipe(res);
         archive.glob('**/*', {
@@ -409,7 +460,11 @@ export default {
         }, { prefix: name });
         archive.finalize();
       } catch {
-        if (!res.headersSent) res.status(500).json({ error: 'No se pudo generar el zip.' });
+        if (!res.headersSent) {
+          res.removeHeader('Content-Type');
+          res.removeHeader('Content-Disposition');
+          res.status(500).json({ error: 'No se pudo generar el zip.' });
+        }
       }
     });
 
@@ -443,6 +498,9 @@ export default {
             res.destroy();
           } catch { /* noop */ }
         });
+        res.on('close', () => {
+          if (!res.writableFinished) archive.abort();
+        });
         archive.pipe(res);
         const ignore = ['**/node_modules/**', '**/.git/**', '**/dist/**', `**/${TRASH_DIRNAME}/**`];
         for (const it of items) {
@@ -461,8 +519,12 @@ export default {
           // Validación (marcada badReq) y límites de multer (LIMIT_*) → 400;
           // una falla interna de disco (ENOSPC/EACCES/EMFILE al escribir) → 500,
           // igual que mkdir/rename/trash usan statusForError.
+          const expected = err instanceof multer.MulterError || err?.badRequest;
           const status = (err instanceof multer.MulterError) ? 400 : statusForError(err);
-          return res.status(status).json({ error: err.message });
+          if (!expected) console.error('[files] Error interno durante upload:', err);
+          return res.status(status).json({
+            error: expected ? err.message : 'No se pudieron subir los archivos.',
+          });
         }
         res.json({ ok: true, count: req.files?.length || 0, names: (req.files || []).map((f) => f.filename) });
       });
@@ -555,10 +617,17 @@ export default {
       // antes de mover la entrada (si no, un symlink intermedio podría hacer
       // que se mueva contenido externo hacia adentro del root).
       let pst;
-      try { pst = statSafeSync(path.dirname(abs), root); } catch { return res.status(400).json({ error: 'Ruta inválida.' }); }
+      try { pst = statSafeSync(path.dirname(abs), root); }
+      catch (e) {
+        if (e.code === 'ENOENT') return res.status(404).json({ error: 'El ítem ya no existe.' });
+        return res.status(400).json({ error: 'Ruta inválida.' });
+      }
       if (!pst) return res.status(400).json({ error: 'Ruta inválida.' });
       try { res.json({ ok: true, id: moveToTrash(root, abs, rel, reqOwner(req)) }); }
-      catch (e) { res.status(statusForError(e)).json({ error: 'No se pudo mover a la papelera.' }); }
+      catch (e) {
+        if (e.code === 'ENOENT') return res.status(404).json({ error: 'El ítem ya no existe.' });
+        res.status(statusForError(e)).json({ error: 'No se pudo mover a la papelera.' });
+      }
     });
 
     r.get('/trash', (req, res) => {
@@ -592,7 +661,7 @@ export default {
           }
           const real = fss.realpathSync(cur);
           const relFromRoot = path.relative(rootReal(root), real);
-          if (relFromRoot.startsWith('..') || path.isAbsolute(relFromRoot)) {
+          if (relFromRoot === '..' || relFromRoot.startsWith('..' + path.sep) || path.isAbsolute(relFromRoot)) {
             const err = new Error('La carpeta destino escapa del root.');
             err.badRequest = true;
             throw err;

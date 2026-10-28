@@ -114,7 +114,7 @@ export function lockInvite(token, username) {
 export function consumeInvite(token) {
   const data = load();
   const rec = findRec(data, token);
-  if (!rec || rec.status === 'consumed') return false;
+  if (!rec || rec.status === 'consumed' || rec.status === 'revoked' || rec.expiresAt < Date.now()) return false;
   rec.status = 'consumed';
   rec.consumedAt = Date.now();
   save(data);

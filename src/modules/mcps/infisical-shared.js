@@ -7,9 +7,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  USERS_ROOT,
   hostUser,
   readInfisicalAccountEmail,
+  sanitizeUserId,
+  userClaudeDir,
+  userDataDir,
+  userFileRoot,
   userInfisicalConfigPath,
+  userSpace,
 } from '../../core/user-space.js';
 import { commandEnvFor, worldCwd } from './login-shared.js';
 
@@ -35,15 +41,41 @@ function readJson(file) {
 // request. Los handlers HTTP siempre pasan el systemScope explícito; el runner
 // ya recibe HOME aislado en su env cuando corresponde.
 function runnerScopeFor() {
-  const home = process.env.HOME;
-  if (!home || !path.isAbsolute(home)) throw new Error('HOME del runner no configurado');
+  const rawHome = process.env.HOME;
+  if (!rawHome || !path.isAbsolute(rawHome)) throw new Error('HOME del runner no configurado');
+  const home = path.resolve(rawHome);
+  const host = hostUser();
+  const hostHome = path.resolve(userSpace(host));
+  if (home === hostHome) {
+    return {
+      user: host,
+      isHost: true,
+      home,
+      dataDir: process.env.CWC_DATA_DIR || path.join(home, '.cwc-data'),
+      claudeDir: path.join(home, '.claude'),
+      workspace: home,
+    };
+  }
+  const rel = path.relative(USERS_ROOT, home);
+  if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel) || rel.includes(path.sep)) {
+    throw new Error('HOME del runner no corresponde ni al anfitrión ni a un usuario');
+  }
+  let user;
+  try {
+    user = sanitizeUserId(rel);
+  } catch {
+    throw new Error('HOME del runner no corresponde ni al anfitrión ni a un usuario');
+  }
+  if (path.resolve(userSpace(user)) !== home) {
+    throw new Error('HOME del runner no corresponde ni al anfitrión ni a un usuario');
+  }
   return {
-    user: process.env.USER || 'runner',
-    isHost: true,
+    user,
+    isHost: false,
     home,
-    dataDir: process.env.CWC_DATA_DIR || path.join(home, '.cwc-data'),
-    claudeDir: path.join(home, '.claude'),
-    workspace: home,
+    dataDir: userDataDir(user),
+    claudeDir: userClaudeDir(user),
+    workspace: userFileRoot(user),
   };
 }
 
@@ -187,9 +219,12 @@ function infisicalLoginTokenFileFor(scope, id) {
 // del HOME de un inquilino. Si coincide, elimina el config ajeno antes de fallar.
 export function assertOwnInfisicalAccount(scope) {
   if (scope.isHost) return;
-  const email = readInfisicalAccountEmail(scope.user);
-  const hostEmail = readInfisicalAccountEmail(hostUser());
-  if (!email || !hostEmail || email !== hostEmail) return;
+  const normEmail = (value) => String(value || '').trim().toLowerCase() || null;
+  const email = normEmail(readInfisicalAccountEmail(scope.user));
+  const hostEmail = normEmail(readInfisicalAccountEmail(hostUser()));
+  if (!email) throw new Error('No pude leer la cuenta de Infisical de este usuario: el login no quedó verificado.');
+  if (!hostEmail) throw new Error('No pude verificar que la cuenta no sea la del anfitrión: reintentá el login.');
+  if (email !== hostEmail) return;
   try {
     fs.rmSync(userInfisicalConfigPath(scope.user), { force: true });
   } catch {
@@ -258,13 +293,27 @@ export function spawnInfisicalLogin(scope) {
   // en curso para no dejar dos PTY compitiendo por el mismo keyring.
   const existing = readInfisicalLoginJob(scope, id);
   if (existing && !LOGIN_TERMINAL.has(existing.status) && Date.now() - (existing.ts || 0) < 10 * 60 * 1000) return id;
+  const env = commandEnvFor(scope);
   try { fs.unlinkSync(infisicalLoginTokenFileFor(scope, id)); } catch { /* noop */ }
   fs.writeFileSync(infisicalLoginJobFileFor(scope, id), JSON.stringify({ id, status: 'starting', ts: Date.now() }), { mode: 0o600 });
-  const child = spawn('node', [infisicalLoginRunnerFor(), '--id', id, '--user', scope.user, '--domain', domain, '--cwd', cwd], {
-    detached: true,
-    stdio: 'ignore',
-    env: commandEnvFor(scope),
-  });
+  let child;
+  try {
+    child = spawn('node', [infisicalLoginRunnerFor(), '--id', id, '--user', scope.user, '--domain', domain, '--cwd', cwd], {
+      detached: true,
+      stdio: 'ignore',
+      env,
+    });
+  } catch (e) {
+    try {
+      fs.writeFileSync(infisicalLoginJobFileFor(scope, id), JSON.stringify({
+        id,
+        status: 'error',
+        error: String(e?.message || e),
+        ts: Date.now(),
+      }), { mode: 0o600 });
+    } catch { /* best-effort */ }
+    throw e;
+  }
   child.on('error', (err) => {
     try {
       fs.writeFileSync(infisicalLoginJobFileFor(scope, id), JSON.stringify({
