@@ -88,6 +88,7 @@ export function normalizePr(pr, player, attributedFrom = 'author') {
     mergeCommitOid: typeof pr?.mergeCommitOid === 'string'
       ? pr.mergeCommitOid
       : (typeof pr?.mergeCommit?.oid === 'string' ? pr.mergeCommit.oid : null),
+    headRefOid: typeof pr?.headRefOid === 'string' ? pr.headRefOid : null,
     playerLogin: player.login,
     attributedFrom,
   };
@@ -241,6 +242,7 @@ function buildMe(player, context) {
     username: player.username,
     login: player.login,
     displayName: player.displayName,
+    celebrationName: player.celebrationName || null,
     initials: player.initials,
     total: player.total,
     impact: { deskTickets, tasks, daysForging: days, total: player.total },

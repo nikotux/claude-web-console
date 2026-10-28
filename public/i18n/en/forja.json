@@ -27,6 +27,7 @@
   "forja.festejo.pendingBadge": "{count} pending celebrations",
   "forja.festejo.close": "Close celebration",
   "forja.festejo.position": "{current} of {total}",
+  "forja.festejo.neutralName": "Forjador",
   "forja.festejo.title": "🔥 A NEW RING WAS FORGED, {name}!",
   "forja.festejo.deploy.title.one": "🚀 YOUR RING REACHED PRODUCTION, {name}!",
   "forja.festejo.deploy.title.many": "🚀 {count} RINGS REACHED PRODUCTION, {name}!",

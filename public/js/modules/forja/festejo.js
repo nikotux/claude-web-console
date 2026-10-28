@@ -62,10 +62,14 @@ function festejoKey(festejo) {
   return Number.isSafeInteger(festejo?.number) ? `merge:${festejo.number}` : '';
 }
 
-function celebrationCard(festejo, { displayName, position, total, onDismiss, onOpen }) {
+function celebrationCard(festejo, { celebrationName, position, total, onDismiss, onOpen }) {
   const isDeploy = festejo.kind === 'deploy';
   const deployPrs = Array.isArray(festejo.prs) ? festejo.prs : [];
-  const resolvedName = String(festejo.displayName || displayName || '').toLocaleUpperCase();
+  const resolvedName = String(
+    festejo.celebrationName
+      || celebrationName
+      || t('forja.festejo.neutralName', 'forjador'),
+  ).toLocaleUpperCase();
   const overlay = node('div', 'fj-festejo-overlay');
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
@@ -143,7 +147,7 @@ function celebrationCard(festejo, { displayName, position, total, onDismiss, onO
 
 export function createFestejoController({ api, onOpen, onPendingChange }) {
   const originalTitle = document.title;
-  let displayName = '';
+  let celebrationName = '';
   let queue = [];
   let active = null;
   let fetching = null;
@@ -275,7 +279,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
       showNext();
     };
     active = celebrationCard(festejo, {
-      displayName, position: batchPosition, total: batchTotal, onDismiss: dismiss, onOpen,
+      celebrationName, position: batchPosition, total: batchTotal, onDismiss: dismiss, onOpen,
     });
     active.key = festejoKey(festejo);
     active.opener = opener;
@@ -372,7 +376,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
   return {
     sync(count, name) {
       if (destroyed) return;
-      displayName = name || displayName;
+      celebrationName = name || celebrationName;
       wanted = Number(count) > 0;
       if (wanted) void fetchPending();
     },

@@ -17,13 +17,15 @@ registrado): `shared.js` (constantes ~/.cwc-data/comms/*, contactos/
 self/overrides, buildIndex(), ledgers JSONL, y las constantes
 WHATSAPP_* que usa el daemon), `pr-read-shared.js` (LECTOR ÚNICO de
 PRs y despliegues de GitHub — lo importan `tickets/sources.js` y `forja/refresher.js`;
-`listMergedPrsByAuthor()` usa repo explícito Tolkien, incluye `mergeCommit`, caché
+`listMergedPrsByAuthor()` usa repo explícito Tolkien, incluye `mergeCommit` y `headRefOid`, caché
 por autor de 150 s y fallback `_stale` al último bueno; `githubUserExists()`
 resuelve existencia, login canónico y nombre con caché corta;
 `listProductionDeploys()` conserva runs exitosos `deploy-v2.yml` con
-`operation=deploy`, extrae el SHA real del input/log antes que `head_sha`, cachea
-150 s y sirve el último bueno stale; `isCommitIncluded(base,head)` usa compare y
-cachea permanentemente cada par inmutable),
+`operation=deploy` y acepta el SHA solo desde el JSON estricto de
+`EXPECTED_ARTIFACT_JSON.sourceSha`; los deploys y no-deploys confirmados se
+cachean permanentemente, mientras un run inclasificable vence a los 10 min.
+`listCommitsBetween(base,head)` pagina compare, devuelve los SHAs del delta solo
+para estados `ahead`/`identical` y cachea permanentemente cada par inmutable),
 `gateway-shared.js`
 (GATEWAY de envíos Desk/Teams/GitHub — lo importa el CLI
 `bin/cwc-comms.js`), `teams-shared.js` · `chatbot-shared.js` ·

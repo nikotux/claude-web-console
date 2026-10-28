@@ -8,11 +8,16 @@ html, body {
 }
 
 /* ===== La Forja ===== */
-.fj-head { color: var(--forja-gold); text-shadow: 0 0 9px color-mix(in srgb, var(--forja-ember) 30%, transparent); }
+.fj-head { position: relative; color: var(--forja-gold); text-shadow: 0 0 9px color-mix(in srgb, var(--forja-ember) 30%, transparent); }
+.fj-head-main { display: flex; min-width: 0; flex: 1; align-items: center; gap: .4rem; padding: .12rem .15rem .2rem; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
+.fj-head-main:focus-visible { outline: 2px solid var(--forja-molten); outline-offset: 2px; }
 .fj-head-title { display: flex; align-items: center; gap: 6px; font-weight: 900; }
 .fj-head-ember { width: 7px; height: 7px; flex: none; border: 1px solid var(--forja-ember); background: color-mix(in srgb, var(--forja-lava) 45%, transparent); filter: drop-shadow(0 0 4px var(--forja-lava)); transform: rotate(45deg); }
 .fj-head--toggle { cursor: pointer; user-select: none; }
 .fj-toggle { flex: none; color: var(--forja-molten); }
+.fj-head-tooltip { position: absolute; z-index: 20; right: 6px; bottom: calc(100% + 5px); left: 6px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--forja-ember) 42%, var(--cwc-border)); border-radius: var(--cwc-radius-sm); background: var(--cwc-bg-elevated); box-shadow: var(--cwc-shadow-md); color: var(--cwc-text); font-size: var(--cwc-fs-xs); line-height: 1.35; text-shadow: none; opacity: 0; pointer-events: none; transform: translateY(3px); transition: opacity .14s ease, transform .14s ease; }
+.fj-head-main:hover ~ .fj-head-tooltip, .fj-head-main:focus ~ .fj-head-tooltip, .fj-head-main:focus-visible ~ .fj-head-tooltip { opacity: 1; transform: translateY(0); }
+.fj-expanded-context { margin: 0 6px 6px; color: var(--forja-muted); font-size: var(--cwc-fs-2xs); line-height: 1.35; }
 .fj-collapsed-row { position: relative; min-height: 36px; margin: 0 .35rem; padding: 5px 7px 5px 5px !important; overflow: hidden; border: 1px solid color-mix(in srgb, var(--forja-lava) 28%, var(--cwc-border)); border-radius: var(--cwc-radius-sm); background: linear-gradient(90deg, color-mix(in srgb, var(--forja-basalt) 52%, var(--cwc-bg-panel)), var(--cwc-bg-panel)); isolation: isolate; }
 .fj-collapsed-row::before { position: absolute; z-index: -1; inset: 0; border-radius: inherit; content: ''; pointer-events: none; }
 .fj-collapsed-row:hover { border-color: color-mix(in srgb, var(--forja-ember) 48%, var(--cwc-border)); }

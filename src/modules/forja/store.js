@@ -59,6 +59,8 @@ export function getFestejos(owner) {
     deployCelebrated: Array.isArray(saved.deployCelebrated)
       ? saved.deployCelebrated.filter((value) => typeof value === 'string')
       : [],
+    lastDeployProcessed: typeof saved.lastDeployProcessed === 'string'
+      ? saved.lastDeployProcessed : null,
     pending: Array.isArray(saved.pending) ? saved.pending : [],
   };
 }
@@ -74,6 +76,8 @@ export function saveFestejos(owner, state) {
     deployCelebrated: Array.isArray(state?.deployCelebrated)
       ? [...new Set(state.deployCelebrated.filter((value) => typeof value === 'string'))]
       : [],
+    lastDeployProcessed: typeof state?.lastDeployProcessed === 'string'
+      ? state.lastDeployProcessed : null,
     pending: Array.isArray(state?.pending) ? state.pending.slice(-10) : [],
   };
   // Ausente/null conserva el marcador de migración: el refresher debe sembrar

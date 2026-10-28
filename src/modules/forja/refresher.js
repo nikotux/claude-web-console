@@ -1,5 +1,5 @@
 import {
-  githubUserExists, isCommitIncluded, listMergedPrsByAuthor, listProductionDeploys,
+  githubUserExists, listCommitsBetween, listMergedPrsByAuthor, listProductionDeploys,
 } from '../comms/pr-read-shared.js';
 import {
   computeForja, deskNumbers, FORJA_TIMEZONE, monthKey, normalizePr, playerIdFor,
@@ -19,7 +19,7 @@ const FULL_FETCH_LIMIT = 1000;
 const INCREMENTAL_FETCH_LIMIT = 50;
 const FETCH_CONCURRENCY = 3;
 const FESTEJOS_MAX_PENDING = 10;
-export const DEPLOY_COMPARE_MAX_PER_CYCLE = 10;
+const DEPLOY_HISTORY_LIMIT = 20;
 const MONTHS = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
@@ -31,7 +31,7 @@ let fullCycle = null;
 const ownerCycles = new Map();
 let fetchMergedPrsByAuthor = listMergedPrsByAuthor;
 let fetchProductionDeploys = listProductionDeploys;
-let compareCommitInclusion = isCommitIncluded;
+let fetchCommitsBetween = listCommitsBetween;
 let fetchGithubProfile = githubUserExists;
 
 function sameLogin(left, right) {
@@ -69,6 +69,7 @@ function compactBotPr(raw) {
     mergeCommitOid: typeof raw?.mergeCommitOid === 'string'
       ? raw.mergeCommitOid
       : (typeof raw?.mergeCommit?.oid === 'string' ? raw.mergeCommit.oid : null),
+    headRefOid: typeof raw?.headRefOid === 'string' ? raw.headRefOid : null,
   };
 }
 
@@ -172,6 +173,7 @@ function buildFestejo(player, pr, prs, arena) {
     monthLabel: MONTHS[monthNumber - 1] || '',
     throne: throneFor({ ...player, playerId: playerIdFor(player.username) }, arena),
     mergedAt: pr.mergedAt,
+    celebrationName: player.celebrationName || null,
   };
 }
 
@@ -184,6 +186,7 @@ function nextMergeFestejoState(state, player, prs, arena, now) {
       celebrated: numbers,
       deployed: numbers,
       deployCelebrated: [],
+      lastDeployProcessed: null,
       pending: [],
     };
   }
@@ -228,7 +231,7 @@ function buildDeployFestejo(player, prs, deploy) {
     kind: 'deploy',
     deploySha: deploy.deployedSha,
     completedAt,
-    displayName: player.displayName,
+    celebrationName: player.celebrationName || null,
     numbers: items.map((item) => item.number),
     prs: items,
   };
@@ -238,48 +241,82 @@ async function detectDeployFestejos({
   players,
   prsByUsername,
   statesByUsername,
-  deploy,
-  compare = compareCommitInclusion,
-  maxComparisons = DEPLOY_COMPARE_MAX_PER_CYCLE,
+  deploys,
+  commitsBetween = fetchCommitsBetween,
 }) {
-  let compareCalls = 0;
+  const orderedDeploys = Array.isArray(deploys) ? deploys : [];
   const nextStates = new Map();
-  const work = new Map();
+  const work = [];
+  const neededDeployIndexes = new Set();
+  const newestDeploy = orderedDeploys[0];
+  if (!newestDeploy) return { states: nextStates, compareCalls: 0 };
+
   for (const player of players) {
     const state = statesByUsername.get(player.username);
     if (!state || state.deployed === null) continue;
-    const deployed = new Set(state.deployed);
-    const candidates = [...(prsByUsername.get(player.username) || [])]
-      .filter((pr) => !deployed.has(pr.number) && typeof pr.mergeCommitOid === 'string')
-      .map((pr) => ({ player, pr }));
-    work.set(player.username, { player, state, deployed, landed: [] });
-    work.get(player.username).candidates = candidates;
-  }
-  const candidates = [...work.values()].flatMap((item) => item.candidates)
-    .sort((a, b) => new Date(b.pr.mergedAt) - new Date(a.pr.mergedAt) || b.pr.number - a.pr.number);
-  for (const { player, pr } of candidates.slice(0, maxComparisons)) {
-    compareCalls += 1;
-    if (await compare(pr.mergeCommitOid, deploy.deployedSha)) {
-      const item = work.get(player.username);
-      item.deployed.add(pr.number);
-      item.landed.push(pr);
+    const prs = [...(prsByUsername.get(player.username) || [])];
+    const cursor = typeof state.lastDeployProcessed === 'string' ? state.lastDeployProcessed : '';
+    const cursorIndex = cursor
+      ? orderedDeploys.findIndex((deploy) => deploy.deployedSha === cursor)
+      : -1;
+    if (!cursor || cursorIndex === -1) {
+      nextStates.set(player.username, {
+        ...state,
+        deployed: [...new Set(prs.map((pr) => pr.number).filter(Number.isSafeInteger))],
+        lastDeployProcessed: newestDeploy.deployedSha,
+      });
+      continue;
     }
+    const deployIndexes = [];
+    for (let index = cursorIndex - 1; index >= 0; index -= 1) {
+      deployIndexes.push(index);
+      neededDeployIndexes.add(index);
+    }
+    if (deployIndexes.length) work.push({ player, state, prs, deployIndexes });
   }
-  for (const { player, state, deployed, landed } of work.values()) {
-    if (!landed.length) continue;
+
+  // Se resuelven todos los deltas antes de construir estados. Si un compare
+  // falla, la promesa rechaza y ningún cursor de jugador avanza.
+  const commitsByDeployIndex = new Map();
+  const chronologicalIndexes = [...neededDeployIndexes].sort((a, b) => b - a);
+  for (const index of chronologicalIndexes) {
+    const deploy = orderedDeploys[index];
+    const previousDeploy = orderedDeploys[index + 1];
+    if (!previousDeploy) throw new Error(`Falta el deploy previo a ${deploy.deployedSha}`);
+    const commits = await commitsBetween(previousDeploy.deployedSha, deploy.deployedSha);
+    commitsByDeployIndex.set(index, new Set(Array.isArray(commits) ? commits : []));
+  }
+
+  for (const { player, state, prs, deployIndexes } of work) {
+    const deployed = new Set(state.deployed);
     const celebratedDeploys = new Set(state.deployCelebrated || []);
-    const alreadyCelebrated = celebratedDeploys.has(deploy.deployedSha);
-    celebratedDeploys.add(deploy.deployedSha);
     const pending = [...state.pending];
-    if (!alreadyCelebrated) pending.push(buildDeployFestejo(player, landed, deploy));
+    let lastDeployProcessed = state.lastDeployProcessed;
+    for (const index of deployIndexes) {
+      const deploy = orderedDeploys[index];
+      const included = new Set([...(commitsByDeployIndex.get(index) || [])]
+        .map((sha) => String(sha).toLowerCase()));
+      const landed = prs.filter((pr) => {
+        if (deployed.has(pr.number)) return false;
+        return (typeof pr.mergeCommitOid === 'string' && included.has(pr.mergeCommitOid.toLowerCase()))
+          || (typeof pr.headRefOid === 'string' && included.has(pr.headRefOid.toLowerCase()));
+      });
+      for (const pr of landed) deployed.add(pr.number);
+      if (landed.length && !celebratedDeploys.has(deploy.deployedSha)) {
+        pending.push(buildDeployFestejo(player, landed, deploy));
+      }
+      celebratedDeploys.add(deploy.deployedSha);
+      lastDeployProcessed = deploy.deployedSha;
+    }
     nextStates.set(player.username, {
       ...state,
       deployed: [...deployed],
       deployCelebrated: [...celebratedDeploys],
+      lastDeployProcessed,
       pending: pending.slice(-FESTEJOS_MAX_PENDING),
     });
   }
-  return { states: nextStates, compareCalls };
+  return { states: nextStates, compareCalls: commitsByDeployIndex.size };
 }
 
 export async function __detectDeployFestejosForTests(options) {
@@ -388,15 +425,14 @@ async function runCycle({ onlyOwner = null } = {}) {
   });
   if (freshPlayers.length) {
     try {
-      const deploys = await fetchProductionDeploys({ limit: 1 });
-      const newestDeploy = deploys[0];
-      if (newestDeploy && deploys._stale !== true) {
+      const deploys = await fetchProductionDeploys({ limit: DEPLOY_HISTORY_LIMIT });
+      if (deploys[0] && deploys._stale !== true) {
         const statesByUsername = new Map(freshPlayers.map((player) => [player.username, getFestejos(player.username)]));
         const deployStep = await detectDeployFestejos({
           players: freshPlayers,
           prsByUsername,
           statesByUsername,
-          deploy: newestDeploy,
+          deploys,
         });
         for (const [owner, state] of deployStep.states) saveFestejos(owner, state);
       }
@@ -466,8 +502,8 @@ export function __setFetchForTests(fn) {
   fetchMergedPrsByAuthor = typeof fn === 'function' ? fn : listMergedPrsByAuthor;
 }
 
-export function __setProductionReadersForTests({ deploys, compare, profile } = {}) {
+export function __setProductionReadersForTests({ deploys, commits, profile } = {}) {
   fetchProductionDeploys = typeof deploys === 'function' ? deploys : listProductionDeploys;
-  compareCommitInclusion = typeof compare === 'function' ? compare : isCommitIncluded;
+  fetchCommitsBetween = typeof commits === 'function' ? commits : listCommitsBetween;
   fetchGithubProfile = typeof profile === 'function' ? profile : githubUserExists;
 }

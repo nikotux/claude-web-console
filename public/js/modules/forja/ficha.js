@@ -57,46 +57,44 @@ function collapsedVisual(data) {
   };
 }
 
-function header(el, state, actions) {
+function header(el, state, actions, panelId) {
   const open = Boolean(state.open);
   const data = state.data;
   const collapsed = collapsedVisual(data);
-  const head = node('header', `sec-head fj-head fj-head--toggle${open ? ' fj-head--open' : ` fj-collapsed-row fj-collapsed-row--${collapsed.mode}`}`);
-  head.setAttribute('role', 'button');
-  head.tabIndex = 0;
-  head.setAttribute('aria-expanded', String(open));
-  head.title = throneTooltip(data);
-  const toggle = node('button', 'btn-ghost btn--sm btn--icon fj-toggle');
+  const tooltipText = throneTooltip(data);
+  const tooltipId = 'fj-sidebar-tooltip';
+  const head = node('header', `sec-head fj-head${open ? ' fj-head--open' : ''}`);
+  const toggle = node('button', `fj-head-main fj-head--toggle${open ? '' : ` fj-collapsed-row fj-collapsed-row--${collapsed.mode}`}`);
   toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', String(open));
+  toggle.setAttribute('aria-controls', panelId);
+  toggle.setAttribute('aria-describedby', tooltipId);
   toggle.setAttribute('aria-label', open
     ? t('forja.toggle.close', 'Ocultar La Forja')
     : t('forja.toggle.open', 'Mostrar La Forja'));
-  toggle.innerHTML = icon(open ? 'chevronDown' : 'chevronRight', { size: 13 });
+  const chevron = node('span', 'btn-ghost btn--sm btn--icon fj-toggle');
+  chevron.setAttribute('aria-hidden', 'true');
+  chevron.innerHTML = icon(open ? 'chevronDown' : 'chevronRight', { size: 13 });
   const brand = node('span', 'sec-title fj-head-title');
   const ember = node('span', 'fj-head-ember');
   ember.setAttribute('aria-hidden', 'true');
   brand.append(ember, document.createTextNode(t('forja.title', 'La Forja')));
-  head.append(toggle, brand);
+  toggle.append(chevron, brand);
   if (!open) {
     collapsed.visual.setAttribute('aria-hidden', 'true');
     const chip = node('span', `fj-collapsed-chip${collapsed.mode === 'pending' ? ' fj-collapsed-chip--pending' : ''}`, collapsed.chip);
-    head.append(collapsed.visual, chip);
-    if (collapsed.mode === 'pending' && !state.pendingNoticed) head.classList.add('fj-collapsed-row--alert');
+    toggle.append(collapsed.visual, chip);
+    if (collapsed.mode === 'pending' && !state.pendingNoticed) toggle.classList.add('fj-collapsed-row--alert');
   }
   const help = node('span');
   help.innerHTML = helpBtn('forja');
-  head.appendChild(help.firstElementChild);
-  const toggleOpen = () => actions.onToggle(!open);
-  head.addEventListener('click', (event) => {
-    if (event.target.closest?.('[data-help]')) return;
-    toggleOpen();
-  });
-  head.addEventListener('keydown', (event) => {
-    if (event.target !== head || (event.key !== 'Enter' && event.key !== ' ')) return;
-    event.preventDefault();
-    toggleOpen();
-  });
+  const tooltip = node('span', 'fj-head-tooltip', tooltipText);
+  tooltip.id = tooltipId;
+  tooltip.setAttribute('role', 'tooltip');
+  head.append(toggle, help.firstElementChild, tooltip);
+  toggle.addEventListener('click', () => actions.onToggle(!open));
   el.appendChild(head);
+  return tooltipText;
 }
 
 function renderLoading(el) {
@@ -197,10 +195,16 @@ function renderError(el, error, onRetry) {
 
 export function renderFicha(el, state, actions) {
   el.textContent = '';
-  header(el, state, actions);
+  const panelId = 'fj-sidebar-panel';
+  const context = header(el, state, actions, panelId);
+  const panel = node('div', 'fj-sidebar-panel');
+  panel.id = panelId;
+  panel.hidden = !state.open;
+  el.appendChild(panel);
   if (!state.open) return;
-  if (state.loading) renderLoading(el);
-  else if (state.error) renderError(el, state.error, actions.onRetry);
-  else if (state.data?.configured === false) renderUnconfigured(el, state.data, actions.onConfigure);
-  else renderConfigured(el, state.data || {}, actions.onOpen);
+  panel.appendChild(node('p', 'fj-expanded-context', context));
+  if (state.loading) renderLoading(panel);
+  else if (state.error) renderError(panel, state.error, actions.onRetry);
+  else if (state.data?.configured === false) renderUnconfigured(panel, state.data, actions.onConfigure);
+  else renderConfigured(panel, state.data || {}, actions.onOpen);
 }

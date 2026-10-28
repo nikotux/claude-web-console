@@ -278,7 +278,7 @@ export default {
           state.loading = false;
           lastLoadedAt = Date.now();
           render();
-          if (active) festejos.sync(data.pendingFestejos, data.displayName);
+          if (active) festejos.sync(data.pendingFestejos, data.celebrationName);
           return data;
         })
         .catch((error) => {
