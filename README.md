@@ -51,6 +51,30 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-10-28 08:41 — main
+- Arreglar el teclado del chat en móvil y respetar títulos puestos a mano
+- feat: agrega datos y refresco de La Forja
+- docs: registra contratos y facetas de La Forja
+- fix: deriva iniciales desde la identidad GitHub
+- fix: isMe de la arena por playerId opaco y snapshots coherentes
+- fix: protege y conserva el historial de La Forja
+- fix: faceta, frescura real y concurrencia acotada de La Forja
+- Implementa la ficha y los salones de La Forja
+- Afina el emblema y los niveles de La Forja
+- Documenta el frontend de La Forja
+- Pulir el salón y la arena de La Forja
+- fix: accesibilidad, enlaces y CTA de identidad de La Forja
+- fix: restaura el foco aunque la ficha se haya re-renderizado
+- fix: la antigüedad visible usa la frescura real
+- fix: dataAsOf nulo se muestra como desactualizado
+- Persistir festejos privados de La Forja
+- Celebrar cada nuevo anillo en la interfaz
+- Precisar el contrato de festejos de La Forja
+- refactor: estilos del festejo en la hoja del módulo
+- fix: foco, capas y arranque seguro del festejo
+- fix: evita re-mostrar un festejo durante su acuse y conserva el foco
+- docs: registra festejos.json en el censo de runtime
+
 ### 2026-10-20 09:06 — main
 - Adaptar el scraper de Tolkien al nuevo workboard en tabla y actualizar dependencias
 
@@ -343,9 +367,6 @@ since the previous push. Newest entry first.
 - Modified `src/modules/bugs/index.js`
 - Modified `src/modules/bugs/shared.js`
 - Modified `src/modules/tmux/index.js`
-
-### 2026-07-03 20:41 — main
-- Modified `public/js/modules/system/health-review-modal.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
