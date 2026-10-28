@@ -5,6 +5,11 @@ import { node } from './view.js';
 
 const AUTO_DISMISS_MS = 12_000;
 const TITLE_FLASH_MS = 900;
+// Interruptor temporal (2026-10-28): el overlay a pantalla completa resultó
+// invasivo. Mientras se rediseña, los festejos NO se muestran ni se marcan
+// como vistos: quedan en la cola del servidor y el anillo "+N" del sidebar
+// sigue avisando. Volver a true para reactivar.
+const FESTEJO_OVERLAY_ENABLED = false;
 let dialogSequence = 0;
 
 function durationLabel(minutes) {
@@ -242,6 +247,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
   };
 
   const showNext = () => {
+    if (!FESTEJO_OVERLAY_ENABLED) return;
     if (destroyed || active || !queue.length || document.hidden) return;
     if (escLayers.length) {
       if (!layerWaitTimer) {
