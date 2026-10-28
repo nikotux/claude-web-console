@@ -46,7 +46,7 @@ function addModalHelp(modal) {
   modal.card.querySelector('.dlg-head')?.appendChild(holder.firstElementChild);
 }
 
-function openForgeModal(ctx, me, mountEl) {
+function openForgeModal(ctx, me, mountEl, onChangeLogin) {
   let arena = null;
   let arenaPromise = null;
   const opener = document.activeElement;
@@ -61,6 +61,7 @@ function openForgeModal(ctx, me, mountEl) {
   modal.card.classList.add('fj-modal');
   addModalHelp(modal);
 
+  const toolbar = node('div', 'fj-modal-toolbar');
   const tabs = node('div', 'fj-tabs');
   tabs.setAttribute('role', 'tablist');
   const salonButton = node('button', 'fj-tab fj-tab--active', t('forja.tabs.salon', 'Mi salón'));
@@ -82,8 +83,20 @@ function openForgeModal(ctx, me, mountEl) {
   panel.id = `fj-tab-panel-${modalId}`;
   panel.setAttribute('role', 'tabpanel');
   panel.setAttribute('aria-labelledby', salonButton.id);
+  const changeLogin = node('button', 'fj-login-chip');
+  changeLogin.type = 'button';
+  changeLogin.setAttribute('aria-label', t('forja.modal.changeLoginAria', 'Cambiar el usuario de GitHub actual, @{login}', { login: me.login }));
+  changeLogin.append(
+    node('span', 'fj-login-chip__login', `@${me.login}`),
+    node('span', 'fj-login-chip__action', t('forja.modal.changeLogin', 'Cambiar usuario de GitHub')),
+  );
+  changeLogin.addEventListener('click', () => {
+    modal.close();
+    onChangeLogin();
+  });
   tabs.append(salonButton, arenaButton);
-  modal.body.append(tabs, panel);
+  toolbar.append(tabs, changeLogin);
+  modal.body.append(toolbar, panel);
 
   const activate = (name) => {
     const isSalon = name === 'salon';
@@ -136,8 +149,25 @@ function openForgeModal(ctx, me, mountEl) {
   salonButton.focus();
 }
 
-async function openConfiguration(ctx, onSaved) {
-  const modal = ctx.dialog.openModal({ title: t('forja.configure.modalTitle', 'Forjá tu ficha'), width: 440 });
+async function openConfiguration(ctx, onSaved, { mode } = {}) {
+  const isChange = mode === 'change';
+  const opener = document.activeElement;
+  const title = isChange
+    ? t('forja.configure.changeTitle', 'Cambiá tu usuario de GitHub')
+    : t('forja.configure.modalTitle', 'Forjá tu ficha');
+  const explanation = isChange
+    ? t('forja.configure.changeExplanation', 'Corregí tu @usuario de GitHub. Tu ficha se vuelve a forjar con la nueva cuenta; los anillos de la cuenta anterior dejan de contarse.')
+    : t('forja.configure.explanation', 'Escribí tu login de GitHub. Conservaremos el resto de tu identidad tal como está.');
+  const saveLabel = isChange
+    ? t('forja.configure.changeSave', 'Guardar y re-forjar')
+    : t('forja.configure.save', 'Guardar y forjar');
+  const modal = ctx.dialog.openModal({
+    title,
+    width: 440,
+    onClose: () => {
+      if (isChange && opener?.isConnected) opener.focus();
+    },
+  });
   modal.card.classList.add('fj-config-modal');
   modal.body.appendChild(loadingPanel(t('forja.configure.loading', 'Leyendo tu identidad…')));
   let identity;
@@ -146,13 +176,13 @@ async function openConfiguration(ctx, onSaved) {
     identity = data.identity || {};
   } catch (error) {
     modal.body.textContent = '';
-    modal.body.appendChild(errorPanel(error, () => { modal.close(); void openConfiguration(ctx, onSaved); }));
+    modal.body.appendChild(errorPanel(error, () => { modal.close(); void openConfiguration(ctx, onSaved, { mode }); }));
     return;
   }
 
   modal.body.textContent = '';
   const form = node('form', 'fj-config-form');
-  form.appendChild(node('p', 'dlg-msg', t('forja.configure.explanation', 'Escribí tu login de GitHub. Conservaremos el resto de tu identidad tal como está.')));
+  form.appendChild(node('p', 'dlg-msg', explanation));
   const label = node('label', 'fj-config-label');
   label.appendChild(node('span', '', t('forja.configure.githubLabel', 'Login de GitHub')));
   const input = node('input', 'dlg-input');
@@ -170,7 +200,7 @@ async function openConfiguration(ctx, onSaved) {
   const actions = node('div', 'dlg-actions');
   const cancel = node('button', 'btn-ghost', t('forja.configure.cancel', 'Cancelar'));
   cancel.type = 'button';
-  const save = node('button', 'btn', t('forja.configure.save', 'Guardar y forjar'));
+  const save = node('button', 'btn', saveLabel);
   save.type = 'submit';
   actions.append(cancel, save);
   form.append(label, feedback, actions);
@@ -185,6 +215,10 @@ async function openConfiguration(ctx, onSaved) {
       feedback.classList.add('fj-config-feedback--error');
       feedback.hidden = false;
       input.focus();
+      return;
+    }
+    if (isChange && github.toLowerCase() === String(identity.github || '').toLowerCase()) {
+      modal.close();
       return;
     }
     input.disabled = true;
@@ -236,10 +270,16 @@ export default {
     let active = true;
 
     let festejos = null;
+    const openModal = () => {
+      if (!state.data?.configured) return;
+      openForgeModal(ctx, state.data, el, () => {
+        void openConfiguration(ctx, () => load(), { mode: 'change' });
+      });
+    };
     const render = () => {
       if (!active) return;
       renderFicha(el, state, {
-        onOpen: () => { if (state.data?.configured) openForgeModal(ctx, state.data, el); },
+        onOpen: openModal,
         onConfigure: () => { void openConfiguration(ctx, () => load()); },
         onRetry: () => { void load(); },
         onToggle: (open) => {
@@ -253,7 +293,7 @@ export default {
     };
     festejos = createFestejoController({
       api,
-      onOpen: () => { if (state.data?.configured) openForgeModal(ctx, state.data, el); },
+      onOpen: openModal,
       onPendingChange: (count) => {
         if (!active || !state.data?.configured) return;
         const previous = Number(state.data.pendingFestejos) || 0;

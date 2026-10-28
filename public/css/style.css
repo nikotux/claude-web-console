@@ -74,10 +74,16 @@ html, body {
 .fj-modal > .dlg-head { border-bottom-color: color-mix(in srgb, var(--forja-lava) 35%, var(--cwc-border)); background: linear-gradient(90deg, color-mix(in srgb, var(--forja-lava) 13%, var(--forja-obsidian)), var(--forja-obsidian)); }
 .fj-modal > .dlg-head .dlg-title { color: var(--forja-cream); font-family: var(--cwc-font-serif); font-weight: 900; }
 .fj-modal > .dlg-body { display: flex; min-height: 0; flex: 1; flex-direction: column; padding: 0; overflow: hidden; }
-.fj-tabs { display: flex; min-height: 45px; align-items: end; gap: 8px; padding: 0 16px; border-bottom: 1px solid color-mix(in srgb, var(--forja-lava) 22%, var(--cwc-border)); background: var(--forja-obsidian); }
+.fj-modal-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-bottom: 1px solid color-mix(in srgb, var(--forja-metal) 35%, var(--forja-obsidian)); background: var(--forja-obsidian); }
+.fj-tabs { display: flex; min-height: 45px; flex: 1 1 220px; align-items: end; gap: 8px; padding: 0 16px; background: var(--forja-obsidian); }
 .fj-tab { min-height: 38px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--forja-muted); font-size: var(--cwc-fs-md); font-weight: 800; }
 .fj-tab:hover { color: var(--forja-cream); }
 .fj-tab--active { border-bottom-color: var(--forja-ember); color: var(--forja-cream); text-shadow: 0 0 8px color-mix(in srgb, var(--forja-ember) 45%, transparent); }
+.fj-login-chip { display: inline-flex; min-height: 30px; flex: 0 1 auto; align-items: center; gap: 7px; margin-right: 12px; padding: 4px 10px; border: 1px solid var(--forja-metal); border-radius: 999px; background: color-mix(in srgb, var(--forja-basalt) 68%, var(--forja-obsidian)); color: var(--forja-muted); font-size: var(--cwc-fs-2xs); font-weight: 800; white-space: nowrap; }
+.fj-login-chip:hover { border-color: var(--forja-ember); color: var(--forja-cream); }
+.fj-login-chip:focus-visible { border-color: var(--forja-molten); outline: 2px solid var(--forja-molten); outline-offset: 2px; }
+.fj-login-chip__login { color: var(--forja-cream); font-family: var(--cwc-font-mono); }
+.fj-login-chip__action::before { margin-right: 7px; color: var(--forja-metal); content: '·'; }
 .fj-tab-panel { min-height: 0; flex: 1; overflow: auto; background: radial-gradient(circle at 55% 0, color-mix(in srgb, var(--forja-lava) 13%, transparent), transparent 33%), var(--forja-obsidian); }
 .fj-modal-loading { min-height: 240px; }
 .fj-modal-error { display: grid; width: min(420px, 90%); gap: 10px; margin: 70px auto; padding: 18px; border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-md); background: var(--cwc-bg-elevated); color: var(--cwc-text-secondary); }
@@ -302,6 +308,7 @@ html, body {
 }
 
 @media (max-width: 560px) {
+  .fj-login-chip { margin: 0 10px 8px; }
   .fj-intro, .fj-season-banner { align-items: flex-start; flex-direction: column; }
   .fj-season-rule { white-space: normal; }
   .fj-impact-grid, .fj-medal-grid, .fj-recent-list { grid-template-columns: 1fr; }

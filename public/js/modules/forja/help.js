@@ -14,6 +14,7 @@ export default function forjaHelp() {
             items: [
               t('forja.help.first.step1', 'Desplegá La Forja desde su fila al final de la barra lateral. La consola recuerda si la dejaste abierta o cerrada.'),
               t('forja.help.first.step2', 'Si todavía no participás, elegí “Forjá tu ficha”. Escribí tu @usuario de GitHub: verificamos que exista y guardamos la capitalización canónica.'),
+              t('forja.help.first.stepChangeLogin', '¿Pusiste mal tu usuario? Abrí La Forja y tocá @tu-usuario → Cambiar usuario de GitHub. La ficha se vuelve a forjar sin reiniciar nada.'),
               t('forja.help.first.step3', 'Cambiá a Arena para ver el podio y las misiones de la temporada actual.'),
             ],
           },
