@@ -1,5 +1,6 @@
 import {
-  getCurrentProductionSha, githubUserExists, listCommitsBetween, listMergedPrsByAuthor,
+  getCurrentProductionSha, getLatestMergedActivity, githubUserExists, listCommitsBetween,
+  listMergedPrsByAuthor,
 } from '../comms/pr-read-shared.js';
 import {
   computeForja, deskNumbers, FORJA_TIMEZONE, monthKey, normalizePr, playerIdFor,
@@ -14,6 +15,7 @@ import {
 } from './store.js';
 
 const REFRESH_MS = Number(process.env.FORJA_REFRESH_MS) || 3 * 60 * 1000;
+const PRODUCTION_RECHECK_MS = Number(process.env.FORJA_PRODUCTION_RECHECK_MS) || 6 * 60 * 1000;
 const MANUAL_RATE_LIMIT_MS = 60 * 1000;
 const FULL_FETCH_LIMIT = 1000;
 const INCREMENTAL_FETCH_LIMIT = 50;
@@ -31,12 +33,19 @@ let fullCycle = null;
 const ownerCycles = new Map();
 const profileRetryAfterByOwner = new Map();
 let fetchMergedPrsByAuthor = listMergedPrsByAuthor;
+let fetchLatestMergedActivity = getLatestMergedActivity;
 let fetchCurrentProduction = getCurrentProductionSha;
 let fetchCommitsBetween = listCommitsBetween;
 let fetchGithubProfile = githubUserExists;
+let lastMergedActivity = null;
+let productionMemo = null;
 
 function sameLogin(left, right) {
   return typeof left === 'string' && left.toLowerCase() === String(right || '').toLowerCase();
+}
+
+function sameMergedActivity(left, right) {
+  return left?.number === right?.number && left?.updatedAt === right?.updatedAt;
 }
 
 function storedState(player) {
@@ -428,13 +437,42 @@ async function runCycle({ onlyOwner = null } = {}) {
   const previousBotPrs = unionBotPrs(getBotPrs(), snapshotBotPrs);
   const botLimit = previousBotPrs.length ? INCREMENTAL_FETCH_LIMIT : FULL_FETCH_LIMIT;
   const attemptedAt = new Date().toISOString();
-  const [bot, ...directResults] = await runFetchPool([
-    () => settledFetch(ATTRIBUTED_BOT_AUTHOR, botLimit),
-    ...requested.map((player) => () => settledFetch(
-      player.login,
-      states.get(player.username).hasAuthorHistory ? INCREMENTAL_FETCH_LIMIT : FULL_FETCH_LIMIT,
-    )),
-  ]);
+  const canSkipAuthorFetch = !onlyOwner && lastMergedActivity !== null
+    && previousBotPrs.length > 0
+    && requested.every((player) => {
+      const state = states.get(player.username);
+      return state?.hasAuthorHistory && state.loginMatches;
+    });
+  let probedActivity = null;
+  let activityProbeSucceeded = false;
+  if (!onlyOwner) {
+    try {
+      probedActivity = await fetchLatestMergedActivity();
+      activityProbeSucceeded = true;
+    } catch { /* el sondeo es una optimización: ante error se consulta completo */ }
+  }
+  const skippedAuthorFetch = canSkipAuthorFetch
+    && activityProbeSucceeded
+    && sameMergedActivity(probedActivity, lastMergedActivity);
+  let bot;
+  let directResults;
+  if (skippedAuthorFetch) {
+    bot = { ok: true, value: { prs: [], stale: false } };
+    directResults = requested.map(() => ({ ok: true, value: { prs: [], stale: false } }));
+  } else {
+    [bot, ...directResults] = await runFetchPool([
+      () => settledFetch(ATTRIBUTED_BOT_AUTHOR, botLimit),
+      ...requested.map((player) => () => settledFetch(
+        player.login,
+        states.get(player.username).hasAuthorHistory ? INCREMENTAL_FETCH_LIMIT : FULL_FETCH_LIMIT,
+      )),
+    ]);
+    // Un ciclo manual no cubre a todos los jugadores, así que no puede avanzar la marca.
+    if (!onlyOwner && activityProbeSucceeded && bot.ok && !bot.value.stale
+      && directResults.every((direct) => direct.ok && !direct.value.stale)) {
+      lastMergedActivity = probedActivity;
+    }
+  }
   const directByOwner = new Map(requested.map((player, index) => [player.username, directResults[index]]));
   const botPrs = bot.ok ? unionBotPrs(previousBotPrs, bot.value.prs) : previousBotPrs;
   saveBotPrs(botPrs);
@@ -492,7 +530,14 @@ async function runCycle({ onlyOwner = null } = {}) {
   });
   if (freshPlayers.length) {
     try {
-      const production = await fetchCurrentProduction();
+      const memoAge = productionMemo ? Date.now() - productionMemo.at : Infinity;
+      let production = memoAge < PRODUCTION_RECHECK_MS ? productionMemo.production : null;
+      if (!production) {
+        production = await fetchCurrentProduction();
+        if (production && production._stale !== true) {
+          productionMemo = { at: Date.now(), production };
+        }
+      }
       if (production && production._stale !== true) {
         const statesByUsername = new Map(freshPlayers.map((player) => [player.username, getFestejos(player.username)]));
         const refreshed = await refreshDeployPrs({
@@ -600,8 +645,14 @@ export function __setFetchForTests(fn) {
   fetchMergedPrsByAuthor = typeof fn === 'function' ? fn : listMergedPrsByAuthor;
 }
 
-export function __setProductionReadersForTests({ production, commits, profile } = {}) {
+export function __setProductionReadersForTests({ production, commits, profile, activity } = {}) {
   fetchCurrentProduction = typeof production === 'function' ? production : getCurrentProductionSha;
   fetchCommitsBetween = typeof commits === 'function' ? commits : listCommitsBetween;
   fetchGithubProfile = typeof profile === 'function' ? profile : githubUserExists;
+  fetchLatestMergedActivity = typeof activity === 'function' ? activity : getLatestMergedActivity;
+}
+
+export function __resetForjaMemosForTests() {
+  productionMemo = null;
+  lastMergedActivity = null;
 }

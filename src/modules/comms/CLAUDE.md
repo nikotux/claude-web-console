@@ -19,7 +19,8 @@ self/overrides, buildIndex(), ledgers JSONL, y las constantes
 WHATSAPP_* que usa el daemon), `pr-read-shared.js` (LECTOR ÚNICO de
 PRs y despliegues de GitHub — lo importan `tickets/sources.js` y `forja/refresher.js`;
 `listMergedPrsByAuthor()` usa repo explícito Tolkien, incluye `mergeCommit` y `headRefOid`, caché
-por autor de 150 s y fallback `_stale` al último bueno; `githubUserExists()`
+por autor de 150 s y fallback `_stale` al último bueno; `getLatestMergedActivity()`
+sondea sin caché el PR mergeado actualizado más reciente; `githubUserExists()`
 resuelve existencia, login canónico y nombre con caché corta;
 `getCurrentProductionSha()` recorre una página de runs exitosos `deploy-v2.yml`
 del más nuevo al más viejo hasta el primer `operation=deploy`, y acepta el SHA

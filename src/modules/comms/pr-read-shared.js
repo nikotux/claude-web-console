@@ -286,6 +286,25 @@ function ghText(args, { cwd = config.projectDir, label = 'gh' } = {}) {
   });
 }
 
+export async function getLatestMergedActivity({
+  repo = TOLKIEN_GITHUB_REPO,
+  cwd = config.projectDir,
+} = {}) {
+  const normalizedRepo = String(repo || TOLKIEN_GITHUB_REPO).trim() || TOLKIEN_GITHUB_REPO;
+  const prs = await ghJson([
+    'pr', 'list', '--repo', normalizedRepo, '--state', 'merged',
+    '--search', 'sort:updated-desc', '--limit', '1', '--json', 'number,updatedAt',
+  ], { cwd, label: 'gh pr list (latest merged activity)' });
+  if (!Array.isArray(prs)) throw new Error('gh devolvió un listado de actividad inválido');
+  if (!prs.length) return null;
+  const number = Number(prs[0]?.number);
+  const updatedAt = typeof prs[0]?.updatedAt === 'string' ? prs[0].updatedAt : '';
+  if (!Number.isSafeInteger(number) || !updatedAt) throw new Error('gh devolvió actividad de merge inválida');
+  // Mergear actualiza updatedAt y deja el merge nuevo arriba; un comentario
+  // viejo solo causa un falso positivo seguro y activa la consulta completa.
+  return { number, updatedAt };
+}
+
 export async function githubUserExists(login, { cwd = config.projectDir, fresh = false } = {}) {
   const normalized = String(login || '').trim();
   if (!normalized) throw new Error('Login de GitHub vacío');
