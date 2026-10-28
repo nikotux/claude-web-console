@@ -93,24 +93,15 @@ const RUNNER_STATE_FILES = new Map([
   ['comms-scan', 'comms/comms.lock'],
   ['comms-teams', 'comms/teams.lock'],
   ['comms-chatbot', 'comms/chatbot.lock'],
-  ['learning-analyze', 'learning-analysis.json'],
   ['tolkien-refresh', 'tolkien-refresh.json'],
   ['whatsapp', 'comms/whatsapp-daemon.json'],
   ['retro-curate', 'retro-curation.json'],
   ['health-scan', 'health-scan.lock'],
-  ['desk', 'desk.lock'],
-  ['investigate', 'investigate.lock'],
-  ['ticket-investigate', 'ticket-investigate.lock'],
 ]);
 const RUNNER_STATE_DIRS = new Map([
-  ['tasks-analyze', ''],
-  ['learning-explain', ''],
-  ['learning-context', ''],
   ['commitmsg', 'commitmsg'],
   ['projects-analyze', 'projects-analyze'],
-  ['audio', 'audio'],
   ['comms-analyze', 'comms/analyze'],
-  ['ticket-context', 'ticket-context'],
   ['retro', 'retro'],
 ]);
 
@@ -530,15 +521,15 @@ async function checkUnifiBridge() {
   }
 }
 
-// El subset work+pr de "Tickets & Features" se espeja a ~/tolkien/
+// El subset work+pr del contexto de trabajo se espeja a ~/tolkien/
 // CLAUDE.local.md (auto-carga en TODA sesión de Tolkien). Este check avisa si
 // el espejo quedó viejo/ausente frente al master de la consola.
 function checkTolkienContextSync() {
   const id = 'tolkien-context';
   const label = 'Contexto de Tolkien sincronizado';
   const s = verifyTolkienContextSync();
-  if (s.status === 'ok') return { id, label, status: 'ok', detail: 'CLAUDE.local.md al día con el contexto de Tickets & Features' };
-  if (s.status === 'stale') return { id, label, status: 'warn', detail: 'el espejo en CLAUDE.local.md quedó desactualizado — re-sincronizá desde Proyectos → Tickets & Features' };
+  if (s.status === 'ok') return { id, label, status: 'ok', detail: 'CLAUDE.local.md al día con el contexto de trabajo (Proyectos → Contexto de trabajo)' };
+  if (s.status === 'stale') return { id, label, status: 'warn', detail: 'el espejo en CLAUDE.local.md quedó desactualizado — re-sincronizá el contexto de trabajo (Proyectos → Contexto de trabajo)' };
   if (s.status === 'missing') return { id, label, status: 'warn', detail: 'falta la sección gestionada en CLAUDE.local.md — guardá/re-sincronizá el contexto para regenerarla' };
   return { id, label, status: 'warn', detail: 'no pude leer ~/tolkien/CLAUDE.local.md (¿Tolkien presente?)' };
 }
@@ -686,13 +677,10 @@ const CROSS_WORLD_ALLOW = new Set([
   'src/modules/health/invariants.js',      // solo TEXTOS de auditoría: la familia «Aduana — suelo neutral» NOMBRA config.projectDir para PROHIBIR que una sala lo use como cwd (Regla 16); no lee ni escribe nada de otro mundo
   'src/modules/chat/index.js',             // EL canal del paquete-sesión (handoff/worldLabelFor) — canónico
   'src/modules/tickets/context-store.js',  // syncToTolkien → CLAUDE.local.md
-  'src/modules/tickets/index.js',
-  'src/modules/tickets/desk-mcp-client.js',
   'src/modules/retro/promote-shared.js',   // promueve lecciones a memoria/claude-md de Tolkien
   'src/modules/projects/index.js',         // edita CLAUDE.md/memorias de ambos proyectos
   'src/modules/comms/gateway-shared.js',
   'src/modules/comms/pr-read-shared.js',
-  'src/modules/learning/explain-shared.js', // scope=tolkien lee código de Tolkien
   'src/modules/tolkien/index.js',
   'src/modules/tolkien/refresh-shared.js',
   'src/modules/tolkien/build-shared.js',    // build serializado de packages/* del repo propio de Tolkien (pnpm install + turbo build con cwd config.projectDir, lock en ~/.cwc-data) antes de refresh/plantilla y tras un pull (console:BUG-3373); no enlaza los Pad
@@ -701,7 +689,6 @@ const CROSS_WORLD_ALLOW = new Set([
   'src/modules/mcps/login-shared.js',      // censo/estado READ-ONLY de MCP de Tolkien (pestaña Conexiones) + login OAuth guiado (claude mcp, vía CLI); no enlaza los Pad ni cruza datos
   'src/modules/mcps/infisical-shared.js',  // sonda de Infisical: corre el CLI con el cwd del proyecto externo y lee su .infisical.json (solo lectura, no cruza datos)
   'src/core/workspace-provision.js',       // clon read-only del repo de Tolkien por-inquilino (decisión 🆕1 de PLAN-500) — provisiona un checkout, no enlaza los Pad
-  'src/modules/seguimientos/index.js',     // dashboard LIMBO (Regla dura #13 / PLAN-553): config.projectDir = cwd de la sesión-Limbo; aduana read-only + escritura solo a tickets con OK — no enlaza los Pad
   'src/modules/health/index.js',           // este audit + checkTolkienContextSync
   'src/modules/tolkien/env-shared.js',      // entornos Tolkien efímeros: gestiona git worktrees off config.projectDir (repo propio de Tolkien), no enlaza los Pad
   'src/modules/onboard/tolkien-mcp-shared.js',  // provisioning del MCP HTTP per-dev del inquilino: usa config.projectDir solo como cwd de `infisical run` para acuñar su bearer, no enlaza los Pad
@@ -957,8 +944,8 @@ function padField(item, key) {
   return fields?.[key] ?? item?.[key];
 }
 
-// Verifica el BACKBONE de Pad local (workspace `console`): hoy tasks/learning/
-// retro/tickets-meta hablan contra él y si se cae DEGRADAN EN SILENCIO — este
+// Verifica el BACKBONE de Pad local (workspace `console`): hoy learning/store,
+// retro y tickets/meta-store hablan contra él y si se cae DEGRADAN EN SILENCIO — este
 // check lo hace visible en el semáforo. Además vigila que el ESPEJO de la Regla
 // dura #12 (anti-colisión entre mundos) siga presente en las Conventions de Pad:
 // señal concreta y automática de que CLAUDE.md y Pad no divergieron (Gap #3,
@@ -972,7 +959,7 @@ async function checkPadBackbone() {
     if (r.status === 401 || /invalid or expired session/i.test(r.error || '')) {
       return { id, label, status: 'warn', detail: `Credencial del Pad local vencida o inválida (401) — no es el servicio: corré \`pad auth login --url ${PAD_DEFAULT_URL}\` y aprobá el link en el navegador; las sesiones abiertas recuperan su MCP de Pad con ⚙ Sistema → Backup → 🔄 Reiniciar sesiones.` };
     }
-    return { id, label, status: 'warn', detail: `Pad local no responde (${r.error || 'sin detalle'}) — tasks/learning/retro/tickets-meta degradan a best-effort. ¿pad-local.service arriba?` };
+    return { id, label, status: 'warn', detail: `Pad local no responde (${r.error || 'sin detalle'}) — learning/store, retro y tickets/meta-store degradan a best-effort. ¿pad-local.service arriba?` };
   }
 
   // El host ya respondió: validar también las sesiones tenant, una por una y

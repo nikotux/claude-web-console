@@ -77,7 +77,9 @@ import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { TANDEM_TOOL } from '../../core/tool-policy.js';
 import { VALID_MODELS, encodeCwd } from '../../core/claude-model.js';
 import { worldLabelFor } from '../../core/worlds.js';
-import { appendHistorico, extractSessionWork } from '../tickets/meta-store.js';
+import { appendHistorico, extractSessionWork, setTicketClaudeDirResolver } from '../tickets/meta-store.js';
+// Resolver por dueño para la librería compartida, sin acoplarla al bootstrap.
+setTicketClaudeDirResolver((owner) => userClaudeDir(owner || hostUser()));
 import { appendChatContext as appendLearningChatContext } from '../learning/store.js';
 import { projectsFor } from '../projects/index.js';
 import { queueRetroDistill } from '../retro/shared.js';

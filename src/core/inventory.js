@@ -335,11 +335,6 @@ const USER_STATE_PERSISTENCE = {
     'files', // ya resuelve por dueño: los handlers pasan root = userFileRoot(principalOf(req)); config.home es solo el DEFAULT de retrocompat de statSafeSync
     'connections', // registro GLOBAL con owner en el nombre del archivo (codexLoginJobPath(user) => <user>.json), patrón permitido por la sección Multi-tenant de CLAUDE.md
     'onboard', // estado del ALTA, no del usuario: el onboarding CREA el espacio del inquilino, así que su job no puede vivir dentro de él (ensureUserSpace corre best-effort justo antes de startProvision). Cada job lleva su dueño en el nombre (<user>.json/.code/.token) y guarda credenciales en curso: van en el host, con mode 600 — mismo caso que connections
-    'src/modules/seguimientos/index.js', // solo compone la ruta del índice de WhatsApp, recurso GLOBAL de comms (ya eximido); su propio estado —snapshot, historia y lock— sí resuelve por dueño
-    'src/modules/tickets/claims-store.js', // los claims son COMPARTIDOS por diseño: permiten ver que OTRO tomó el ticket; aislarlos por usuario rompería el hard lock documentado
-    'src/modules/tickets/refresher.js', // bugs-v2-snapshot.json es la caché del snapshot de Zoho/GitHub, fuente externa compartida (mismo criterio que comms)
-    'src/modules/tickets/sources.js', // tickets-resolved.json es estado de tickets de Zoho, compartido como el snapshot
-    'src/modules/tickets/pad-client.js', // lee el Pad CLOUD de Tolkien, que es de Chris y READ-ONLY global (Regla 12)
     'src/modules/chat/codex-shared.js', // corre DENTRO del runner, donde os.homedir() ya resuelve al HOME aislado del dueño (documentado en el propio archivo)
     'src/modules/chat/aduana.js', // suelo NEUTRAL entre PERSONAS (Regla dura 16): una sala no pertenece a ningún mundo ni a un dueño, y el host la aloja como infraestructura compartida — decisión de Niko 2026-07-29 (console:PLAN-2274), evaluada contra la alternativa de alojarla en el espacio del anfitrión
   ],
@@ -487,11 +482,9 @@ const CANONICAL_CONVENTIONS = [
     // Falsos positivos VERIFICADOS a mano (2026-07-31, console:PLAN-2481):
     // updates-panel.js define un helper LOCAL confirm() que delega en
     // dialog.confirmDialog y todas sus llamadas usan await; alert() solo
-    // aparece en un comentario. seguimientos.js solo menciona prompt() en
-    // el comentario de su mini-modal askText; no invoca el diálogo nativo.
+    // aparece en un comentario.
     exclude: [
       'public/js/modules/system/updates-panel.js',
-      'public/js/seguimientos/seguimientos.js',
     ],
   },
   {

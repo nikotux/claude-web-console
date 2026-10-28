@@ -10,10 +10,8 @@ export function isSponsored(me) {
 
 export const HIDDEN_FOR_SPONSORED = new Set([
   'tolkien', // ciclo de desarrollo del repo de la empresa
-  'tickets', // ciclo de desarrollo del repo de la empresa
   'visado', // flujo de salas de Aduana
   'retro', // Mejora Continua del propio desarrollo
-  'lab', // herramientas experimentales del host
   'stats', // telemetría del host, ajena a este perfil
 ]);
 

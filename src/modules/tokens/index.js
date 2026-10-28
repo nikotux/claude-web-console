@@ -132,7 +132,9 @@ function mkeyOf(model) {
 // LRU acotado: sin límite, cada .jsonl visto alguna vez (proyectos/sesiones
 // viejas incluidas) quedaba en memoria para siempre → crecimiento sin fin.
 const fileCache = new Map();
-const FILE_CACHE_MAX = 1000;
+// console:BUG-3481: cacheamos buckets hora×modelo pequeños; el tope debe superar
+// con holgura el corpus (1990 archivos hoy), o la LRU hace thrash y relee todo en cada poll.
+const FILE_CACHE_MAX = 20000;
 
 function emptyBucket() {
   return { input: 0, output: 0, cw1h: 0, cw5m: 0, cr: 0 };

@@ -15,7 +15,9 @@ import { hostUser, userSpace } from '../../core/user-space.js';
 import { localHourKey } from './time.js';
 
 const codexSessionsDir = (owner) => path.join(userSpace(owner), '.codex', 'sessions');
-const FILE_CACHE_MAX = 1000;
+// console:BUG-3481: cacheamos buckets hora×modelo pequeños; el tope debe superar
+// con holgura el corpus (2644 archivos hoy), o la LRU hace thrash y relee todo en cada poll.
+const FILE_CACHE_MAX = 20000;
 const fileCache = new Map();
 
 function emptyBucket() {

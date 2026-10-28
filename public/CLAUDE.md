@@ -1,6 +1,8 @@
 <!-- cwc:ficha-modulo -->
 # public — ficha del proyecto
 
+> Banco de conocimiento (tasks/learning/audio), Laboratorio, Cerebro y Seguimientos: archivado 2026-10-28, ver `_archived/ARCHIVED.md`; se retiraron slots, páginas, accesos y vendors 3D. Las descripciones siguientes se conservan como historia.
+
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
 ### public/vendor/              solo la excepción hljs; NO es un depósito de copias
 Las librerías frontend se montan con `express.static` desde `node_modules` en
@@ -19,12 +21,15 @@ un bundle de navegador; `public/vendor/hljs/README.md` documenta la excepción.
 y Mermaid, de forma lazy, desde `/vendor/mermaid/mermaid.esm.min.mjs`. El check
 `vendor-drift` de Salud vigila que no reaparezcan copias estáticas y que la
 excepción documentada no quede desactualizada.
+Tickets & Features se archivó el 2026-10-28 (console:PLAN-3480): sin slot,
+registro frontend, ayuda ni carga de diccionario; contexto work/pr en Proyectos.
+
 ### public/index.html + js/main.js  app principal: módulos frontend { name, mount(el, ctx) }
 montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
 (patrón completo en docs/frontend-modules.md).
 DOS BARRAS LATERALES (2026-07-07, pedido del usuario "Sesiones
 ocupa mucho espacio"): #sidebar IZQUIERDA = control/módulos
-(Tickets & Features → Pendientes → Visado → Mejora Continua → Laboratorio →
+(Pendientes → Visado → Mejora Continua → Laboratorio →
 La Forja; Laboratorio y La Forja cierran la lista, en ese orden)
 + CABECERA con el chip del usuario conectado (`#acct-chip`, desde
 2026-07-31) + pie de estado (plan-limits · usage · explorador · raw ·
@@ -51,8 +56,7 @@ movieron del pie IZQUIERDO al DERECHO
 en el pie izquierdo. DENSIDAD COMPACTA UNIFORME (2026-07-07, pedido
 del usuario "replicar el look fino de Tolkien en todos los módulos"):
 un bloque CSS scopeado a `.side-sec` (Tolkien va aparte en .tk-persist)
-adelgaza header/botones/cuerpo de TODAS las secciones (Tickets ·
-Pendientes · Comunicaciones · Sesiones): .sec-head fino, botones del
+adelgaza header/botones/cuerpo de TODAS las secciones (Pendientes · Comunicaciones · Sesiones): .sec-head fino, botones del
 header a 22px (.sec-head .btn--sm/.btn--icon), .tk-card denso, botones
 de acción a 26px (.tk-actions .btn/.btn-ghost) y tarjetas de Sesiones
 más finas (.sess-main min-height 30px). Los selectores usan ≥2 clases
@@ -125,7 +129,7 @@ fs-sm en filas densas, paddings/min-height grandes): chat (.chat-input/
 .chat-send), salud (.hp-row/.hr-f-area), sistema (.users-*/.if-item/
 .bk-row/.pj-*), uso (.tok-row-top/.lim-top/.tok-big), sesiones/lanzador
 (.ln-dir/.ln-model), comms (.cm-thead), tasks/audio (.tk-tab/.au-title-*/
-.task-*), tickets (.bv2-sum-main), gestor (.fm-body/.fm-item/.fm-toolbar).
+.task-*), CSS histórico de Tickets (.bv2-sum-main, módulo archivado), gestor (.fm-body/.fm-item/.fm-toolbar).
 REGLA: al agregar UI nueva, heredar de los primitivos y usar fs-sm/fs-xs
 para filas/controles densos; fs-lg/fs-xl SOLO para títulos prominentes.
 ### public/css/style.css       estilos de módulos y del chat. Los bloques

@@ -11,26 +11,21 @@ import { initPermCenter } from './ui/perm-center.js';
 import { initInterfonoCenter } from './ui/interfono-center.js';
 import { initI18n, applyI18n, t } from './ui/i18n.js';
 import { bindHelp, helpBtn, openHelpIndex } from './ui/help.js';
-import { allowModule, allowOversightSurface } from './ui/profile.js';
+import { allowModule } from './ui/profile.js';
 import { initAuxBar } from './modules/mobile/auxbar.js';
 
 import launcher from './modules/launcher/launcher.js';
 import sessions from './modules/sessions/sessions.js';
 import tolkien from './modules/tolkien/tolkien.js';
-import tickets from './modules/tickets/tickets.js';
-import tasks from './modules/tasks/tasks.js';
 import stats from './modules/stats/stats.js';
 import planLimits from './modules/stats/plan-limits.js';
 import usage from './modules/usage/usage.js';
 import system from './modules/system/system.js';
 import retro from './modules/retro/retro.js';
-import lab from './modules/lab/lab.js';
 import visado from './modules/visado/visado.js';
 import forja from './modules/forja/forja.js';
 
-// `audio` ya no es una sección de sidebar: vive DENTRO de `tasks` (Pendientes),
-// que importa openAudioPanel directamente. Por eso no está en MODULES.
-const MODULES = [launcher, sessions, tolkien, tickets, forja, tasks, visado, retro, lab, planLimits, stats, usage, system];
+const MODULES = [launcher, sessions, tolkien, forja, visado, retro, planLimits, stats, usage, system];
 
 // ===== Shell: pestañas de terminal + rail =====
 const tabsEl = document.getElementById('rail-tabs');
@@ -694,11 +689,6 @@ whoami.then((me) => {
   if (acct) acct.textContent = name;
   if (avatar) avatar.textContent = (name.replace(/[^A-Za-z0-9]/g, '')[0] || '?').toUpperCase();
   if (chip && name) chip.title = name;
-  // 🧠 Cerebro del Pad: superficie de OBSERVACIÓN del banco de conocimientos del
-  // host, así que solo se ofrece a quien tenga `oversight`. Ocultar no autoriza:
-  // el gate real son los endpoints /api/cerebro/*.
-  const brainLink = document.getElementById('cerebro-link');
-  if (brainLink) brainLink.hidden = !allowOversightSurface(me);
   // Ni Uso ni Raw requieren gate: el backend aplica scope por usuario (BUG-1874).
 });
 

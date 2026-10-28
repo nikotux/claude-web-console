@@ -11,9 +11,9 @@
 // Dos clases de entrada:
 //   - Proyectos completos (GET /api/projects: Tolkien y esta consola):
 //     contexto CLAUDE.md + memorias (índice MEMORY.md + notas).
-//   - Contextos de "Tickets & Features" (kind=work|pr de /api/tickets/context):
+//   - Contextos de trabajo (kind=work|pr de /api/projects/work-context):
 //     SOLO texto libre, sin memorias (la sección Memorias no existe en su detalle).
-//     Se inyectan en cada "Continuar en el chat" de un ticket/feature/PR de la v2.
+//     Conservados en Proyectos tras archivar Tickets & Features el 2026-10-28.
 //
 // No son copias: son los mismos archivos que Claude Code (o el prompt de
 // "Trabajar en Chat") lee de verdad — guardar acá cambia comportamiento
@@ -27,7 +27,7 @@ import { renderDiff } from '../../ui/diff.js';
 import { CHAT_MODEL_OPTIONS, EFFORT_OPTIONS } from '../../ui/models.js';
 
 const PROJECTS_API = '/api/projects';
-const BUGFIX_API = '/api/tickets/context'; // migrado de v1 a Tickets & Features
+const BUGFIX_API = '/api/projects/work-context'; // contexto de trabajo conservado en Proyectos
 
 // Presentación por key de proyecto completo (ícono + descripción corta).
 const PROJECT_META = {
@@ -36,8 +36,7 @@ const PROJECT_META = {
   console: { ico: 'console', descKey: 'system.projectContext.consoleDesc', desc: 'Contexto CLAUDE.md + memorias de Mi Consola (esta web)' },
 };
 
-// Contextos de "Tickets & Features": solo contexto (texto libre), sin memorias.
-// Se inyectan en cada "Continuar en el chat" de un ticket/feature/PR de la v2.
+// Contextos de trabajo: texto libre sin memorias; se espejan al clon propio.
 // (Las keys internas conservan el prefijo `bugfix-` — no cambian el endpoint.)
 const BUGFIX_ENTRIES = [
   {
@@ -600,7 +599,7 @@ export function mountProjectContextPanel(el, ctx) {
     if (!box) return;
     box.innerHTML = `<span class="hp-empty">${t('system.projectContext.checkingTolkienMirror', 'verificando espejo con Tolkien…')}</span>`;
     let s = { status: 'unavailable' };
-    try { s = await (await fetch('/api/tickets/context-sync')).json(); } catch { /* red caída */ }
+    try { s = await (await fetch('/api/projects/work-context/sync')).json(); } catch { /* red caída */ }
     if (!alive || !syncBox()) return;
     const u = SYNC_UI[s.status] || SYNC_UI.unavailable;
     const mirrorFile = `<code>${esc(s.file || 'CLAUDE.local.md')}</code>`;
@@ -614,7 +613,7 @@ export function mountProjectContextPanel(el, ctx) {
     syncBox().querySelector('[data-ref="resync"]')?.addEventListener('click', async (e) => {
       const btn = e.currentTarget; btn.disabled = true; btn.textContent = t('system.projectContext.syncing', 'Sincronizando…');
       try {
-        const res = await fetch('/api/tickets/context-sync', { method: 'POST' });
+        const res = await fetch('/api/projects/work-context/sync', { method: 'POST' });
         const d = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(d.error || t('system.projectContext.syncFailed', 'No se pudo sincronizar.'));
       } catch (err) { await dialog.alertDialog({ title: t('system.projectContext.errorTitle', 'Error'), message: err.message || t('system.projectContext.syncFailed', 'No se pudo sincronizar.') }); }

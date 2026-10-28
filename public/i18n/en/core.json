@@ -1,8 +1,6 @@
 {
   "core.explorer": "File explorer",
   "core.rawView": "Raw View",
-  "core.cerebroView": "Pad Brain",
-  "core.followUps": "Follow-ups",
   "core.acctUser": "Signed-in user",
   "core.dictateSend": "Send",
 
@@ -86,14 +84,8 @@
   "core.help.topic.auxbar.blurb": "Shortcuts and console navigation from your phone.",
   "core.help.topic.tickets.title": "Tickets & Features",
   "core.help.topic.tickets.blurb": "Unified tracking for tickets, features, and pull requests.",
-  "core.help.topic.tasks.title": "To-dos",
-  "core.help.topic.tasks.blurb": "Your private list of tasks, priorities, and next steps.",
-  "core.help.topic.audio.title": "Analyze audio",
-  "core.help.topic.audio.blurb": "Summarizes transcripts and suggests tasks for you to choose which ones to create.",
   "core.help.topic.retro.title": "Continuous Improvement",
   "core.help.topic.retro.blurb": "Detected workflow lessons and proposals to improve the process.",
-  "core.help.topic.learning.title": "Learning",
-  "core.help.topic.learning.blurb": "Organizes study paths and builds guided explanations by reading the real code.",
   "core.help.topic.tolkien.title": "Tolkien",
   "core.help.topic.tolkien.blurb": "Shows the repo's Git pulse and each session's isolated environments.",
   "core.help.topic.usage.title": "Usage and tokens",
@@ -128,10 +120,6 @@
   "core.help.topic.sys-unifi.blurb": "Read-only check of whether the UniFi network is ready for voice and calls.",
   "core.help.topic.files.title": "File Explorer",
   "core.help.topic.files.blurb": "Browse, open, and manage files within projects.",
-  "core.help.topic.seguimientos.title": "Follow-ups",
-  "core.help.topic.seguimientos.blurb": "Organizes decisions, replies, approvals, and next steps from a local copy.",
   "core.help.topic.rawview.title": "Raw View",
-  "core.help.topic.rawview.blurb": "Read-only monitor that visualizes the state and pace of live work.",
-  "core.help.topic.cerebro.title": "Pad Brain",
-  "core.help.topic.cerebro.blurb": "Read-only 3D view of the knowledge graph that lights up with every real use of the Pad."
+  "core.help.topic.rawview.blurb": "Read-only monitor that visualizes the state and pace of live work."
 }

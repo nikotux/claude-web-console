@@ -9,7 +9,6 @@
 //   - Mantenemos un ring buffer en memoria con la salida reciente para
 //     re-pintar el terminal al reconectar.
 import pty from 'node-pty';
-import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +31,6 @@ import { loadOwners, loadTitles, setSessionOwner, titleKey } from '../../core/se
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TMUX_CONF = path.join(__dirname, 'tmux.cwc.conf');
-const OMP_BIN = path.join(os.homedir(), '.local', 'bin', 'omp');
 const PREFIX = 'cwc-'; // prefijo de nombres de sesión tmux de este proyecto
 // Prefijo de las sesiones tmux OCULTAS de las vistas TUI de conversaciones
 // (bare). Distinto de PREFIX a propósito: no se listan ni se rehidratan como
@@ -131,7 +129,7 @@ class Session {
     this._exitWaiters = [];
   }
 
-  spawn({ runClaude = false, model = null, agent = null } = {}) {
+  spawn({ runClaude = false, model = null } = {}) {
     // BUG-2104: espejo del blindaje anticonsumo del chat para inquilinos; el
     // host conserva exactamente el entorno completo anterior.
     const isTenant = !!this.owner && this.owner !== hostUser();
@@ -281,7 +279,6 @@ class Session {
         : 'claude --dangerously-skip-permissions';
       this.proc.write(`${claudeCmd}\r`);
     }
-    if (!this.bare && agent === 'omp') this.proc.write(`${shellQuote(OMP_BIN)}\r`);
     return this;
   }
 
@@ -444,12 +441,11 @@ class SessionManager {
     return count;
   }
 
-  create({ cwd, runClaude = false, model = null, agent = null, title, attach = null, owner = null } = {}) {
+  create({ cwd, runClaude = false, model = null, title, attach = null, owner = null } = {}) {
     const id = this._nextId();
-    const defaultTitle = agent === 'omp' ? `omp:${path.basename(cwd || '') || 'terminal'}` : title;
-    const session = new Session({ id, cwd, title: title || defaultTitle, attach, owner });
+    const session = new Session({ id, cwd, title, attach, owner });
     try {
-      session.spawn({ runClaude, model, agent });
+      session.spawn({ runClaude, model });
     } catch (e) {
       // No la registramos (this.sessions.set) si el spawn falló: evita dejar
       // una sesión "fantasma" en el mapa (mismo criterio que createBare()).

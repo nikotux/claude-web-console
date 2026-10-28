@@ -126,7 +126,7 @@ código.
     integración futura tipo "ticket ↔ task" entre los dos Pad NO es un enlace
     vivo — es este handoff secuencial; el único cruce permitido es el
     plan-puente, generado a mano/por sesión, nunca por sincronización
-    automática de código. El cliente `src/modules/tickets/pad-client.js` (lee
+    automática de código. El cliente `src/modules/tickets/pad-client.js` (archivado 2026-10-28; leía
     el Pad CLOUD de Tolkien) y `src/core/pad-service-client.js` (habla con el
     Pad LOCAL de Consola) son y SIGUEN siendo dos conexiones separadas por
     diseño: ningún código puede unirlas en una operación que escriba a ambos.
@@ -140,7 +140,9 @@ código.
     proyectos que MAPEAN datos de AMBOS mundos + fuentes futuras (p.ej. el
     dashboard "Seguimientos" de trabajo humano-accionable de Niko, `PLAN-553`)
     existe un TERCER espacio NEUTRAL, "Limbo": no pertenece a ningún mundo
-    pero sirve a ambos a la vez.
+    pero sirve a ambos a la vez. (El dashboard "Seguimientos" (`PLAN-553`), primer
+    habitante de Limbo, fue archivado el 2026-10-28, `console:PLAN-3480`; el espacio
+    y sus leyes siguen vigentes para proyectos futuros; el flag `limbo` del chat queda dormido.)
     - **Ley 1 · Entrada read-only desde ambos mundos:** Limbo lee/importa, jamás muta la fuente.
     - **Ley 2 · Sin escritura de vuelta automática:** no escribe por su cuenta ni sincroniza los Pad.
     - **Ley 3 · Salida SOLO por sesión con instrucciones de viaje:** todo write sale en un paquete-sesión y se ejecuta en el destino con aprobación.
@@ -230,11 +232,13 @@ Qué archivo de `~/.cwc-data/` escribe cada módulo, con su formato y su políti
 
 El detalle histórico completo — archivo por archivo, con formato y política de poda — quedó en `docs/runtime-datos.md`.
 
-## Módulo VIVO `tickets/`
+## Librería `tickets/` (módulo archivado 2026-10-28)
 
-Detalle completo: `src/modules/tickets/CLAUDE.md`.
-
-⚠️ El tablero `bugfixes/board` está ARCHIVADO. El módulo VIVO del ciclo ticket/feature/PR es **`tickets/`** (Bugs v2, "One Front Door"): dashboard determinístico (snapshot Zoho/GitHub cada 60 s, sin IA) con las ventanas de detalle en modal. Su meta-store por ítem — "Contexto adicional" + "Histórico del trabajo" — vive en el **Pad LOCAL** (colección `contexto-de-tickets`), ya no en archivo. Los dos contextos de trabajo editables ('work' = cómo se trabaja un ticket, incluido el gate de push; 'pr' = house style de la descripción del PR) se editan en ⚙ Sistema → Proyectos y se ESPEJAN a `~/tolkien/CLAUDE.local.md`, para que TODA sesión de Tolkien los tenga aunque no venga del botón del tablero.
+Tickets & Features v2 fue ARCHIVADO el 2026-10-28 (`console:PLAN-3480`, decisión de Nico), como antes Bugs v1.
+`src/modules/tickets/` queda como librería sin `index.js`: `meta-store.js` (histórico de chat) y `context-store.js` (projects/health/retro y CLIs de espejo).
+Los contextos work/pr siguen vivos en ⚙ Sistema → Proyectos: GET/POST `/api/projects/work-context` y `/api/projects/work-context/sync`; `context-store.js` los espeja a `~/tolkien/CLAUDE.local.md`.
+Motivo: liberar CPU — Tickets consultaba Zoho/GitHub/Pad cloud cada 60 s; los otros seis módulos no se usaban. Las unidades externas `orca-*` y `tolkien-console.service` quedaron deshabilitadas a mano.
+Detalle y reversión: `_archived/ARCHIVED.md` y `src/modules/tickets/CLAUDE.md`.
 
 ## Índice enrutador de Pad (auto)
 <!-- cwc:pad-index:start -->
@@ -305,19 +309,13 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 | `forja/` | progresión personal y arena mensual derivadas de PRs mergeados en Tolkien | Participa por opt-in con `identity.github`; el detalle de PRs es privado por dueño y la arena expone solo métricas públicas. El frontend monta la ficha en el sidebar y abre «Mi salón»/«Arena»; GitHub se lee exclusivamente por `comms/pr-read-shared.js`. |
 | `terminal/` | sesiones tmux (`cwc-`) + TUI ocultas (`cwct-`) + rehidratación | La propiedad de adjuntado es `attachSpec`, NO `attach` (colisiona con el método). La rama `attach` es owner-scoped con candado estricto y comparte el guard con `tmux` desde `terminal/sessions.js`. |
 | `tokens/` | uso local (parsea transcripts jsonl) + límites del plan + Codex CLI | El COSTO es equivalente a precios de API, no gasto real. Todo en hora local de Medellín (`tokens/time.js`). El cache read pesa ×0.1: nunca compares tokens crudos. |
-| `tasks/` | Pendientes: tablero privado (PEND / PLAN) | Backend en **Pad LOCAL** (colecciones `pendientes`/`planes`), no file-based. Ojo con el rate limit al pedir links por ítem. |
-| `learning/` | 🎓 Aprendizaje: temas de estudio de Niko | Backend en **Pad LOCAL** (`temas-de-aprendizaje`/`rutas-de-aprendizaje`). "Explicame esto" navega el código read-only. |
 | `retro/` | Mejora Continua: destila lecciones de proceso al cerrar chats | Lecciones en Pad (`mejora-continua`), consultadas por tarea desde el índice enrutador; el pozo `comunidad` suma recurrencia entre personas sin auto-aplicar aportes ajenos. Incluye "💬 Feedback de Chris". |
-| `audio/` | interpreta una transcripción → resumen + tareas propuestas | Nada se auto-aplica: el usuario aprueba cada tarea. |
-| `tickets/` | módulo **VIVO** del ciclo ticket/feature/PR (Bugs v2) | Su detalle todavía vive en la sección "Módulo VIVO `tickets/`" de este archivo. Meta-store en Pad LOCAL (`contexto-de-tickets`). |
-| `seguimientos/` | dashboard del trabajo humano-accionable (primer habitante de **Limbo**) | Lee siempre del snapshot en disco, nunca de Zoho en vivo. Escribe SOLO al ticket y con aprobación. |
 | `interfono/` | panel + canal humano del bus entre sesiones | **Solo LEE** el bus; la mensajería automática la escriben los hooks vía `bin/cwc-bus.js`. |
-| `cerebro/` | observabilidad 3D read-only del grafo del Pad LOCAL (`console`) en tiempo real | Expone títulos y actividad del host: exige `oversight` resuelto en vivo, nunca `admin`; `getGraph()`/`getActivity()` no emiten telemetría: el observador no se observa a sí mismo. |
 | `news/` | 🆕 Novedades: changelog alegre para los usuarios, que se monta solo en cada push | El redactor es la ÚNICA corrida read-only que LEE código para escribir texto de usuario (Read/Grep/Glob). Publica sin revisión previa: lo que redacte lo ven todos los usuarios. |
 | `health/` | chequeos rápidos + revisión IA + auto-fix | Su detalle vive en la sección "Verificación de salud" de este archivo. El auto-fix es la ÚNICA corrida que escribe código sin supervisión. |
 | `tolkien/` | git del repo trackeado + entornos efímeros por sesión | "Actualizar" adelanta tu `main` LOCAL aunque estés en una rama feature. Los entornos son worktrees + DB clonada + dev-server systemd. |
 | `visado/` | canal de petición-con-visado desde una sala 🛃 Aduana | El catálogo es un enum CERRADO en código: el invitado ELIGE de listas del servidor, nunca escribe. El `gate` de cada op es la referencia importada del endpoint real, no una copia. |
-| `projects/` | edita el CLAUDE.md y las memorias REALES de cada proyecto | Excepción deliberada a la regla 4: lo que guardás acá cambia el comportamiento de la próxima sesión. Edición por SECCIONES con guard de hash. |
+| `projects/` | edita el CLAUDE.md y las memorias REALES de cada proyecto | Excepción deliberada a la regla 4: lo que guardás acá cambia el comportamiento de la próxima sesión. Edición por SECCIONES con guard de hash. También sirve los contextos work/pr heredados de Tickets (`/work-context`), que se espejan a `CLAUDE.local.md` de Tolkien. |
 | `backup/` | tar.gz + commit + push del código | Solo al remote `personal`; URLs con `Mordor-Staffing` bloqueadas. Nunca versionar `.env`, `users.json`, `certs/`. |
 | `comms/` | **librerías compartidas** (NO es un módulo registrado) | El dashboard se eliminó en 2026-07-14. Quedan `pr-read-shared` (lector único de PRs), `gateway-shared` (envíos) y el puente de WhatsApp. |
 | `updates/` | censo de versiones de terceros + dos caminos de actualización | El botón principal abre una **sesión** con Bash total (no puede ser Tándem: su hook bloquea Bash de escritura); el runner determinístico queda como "Modo automático". Un major NO entra por veredicto IA favorable: solo si Niko lo tilda. `node --check` NO detecta imports rotos: exige prueba de runtime. |
@@ -332,7 +330,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 | `tmux/` | observación y control de sesiones tmux existentes | El guard de no-admin es fail-closed: exige socket, prefijo, sesión viva y owner coincidente; lo ajeno o desconocido responde `404`. |
 | `admin/` | administración de cuentas y mantenimiento de runners | `r.use(requireAdmin)` debe quedar antes de registrar las rutas: moverlo o montar una ruta fuera de `r` abre la jerarquía de permisos. |
 | `sponsorship/` | adopción self-service de perfiles patrocinados | No es admin-gated: cada sponsor decide a quién presta su propia credencial; liberar vuelve a `awaiting-sponsor`, no a `none`. |
-| _archivados_ | `bugfixes/` y `bugs/` (el tablero v1 y el triage) | Su código vive en `_archived/src-modules/`; los reemplazó `tickets/`. Sus fichas históricas quedaron junto a ese código. |
+| _archivados_ | `bugfixes/` y `bugs/` (tablero v1, 2026-07-07) + `tickets/`, `tasks/`, `learning/`, `audio/`, `lab/`, `cerebro/` y `seguimientos/` (2026-10-28, console:PLAN-3480): código y fichas históricas en `_archived/`. `tickets/` y `learning/` conservan archivos-librería en `src/modules/`, sin `index.js`; chat usa `learning/store.js` al cerrar con `learningId`. | No reponerlos en `registry.js` sin reinstalar también frontend, runners e i18n; reversión en `_archived/ARCHIVED.md`. |
 
 ## Convenciones (esto es lo que SE DEBE hacer)
 
@@ -409,7 +407,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
   caso. Y si el contenido tiene
   SUB-ELEMENTOS, se agrupan TIPO ÁRBOL: grupo padre colapsable → hijos
   anidados con indentación/guía vertical (ejemplos vivos: hallazgos de
-  health-review-modal, fila-PR del tablero con TKT anidados, sub-ventana de
+  health-review-modal, fila-PR del tablero con TKT anidados (archivado 2026-10-28), sub-ventana de
   Optimización IA con censo agrupado bin//src y propuestas agrupadas por
   motor — clases `.hp-opt-group`/`.hp-opt-card` en style.css como referencia).
   Nunca un chorizo de tarjetas planas con todo el texto expandido.
@@ -505,6 +503,11 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 - `playwright-core` es devDependency del proyecto (`npm install --save-dev`,
   reutiliza el Chromium ya en `~/.cache/ms-playwright`) para la verificación
   de UI descrita en "Proceso de cambio" — no lo instales global, ya está acá.
+
+- El escáner de tokens (`tokens/index.js` y `codex-usage.js`) cachea el parseo por archivo con una LRU.
+  Si el tope es menor que el corpus (~2000 Claude + ~2600 Codex), hace thrash y relee ~1,8 GB cada 15 s:
+  el server consume un core entero (`console:BUG-3481`, 2026-10-28).
+  Medir con `rchar` en `/proc/<MainPID>/io`.
 
 ## Proceso de cambio (seguirlo SIEMPRE)
 

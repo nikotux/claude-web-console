@@ -1,5 +1,7 @@
 # Archivos de runtime — detalle por módulo
 
+> Banco de conocimiento, Laboratorio, Cerebro y Seguimientos: archivado 2026-10-28, ver `_archived/ARCHIVED.md`. Se conserva este inventario histórico y todo dato de runtime; learning/store.js y los stores de tickets aún sirven a consumidores vivos.
+
 > Detalle histórico de la sección "NO MODIFICAR" del CLAUDE.md raíz, movido acá el 2026-07-24 (PLAN-1862) porque el archivo raíz superaba 3,8× el límite de 150k.
 > La versión corta y vigente está en el `CLAUDE.md` de la raíz.
 > El detalle de cada archivo también debe reflejarse en la ficha del módulo que lo escribe.

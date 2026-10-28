@@ -171,11 +171,9 @@ export function evaluateCoherence(census) {
 
   // Regla 1: los módulos del ciclo de tickets/features deberían consumir `comms`
   // (necesitan el contexto de Chris/PR). Es el hallazgo que originó el módulo.
-  // NOTA (2026-07-11, B0): antes ['bugfixes','bugs'] — módulos ARCHIVADOS,
-  // reemplazados por `tickets` (One Front Door). `tickets` YA consume comms
-  // (tickets/sources.js), así que la regla queda vigente y correctamente
-  // silenciosa; si un futuro módulo del ciclo dejara de usar comms, vuelve a saltar.
-  const WANT_COMMS = ['tickets'];
+  // NOTA: Tickets & Features se archivó el 2026-10-28 (console:PLAN-3480).
+  // Lista vacía a propósito, preparada para un futuro consumidor del ciclo.
+  const WANT_COMMS = [];
   if (svc.comms?.exists) {
     const consumers = new Set(svc.comms.consumerModules || []);
     for (const m of WANT_COMMS) {
@@ -219,18 +217,6 @@ export function evaluateCoherence(census) {
     // censor ghRe de core/inventory.js matchea comillas+gh+verbo y este mismo
     // archivo se auto-detectaría como caller (FP del censor).
     ['src/modules/backup/index.js', 'repo edit (gh) del repo de la consola (dominio propio, no Tolkien)'],
-    // NOTA (2026-07-11, B0): se quitó la exención de `src/modules/bugfixes/index.js`
-    // — módulo ARCHIVADO, el archivo ya no existe (nunca matcheaba census.ghCallers).
-    // El scraping del ciclo VIVO vive ahora en tickets/. VERIFICADO (2026-07-12,
-    // resolución del hallazgo de Coherencia): en AMBOS archivos las menciones de la
-    // CLI son SOLO comentarios (nombres de comando entre backticks que el censor
-    // ghRe confunde con llamadas reales); las lecturas REALES de PR van por la
-    // fuente canónica comms/pr-read-shared.js (listPrs/fetchPrRich). No hay
-    // scraping duplicado — se eximen con motivo. OJO: los motivos de abajo NO
-    // deben contener el nombre-de-CLI seguido de un verbo (pr/repo/view/list…) o
-    // este mismo archivo se auto-detectaría como caller (mismo FP que backup).
-    ['src/modules/tickets/refresher.js', 'gh solo en comentarios; las lecturas reales van por comms/pr-read-shared.js'],
-    ['src/modules/tickets/sources.js', 'gh solo en comentarios; usa listPrs/fetchPrRich de comms/pr-read-shared.js'],
     ['src/modules/onboard/capabilities.js', 'auth status (gh) del usuario aislado; detector de onboarding, no lee PRs'],
     ['bin/cwc-gh-login-runner.js', 'auth login/status/setup-git (gh) del usuario aislado; no lee PRs'],
   ]);

@@ -19,7 +19,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { EventEmitter } from 'node:events';
 import { PAD_DEFAULT_URL } from './pad-url.js';
 
 const CREDS = path.join(os.homedir(), '.pad', 'credentials.json');
@@ -219,41 +218,19 @@ async function doFetch(method, urlPath, { body, url, token } = {}) {
   }
 }
 
-export const padTelemetry = new EventEmitter();
-padTelemetry.setMaxListeners(50);
-
-/*
- * Alimenta la vista "Cerebro" por SSE con el uso real del banco de conocimiento,
- * incluidos los hits de caché. Es observabilidad pura: un listener defectuoso
- * jamás debe influir en el resultado ni en el comportamiento del cliente.
- */
-function emitTelemetry(info) {
-  try { padTelemetry.emit('pad', info); } catch {}
-}
-
 // Punto único de todas las operaciones. GET pasa por la caché; los writes la
 // invalidan. La forma del retorno ({ ok, data } / { ok:false, error }) no cambia.
 async function request(method, urlPath, { body, url = DEFAULT_URL, token } = {}) {
   const isGet = method === 'GET';
-  const telemetry = {
-    op: isGet ? 'read' : 'write',
-    method,
-    path: urlPath,
-    workspace: urlPath.match(/\/workspaces\/([^/]+)/)?.[1] || null,
-    ref: urlPath.match(/\/items\/([A-Z]+-\d+)/)?.[1] || null,
-    collection: urlPath.match(/\/collections\/([^/?]+)/)?.[1] || null,
-  };
   if (isGet && CACHE_ENABLED) {
     const cached = cacheGet(urlPath);
     // Clon defensivo: el caché guarda una sola referencia; sin copiar, un caller
     // que mute el resultado (p.ej. `.sort()` in-place) corrompería a los demás.
     if (cached !== undefined) {
-      emitTelemetry({ ...telemetry, cached: true, ok: true, ts: new Date().toISOString() });
       return { ok: true, data: structuredClone(cached), cached: true };
     }
   }
   const r = await doFetch(method, urlPath, { body, url, token });
-  emitTelemetry({ ...telemetry, cached: false, ok: r.ok, ts: new Date().toISOString() });
   if (isGet) {
     if (CACHE_ENABLED && r.ok) cacheSet(urlPath, r.data);
   } else if (r.ok && CACHE_ENABLED) {
@@ -545,143 +522,6 @@ export async function setParent(ref, parentRef, opts = {}) {
 export async function deleteLink(linkId, opts = {}) {
   const { url, token, workspace } = resolveCtx(opts);
   return request('DELETE', `/api/v1/workspaces/${workspace}/links/${linkId}`, { url, token });
-}
-
-// --- Grafo y actividad (vista Cerebro) ---
-
-// La forma medida hoy (2026-09-08) es
-// {nodes:[{id,ref,title,collection,status,is_terminal,child_count,updated_at}],
-// edges:[{source,target,type}]}; source/target son REFS humanos, no UUID. Va
-// directo a doFetch porque la respuesta pesa ~300 KB: meterla en readCache haría
-// que startCacheSweep la re-descargue cada 20 s para siempre. Además es la lectura
-// de la propia vista observadora: no emite telemetría ni se auto-ilumina.
-export async function getGraph(opts = {}) {
-  const { url, token, workspace } = resolveCtx(opts);
-  return doFetch('GET', `/api/v1/workspaces/${workspace}/graph`, { url, token });
-}
-
-const COMPLETE_GRAPH_ITEM_LIMIT = 10_000;
-
-function terminalStatusesFor(collection) {
-  let schema = collection?.schema || {};
-  if (typeof schema === 'string') schema = JSON.parse(schema);
-  const statusField = Array.isArray(schema?.fields)
-    ? schema.fields.find((field) => field?.key === 'status')
-    : null;
-  return new Set(Array.isArray(statusField?.terminal_options) ? statusField.terminal_options : []);
-}
-
-// Construye la variante completa a partir de los listados por colección, porque
-// /graph excluye los ítems terminales e ignora los filtros para incluirlos. Las
-// llamadas concurrentes siguen pasando por doFetch: el semáforo global y el
-// back-off ante 429 continúan siendo el límite efectivo del fan-out.
-export async function getCompleteGraph(opts = {}) {
-  const { url, token, workspace } = resolveCtx(opts);
-  const collectionsResult = await listCollections(opts);
-  if (!collectionsResult.ok) return collectionsResult;
-  if (!Array.isArray(collectionsResult.data)) {
-    return { ok: false, error: 'Pad local: respuesta inválida al listar colecciones.' };
-  }
-
-  const collections = collectionsResult.data;
-  const results = await Promise.all([
-    getGraph(opts),
-    ...collections.map((collection) => doFetch(
-      'GET',
-      `/api/v1/workspaces/${workspace}/collections/${collection.slug}/items?limit=${COMPLETE_GRAPH_ITEM_LIMIT}`,
-      { url, token },
-    )),
-  ]);
-  const graphResult = results[0];
-  if (!graphResult.ok) return graphResult;
-
-  const listed = [];
-  for (let index = 0; index < collections.length; index += 1) {
-    const itemsResult = results[index + 1];
-    if (!itemsResult.ok) return itemsResult;
-    if (!Array.isArray(itemsResult.data)) {
-      return { ok: false, error: `Pad local: respuesta inválida al listar ${collections[index].slug}.` };
-    }
-
-    let terminalStatuses;
-    try {
-      terminalStatuses = terminalStatusesFor(collections[index]);
-    } catch {
-      return { ok: false, error: `Pad local: schema inválido en ${collections[index].slug}.` };
-    }
-    for (const item of itemsResult.data) {
-      if (!item?.ref) continue;
-      const status = parseItemFields(item).status ?? null;
-      listed.push({
-        item,
-        collection: item.collection_slug || collections[index].slug,
-        status,
-        completed: terminalStatuses.has(status),
-      });
-    }
-  }
-
-  const nodesByRef = new Map();
-  for (const entry of listed) {
-    nodesByRef.set(entry.item.ref, {
-      ref: entry.item.ref,
-      title: entry.item.title || entry.item.ref,
-      collection: entry.collection,
-      status: entry.status,
-      is_terminal: entry.completed,
-      completed: entry.completed,
-      child_count: 0,
-      updated_at: entry.item.updated_at || null,
-    });
-  }
-  for (const { item } of listed) {
-    const parent = nodesByRef.get(item.parent_ref);
-    if (parent && item.parent_ref !== item.ref) parent.child_count += 1;
-  }
-
-  const baseNodes = Array.isArray(graphResult.data?.nodes) ? graphResult.data.nodes : [];
-  const baseNodeRefs = new Set(baseNodes.map((node) => node?.ref).filter(Boolean));
-  const edges = [];
-  const edgeKeys = new Set();
-  const basePairs = new Set();
-  for (const edge of Array.isArray(graphResult.data?.edges) ? graphResult.data.edges : []) {
-    if (!edge?.source || !edge?.target) continue;
-    const pair = `${edge.source}\u0000${edge.target}`;
-    const key = `${pair}\u0000${edge.type || ''}`;
-    basePairs.add(pair);
-    if (edgeKeys.has(key)) continue;
-    edgeKeys.add(key);
-    edges.push(edge);
-  }
-
-  // LIMITACIÓN ACEPTADA: el listado no expone las relaciones laterales de los
-  // completados (implements, blocks, wiki, etc.). Recuperarlas exigiría llamar
-  // /items/<ref>/links unas ~1500 veces, algo inviable; por eso esos ítems solo
-  // cuelgan de su parent_ref y conservamos los tipos reales únicamente de /graph.
-  for (const { item } of listed) {
-    if (baseNodeRefs.has(item.ref) || !item.parent_ref || item.parent_ref === item.ref) continue;
-    if (!nodesByRef.has(item.parent_ref)) continue;
-    const pair = `${item.ref}\u0000${item.parent_ref}`;
-    if (basePairs.has(pair)) continue;
-    const key = `${pair}\u0000parent`;
-    if (edgeKeys.has(key)) continue;
-    edgeKeys.add(key);
-    edges.push({ source: item.ref, target: item.parent_ref, type: 'parent' });
-  }
-
-  return { ok: true, data: { nodes: [...nodesByRef.values()], edges } };
-}
-
-// La forma medida hoy (2026-09-08) es un array de
-// {id,document_id,action:'created'|'updated'|'commented',actor:'agent'|'user',
-// item_title,item_ref,item_slug,collection_slug,created_at,actor_name}. Va directo
-// a doFetch porque se poletea cada ~2 s: una caché de 30 s rompería el requisito
-// de pulso visible en <=3 s. Como getGraph, es la vista observadora y por eso no
-// emite telemetría ni se observa a sí misma.
-export async function getActivity(opts = {}) {
-  const { url, token, workspace } = resolveCtx(opts);
-  const limit = Math.min(200, Math.max(1, Number(opts.limit) || 30));
-  return doFetch('GET', `/api/v1/workspaces/${workspace}/activity?limit=${limit}`, { url, token });
 }
 
 // Chequeo barato de disponibilidad (para decidir fallback sin pagar el timeout completo

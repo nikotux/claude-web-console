@@ -22,10 +22,10 @@
 // El auditor trata cada namespace como UN archivo: partir un diccionario en
 // varios JSON hace que Salud reporte faltantes y huérfanas falsas.
 const MODULES = [
-  'core', 'launcher', 'sessions', 'chat', 'terminal', 'tickets', 'tasks',
-  'audio', 'retro', 'stats', 'system', 'tolkien', 'usage', 'learning', 'mobile', 'unifi',
-  'files', 'rawview', 'seguimientos', 'onboard', 'news', 'projects', 'visado',
-  'cerebro', 'cabina',
+  'core', 'launcher', 'sessions', 'chat', 'terminal',
+  'retro', 'stats', 'system', 'tolkien', 'usage', 'mobile', 'unifi',
+  'files', 'rawview', 'onboard', 'news', 'projects', 'visado',
+  'cabina',
   'forja',
 ];
 

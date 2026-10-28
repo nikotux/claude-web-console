@@ -852,15 +852,9 @@ const RUNNER_REGISTRY = [
   { key: 'comms-teams', kind: 'lock', file: 'comms/teams.lock', label: 'Escaneo Teams', icon: 'externalLink', model: 'sonnet', role: 'sdk' },
   { key: 'comms-chatbot', kind: 'lock', file: 'comms/chatbot.lock', label: 'Chatbot (comunicaciones)', icon: 'externalLink', model: 'sonnet', role: 'sdk' },
   // --- Familia JOB (status:'running') ---
-  { key: 'tasks-analyze', kind: 'jobglob', base: 'tasks-analysis-', label: 'Análisis de Pendientes', icon: 'list', model: 'sonnet', role: 'sdk' },
-  { key: 'learning-explain', kind: 'jobglob', base: 'learning-explain-', label: 'Explicame esto (aprendizaje)', icon: 'sparkle', model: 'sonnet', role: 'sdk' },
-  { key: 'learning-context', kind: 'jobglob', base: 'learning-context-', label: 'Contexto (aprendizaje)', icon: 'sparkle', model: 'sonnet', role: 'sdk' },
-  { key: 'learning-analyze', kind: 'job', file: 'learning-analysis.json', label: 'Analizar aprendizaje', icon: 'sparkle', model: 'sonnet', role: 'sdk' },
   { key: 'commitmsg', kind: 'jobdir', dir: 'commitmsg', label: 'Mensaje de commit IA', icon: 'edit', model: 'haiku', role: 'sdk' },
   { key: 'projects-analyze', kind: 'jobdir', dir: 'projects-analyze', label: 'Guardián de contexto', icon: 'eye', model: 'haiku', role: 'sdk' },
-  { key: 'audio', kind: 'jobdir', dir: 'audio', label: 'Análisis de audio', icon: 'mic', model: 'sonnet', role: 'sdk' },
   { key: 'comms-analyze', kind: 'jobdir', dir: 'comms/analyze', label: 'Análisis de hilo (comms)', icon: 'externalLink', model: 'haiku', role: 'sdk' },
-  { key: 'ticket-context', kind: 'jobdir', dir: 'ticket-context', label: 'Contexto de ticket', icon: 'sparkle', model: 'sonnet', role: 'sdk' },
   // --- Silenciosos / determinísticos que antes no se registraban ---
   { key: 'tolkien-refresh', kind: 'jobflag', file: 'tolkien-refresh.json', label: 'Refresh DB Tolkien', icon: 'gitBranch', model: null, role: 'job' },
   { key: 'whatsapp', kind: 'heartbeat', file: 'comms/whatsapp-daemon.json', freshMs: 300000, label: 'WhatsApp (daemon)', icon: 'externalLink', model: null, role: 'service' },

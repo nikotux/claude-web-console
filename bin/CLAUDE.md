@@ -1,6 +1,8 @@
 <!-- cwc:ficha-modulo -->
 # bin — ficha del proyecto
 
+> Runners tasks/learning/audio/seguimientos, migrate-learning-to-pad.js y cwc-calendar.js: archivado 2026-10-28, ver `_archived/ARCHIVED.md`; cwc-desk.js sigue vivo porque lo usa la skill eta. Las descripciones anteriores al archivo se conservan como historia.
+
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
 ### bin/cwc-pad-mold.js    auditor y migrador serial del molde declarativo de
 workspaces Pad de inquilinos. Sin flags o con `--audit` abre
@@ -1395,16 +1397,13 @@ pool max 3) que lee cómo el proyecto usa el paquete → veredicto seguro/
 riesgoso/rompe + confianza. Solo majors NO-beta. Estado en
 ~/.cwc-data/updates-risk.json (heartbeat, reanudable). Lógica en
 updates/analyze-shared.js
-### bin/cwc-ticket-context-runner.js  CONTEXTO ADICIONAL de un ticket/PR (módulo VIVO
-`tickets/`, 2026-07-07): interpreta con IA una TRANSCRIPCIÓN de
-una charla (con el cliente/equipo) y destila el contexto que le
-sirve a quien vaya a trabajar el ítem. DESACOPLADO (regla de oro) +
-READ-ONLY doble capa (regla 6: sonnet, 1 turno, CERO herramientas —
-el texto viaja entero en el prompt). Interfaz por archivos:
-~/.cwc-data/ticket-context/<id>.json (id determinístico por
-key+transcripción). Al terminar AUTO-GUARDA el resultado en el
-meta-store del ítem (decisión de Niko: auto-guardar al interpretar).
-Lógica en src/modules/tickets/context-analyze-shared.js
+### Archivados: cwc-ticket-context-runner.js y migrate-tickets-meta-to-pad.js
+Trasladados a _archived/bin/ el 2026-10-28 (console:PLAN-3480), junto con
+Tickets & Features v2. El runner interpretaba transcripciones para el contexto
+adicional del ticket; context-analyze-shared.js vive en _archived/src-modules/tickets/.
+La migración de metadata a Pad era de un solo uso. Ninguno sigue activo.
+Los CLIs cwc-tenant-mirror-reset.js y cwc-retro-context-rehydrate.js conservan
+su import de la librería viva tickets/context-store.js.
 ### bin/cwc-forbidden-override.js  CAMINO DE OVERRIDE CONSCIENTE del gate de acciones
 prohibidas por lección (M5, PLAN-1934). Determinístico, 0 tokens, config-free (no
 importa core/config.js: corre desde cualquier cwd y sin .env). `--list` muestra las

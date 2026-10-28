@@ -26,14 +26,9 @@ import { registerModules } from './core/registry.js';
 import { warmCache, startCacheSweep } from './core/pad-service-client.js';
 import { publicRouter as onboardPublicRouter } from './modules/onboard/index.js';
 
-// Colecciones "calientes" de Pad local que la UI pide al abrir: se precargan al
-// arrancar y el barrido las mantiene frescas (RDA-347 — transporte del Banco de
-// Conocimiento y demás tableros sobre Pad local).
-const HOT_PAD_COLLECTIONS = [
-  'temas-de-aprendizaje', 'rutas-de-aprendizaje', // Banco de Conocimiento
-  'pendientes', 'planes', // tablero de tareas
-  'contexto-de-tickets', 'mejora-continua', // tickets internos + retro
-];
+// Precarga solo Mejora Continua. El barrido de 20 s refresca también lo
+// que cualquier consumidor vivo pida a la caché de Pad local (RDA-347).
+const HOT_PAD_COLLECTIONS = ['mejora-continua'];
 
 // Helper para setear cookies de sesión: httpOnly + Secure (HTTPS) + SameSite.
 function setCookie(res, name, value, { clear = false } = {}) {
@@ -316,18 +311,6 @@ async function main() {
     res.sendFile(path.join(PUBLIC_DIR, 'raw.html'));
   });
 
-  // Dashboard "Seguimientos" (subpágina, PLAN-553 · primer habitante de Limbo):
-  // trabajo humano-accionable de Niko. Cualquier usuario autenticado.
-  app.get('/seguimientos', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'seguimientos.html')));
-
-  // Vista Cerebro (subpágina, console:PLAN-2843): el grafo del Pad local
-  // renderizado como red neuronal 3D que se ilumina con el uso real. Esta ruta
-  // sirve un HTML estático SIN datos: el aislamiento lo hacen los endpoints que
-  // la vista consume (/api/cerebro/graph y /api/cerebro/stream), ambos gateados
-  // por `oversight` — ver src/modules/cerebro/. Si mañana consume un endpoint
-  // nuevo, ESE endpoint trae su propio gate: acá no hay red de contención.
-  app.get('/cerebro', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'cerebro.html')));
-
   // App shell (index.html) con el BUILD_ID inyectado. Cache-Control: no-cache
   // porque es una navegación que el Service Worker deja pasar a la red siempre
   // (ver public/sw.js) — así el BUILD_ID que ve el cliente es siempre el actual.
@@ -382,10 +365,6 @@ async function main() {
   app.use('/vendor/marked', express.static(path.join(__dirname, '..', 'node_modules', 'marked', 'lib')));
   app.use('/vendor/mermaid', express.static(path.join(__dirname, '..', 'node_modules', 'mermaid', 'dist')));
   app.use('/vendor/chartjs', express.static(path.join(__dirname, '..', 'node_modules', 'chart.js', 'dist')));
-  app.use('/vendor/3d-force-graph', express.static(path.join(__dirname, '..', 'node_modules', '3d-force-graph', 'dist')));
-  // Se sirve la raíz porque el bloom necesita build/three.module.min.js y
-  // examples/jsm/postprocessing/*.
-  app.use('/vendor/three', express.static(path.join(__dirname, '..', 'node_modules', 'three')));
 
   // WebSocket router con auth en el handshake.
   const { wss, attach } = createWsRouter();

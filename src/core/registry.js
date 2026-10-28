@@ -16,15 +16,10 @@ import tolkien from '../modules/tolkien/index.js';
 import backup from '../modules/backup/index.js';
 import chat from '../modules/chat/index.js';
 import health from '../modules/health/index.js';
-import tickets from '../modules/tickets/index.js';
 import projects from '../modules/projects/index.js';
 import interfono from '../modules/interfono/index.js';
-import tasks from '../modules/tasks/index.js';
-import learning from '../modules/learning/index.js';
-import audio from '../modules/audio/index.js';
 import retro from '../modules/retro/index.js';
 import envVars from '../modules/env-vars/index.js';
-import seguimientos from '../modules/seguimientos/index.js';
 import onboard from '../modules/onboard/index.js';
 import skills from '../modules/skills/index.js';
 import mcps from '../modules/mcps/index.js';
@@ -34,11 +29,9 @@ import unifi from '../modules/unifi/index.js';
 import news from '../modules/news/index.js';
 import visado from '../modules/visado/index.js';
 import folders from '../modules/folders/index.js';
-import cerebro from '../modules/cerebro/index.js';
-import lab from '../modules/lab/index.js';
 import forja from '../modules/forja/index.js';
 
-const MODULES = [terminal, files, stats, tokens, tmux, admin, sponsorship, tolkien, backup, chat, health, tickets, projects, interfono, tasks, learning, audio, retro, envVars, seguimientos, onboard, skills, mcps, updates, connections, unifi, news, visado, folders, cerebro, lab, forja];
+const MODULES = [terminal, files, stats, tokens, tmux, admin, sponsorship, tolkien, backup, chat, health, projects, interfono, retro, envVars, onboard, skills, mcps, updates, connections, unifi, news, visado, folders, forja];
 
 export function registerModules({ app, apiRouter, wss, ctx }) {
   for (const mod of MODULES) {

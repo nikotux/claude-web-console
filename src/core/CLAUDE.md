@@ -1,6 +1,8 @@
 <!-- cwc:ficha-modulo -->
 # src/core — ficha del proyecto
 
+> tasks/learning/audio/lab/cerebro/seguimientos: archivado 2026-10-28, ver `_archived/ARCHIVED.md`; se retiraron del registry y se eliminaron getGraph/getCompleteGraph/getActivity/padTelemetry, exclusivos de Cerebro. learning/store.js y los dos stores de tickets siguen como librerías; las descripciones anteriores al archivo se conservan como historia.
+
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
 ### src/core/                   config(.env + config.instance) · instance-config(capa de config
 de INSTANCIA: identidad+cliente en el `instance.json` del `dataDir` recibido,

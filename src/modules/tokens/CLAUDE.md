@@ -194,7 +194,7 @@ el caudal de Codex pero no su consumo histórico; agravante: Tándem es el
 default de todo chat nuevo desde 2026-07-21, justo el motor que más
 ejecuta. Solución: src/modules/tokens/codex-usage.js escanea
 ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl con caché por archivo
-(mtime+size) y LRU 1000 igual que parseCached, más filtro barato por
+(mtime+size) y LRU 20000 igual que parseCached, más filtro barato por
 substring antes de JSON.parse porque los rollouts traen mucho ruido
 (reasoning, function_call_output). De cada rollout saca
 session_meta.payload.cwd → proyecto (espejo deliberado de projectOf, pero
@@ -362,6 +362,12 @@ una el panel de log de ~64 líneas de la Vista Raw. Lo consume
 public/js/rawview/raw.js (ver raw.html en el mapa).
 
 ## Gotchas de esta carpeta
+
+- THRASH DE LA LRU (console:BUG-3481): el tope por archivo DEBE superar con holgura
+  el corpus; con 1000 entradas se releían todos los transcripts en cada poll y se consumía un core.
+  Ambas cachés usan 20000 entradas: guardan buckets hora×modelo pequeños, no el JSONL completo.
+  Medir el delta de `rchar` en `/proc/<MainPID>/io`; `ls -l /proc/<pid>/fd` permite
+  detectar rollouts viejos abiertos durante el escaneo repetido.
 
 - DRIFT SILENCIOSO DE FORMATOS EXTERNOS — el parser de rollouts Codex ya quedó
   completamente mudo tras un cambio del CLI de terceros: no lanzó excepción,

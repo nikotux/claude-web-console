@@ -30,6 +30,7 @@ import { config } from '../../core/config.js';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { userWorkspace, hostUser } from '../../core/user-space.js';
 import { systemScopeFor } from '../../core/system-scope.js';
+import { getContext, saveContext, DEFAULT_CONTEXTS, verifySync, syncToTolkien } from '../tickets/context-store.js';
 import {
   readContext, writeContext, listMemory, readNote, writeNote, readIndex, writeIndex,
   listContextSections, readContextSection, writeContextSection, hashOf,
@@ -130,6 +131,43 @@ export default {
     });
 
     mountPersonalization(r);
+
+    // Contextos de Tickets & Features, archivado el 2026-10-28 (console:PLAN-3480).
+    r.get('/work-context', (req, res) => {
+      const scope = systemScopeFor(req);
+      const kind = req.query.kind === 'pr' ? 'pr' : 'work';
+      const context = getContext(kind, scope);
+      res.json({ kind, context, isDefault: context === DEFAULT_CONTEXTS[kind] });
+    });
+    r.post('/work-context', (req, res) => {
+      const scope = systemScopeFor(req);
+      const kind = req.body?.kind === 'pr' ? 'pr' : 'work';
+      const text = String(req.body?.context ?? '');
+      if (!text.trim()) return res.status(400).json({ error: 'El contexto no puede quedar vacío.' });
+      saveContext(kind, text, scope);
+      res.json({
+        ok: true,
+        kind,
+        context: getContext(kind, scope),
+        sync: verifySync(scope),
+      });
+    });
+
+    // Verificador del ESPEJO a Tolkien: ¿el subset work+pr en el clon propio
+    // del solicitante está al día con su master? El panel lo
+    // muestra como badge (✅ al día / ⚠️ desactualizado / ❌ falta) y el check
+    // rápido de Salud consume el MISMO estado. 0 tokens, solo lee disco.
+    r.get('/work-context/sync', (req, res) => {
+      res.json(verifySync(systemScopeFor(req)));
+    });
+    // Re-sincronizar a mano (botón "Re-sincronizar" del panel): re-renderiza el
+    // subset desde el master y lo escribe en CLAUDE.local.md.
+    r.post('/work-context/sync', (req, res) => {
+      const scope = systemScopeFor(req);
+      const r2 = syncToTolkien(scope);
+      if (!r2.ok) return res.status(502).json({ error: `No se pudo sincronizar con Tolkien: ${r2.reason}` });
+      res.json({ ok: true, sync: verifySync(scope) });
+    });
 
     // ===== Contexto (CLAUDE.md) =====
     r.get('/:key/context', (req, res) => {

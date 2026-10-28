@@ -1,6 +1,8 @@
 <!-- cwc:ficha-modulo -->
 # public/js/modules — ficha del proyecto
 
+> tasks/learning/audio/lab y las ayudas de Cerebro/Seguimientos: archivado 2026-10-28, ver `_archived/ARCHIVED.md`; ya no se montan ni aparecen en el índice de ayuda. Las descripciones siguientes se conservan como historia.
+
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
 
 ### Contrato de montaje por perfil
@@ -312,19 +314,18 @@ entre sesiones (GET/POST /api/interfono): sesiones activas,
 enviar mensaje manual, reservas de archivo con semáforo 🔴🟡🟢 y
 liberar (admin), mensajes recientes — todo colapsable+árbol. La
 pestaña Proyectos (project-context-panel.js,
-backend módulo `projects` + /api/bugfixes/context) es DISTINTA del
+backend módulo `projects`, incluido /api/projects/work-context) es DISTINTA del
 módulo tolkien de abajo: TODAS las entradas editables en un solo
 lugar con navegación en DOS NIVELES lista→detalle (rediseño a
 pedido: las 4 pills idénticas de antes confundían). Vista lista =
 tarjetas .pj-card agrupadas ("Proyectos · contexto y memorias" =
 Tolkien/Consola de GET /api/projects, chip de ícono en acento;
-"Bugfixes · solo contexto" = BUGFIX_ENTRIES del panel, kind=work|pr
-de /api/bugfixes/context, chip neutro .pj-card--bf) con nombre +
+"Contexto de trabajo" = BUGFIX_ENTRIES del panel, kind=work|pr
+de /api/projects/work-context, chip neutro .pj-card--bf) con nombre +
 descripción + chevron. Tocar una tarjeta → detalle con "‹
 Proyectos" (volver), dir del proyecto, Contexto y (solo proyectos
-completos) Memorias — el detalle de un bugfix NI renderiza la
-sección Memorias. Visible a todos (autenticados), edición gateada por
-isAdmin en el frontend Y en el backend. La pestaña Skills (2026-07-19;
+completos) Memorias — work/pr no renderiza Memorias. Los contextos de trabajo
+son editables por su dueño autenticado; los demás permisos se conservan. La pestaña Skills (2026-07-19;
 catálogo Fase 4 de PLAN-2181, 2026-07-28; módulo backend `skills` —
 GET `/api/skills` + POST `/api/skills/install|uninstall`, frontend
 `system/skills-panel.js`, mountSkillsPanel) combina arriba un CATÁLOGO
@@ -416,37 +417,14 @@ git en curso" (flag `busy` global del backend, compartido con /update
 y entre pestañas) se trata como benigno y nunca se avisa. El
 visibilitychange lleva throttle de 60 s (`lastFetchTs`) porque
 alternar ventanas disparaba ráfagas que chocaban entre sí.) ·
-bugs (sección "Bugs & Features", modules/bugs/bugs.js, ANTES
-`tickets`: ÚNICO acceso al ciclo del bug. INFO RÁPIDA barata (sin
-tokens ni gh) cruzando /api/bugs (triage: nº bugs + frescura) y
-/api/bugfixes (registro: por enviar, PRs abiertos, y ⚠ ATENCIÓN =
-reabierto/doble registro/ticket sin actualizar — los casos del
-519). TRES COLUMNAS (.bf-cols, pedido del usuario 2026-07-05)
-como ESCANEO PREVIO antes de entrar al tablero: 🎫 Tickets · 💡
-Features (conteos con el MISMO criterio que tabOfEntry de
-board/labels.js sobre los tickets CONSOLIDADOS de GET
-/api/bugfixes/tickets — barato: caché server lastGhRows, sin gh
-vivo; Tickets suma los triage-only no cubiertos) · ⚠ Atención
-(3ª columna: reemplaza a 📦 Archivados —que no se acciona desde
-acá— por attentionCount(): anomalías del ciclo reabierto tras
-PR / doble registro / ticket sin actualizar en Desk, los casos
-del 519; resalta en ámbar .bf-col--alert cuando hay algo). Las
-columnas son clickeables (admin): Tickets/Features abren el
-tablero en su pestaña, Atención lo abre en Tickets
-(openBugBoard({initialTab})). La leyenda inferior se REDUJO a la
-frescura del triage (las líneas de resolución/por-enviar eran
-redundantes con las columnas). PAC-MAN DE ACTIVIDAD por columna
-(pedido del usuario 2026-07-05, .bf-col-pac esquina): un poll
-liviano de /api/chat/list (~8 s, 0 tokens) enciende el Pac-Man de
-la columna que se está trabajando — un chat con ticketNumber
-(working o delegando un subagente) prende su columna (FEAT-n →
-Features · resto → Tickets), y el triage corriendo delega sobre
-Tickets; un chat working (más específico) le gana al triage. En
-reposo, sin Pac-Man. Requiere que chat.info() exponga
-`ticketNumber` (src/modules/chat/index.js) para saber qué chat
-trabaja qué ticket sin abrir la pestaña. Botón "Abrir tablero" +
-↻ triage (tokens, confirm). Al cerrar el tablero (onClose)
-refresca las stats + columnas) ·
+Tickets & Features v2 está archivado desde 2026-10-28 (console:PLAN-3480):
+sus seis archivos viven en _archived/public-js-modules/tickets/ y ya no se
+importan, montan ni aparecen en Ayuda. El diccionario tickets tampoco se carga.
+El panel system/project-context-panel.js conserva work/pr mediante GET/POST
+/api/projects/work-context y GET/POST /api/projects/work-context/sync, con scope
+del usuario autenticado. No depende del módulo archivado.
+
+Descripción HISTÓRICA del tablero v1 (código en _archived/, no activo):
 El TABLERO (bugs/board/, admin, lo abre "Bugs & Features"; vivió
 en tolkien/bug-board.js hasta el refactor 2026-07-04 —
 docs/plan-rediseno-movil-tickets.md §2, branch

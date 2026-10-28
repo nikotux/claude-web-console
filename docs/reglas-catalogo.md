@@ -1,5 +1,7 @@
 # Catálogo de las reglas duras
 
+> Banco de conocimiento, Laboratorio, Cerebro y Seguimientos: archivado 2026-10-28, ver `_archived/ARCHIVED.md`. Sus runners y excepciones documentadas aquí son históricos; cwc-desk.js sigue disponible para eta.
+
 Este archivo es el **CATÁLOGO** de las reglas duras: enumera los casos concretos
 que implementan cada norma. La **LEY** vive en `CLAUDE.md`, fuente de verdad del
 repo; este documento se consulta cuando hace falta el detalle. Está en `docs/`
