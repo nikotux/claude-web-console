@@ -316,39 +316,68 @@ export async function githubUserExists(login, { cwd = config.projectDir, fresh =
 
 function outputRecord(line) {
   const parts = String(line || '').split('\t');
-  if (parts.length < 3) return parts[0].trim();
-  return parts.slice(2).join('\t')
-    .replace(/^\d{4}-\d{2}-\d{2}T\S+\s+/, '')
-    .trim();
+  if (parts.length < 3) {
+    return { job: '', step: '', record: parts.join('\t').trim() };
+  }
+  return {
+    job: parts[0].trim(),
+    step: parts[1].trim(),
+    // gh puede separar timestamp y mensaje o entregarlos juntos en la tercera
+    // columna. Unir desde esa columna conserva tabs del payload y cubre ambos.
+    record: parts.slice(2).join('\t')
+      .replace(/^\d{4}-\d{2}-\d{2}T\S+\s*/, '')
+      .trim(),
+  };
 }
 
 function classifyDeployLog(log) {
-  const operations = [];
-  const artifactShas = [];
+  const recordsByJob = new Map();
   for (const line of String(log || '').split(/\r?\n/)) {
-    const record = outputRecord(line);
+    const { job, step, record } = outputRecord(line);
+    if (!recordsByJob.has(job)) recordsByJob.set(job, { operations: new Set(), artifactShas: new Set() });
+    const jobRecords = recordsByJob.get(job);
     const operationMatch = record.match(/^OPERATION:\s*([^\s]+)\s*$/);
-    if (operationMatch) operations.push(operationMatch[1].toLowerCase());
+    if (operationMatch) jobRecords.operations.add(operationMatch[1].toLowerCase());
     const artifactMatch = record.match(/^EXPECTED_ARTIFACT_JSON:\s*(.+)$/);
     if (!artifactMatch) continue;
     try {
       const artifact = JSON.parse(artifactMatch[1]);
-      const sourceSha = typeof artifact?.sourceSha === 'string' ? artifact.sourceSha.trim() : '';
-      if (SHA_RE.test(sourceSha)) artifactShas.push(sourceSha);
+      const sourceSha = typeof artifact?.sourceSha === 'string'
+        ? artifact.sourceSha.trim().toLowerCase()
+        : '';
+      if (SHA_RE.test(sourceSha)) jobRecords.artifactShas.add(sourceSha);
     } catch { /* solo un registro con JSON estricto satisface el contrato */ }
   }
-  if (operations.includes('deploy') && artifactShas.length) {
+
+  const operations = new Set();
+  const artifactShas = new Set();
+  for (const records of recordsByJob.values()) {
+    for (const operation of records.operations) operations.add(operation);
+    for (const sha of records.artifactShas) artifactShas.add(sha);
+  }
+  if (operations.size > 1 || artifactShas.size > 1) {
     return {
-      kind: 'deploy', confirmed: true, operation: 'deploy', sha: artifactShas[0], deployedSha: artifactShas[0],
+      kind: 'unclassifiable', confirmed: false, operation: null, sha: null, deployedSha: null,
     };
   }
-  if (operations.includes('deploy') || !operations.length) {
+
+  const operation = operations.values().next().value || null;
+  const artifactSha = artifactShas.values().next().value || null;
+  const correlatedDeploy = operation === 'deploy' && [...recordsByJob.values()].some((records) => (
+    records.operations.has('deploy') && records.artifactShas.has(artifactSha)
+  ));
+  if (correlatedDeploy) {
     return {
-      kind: 'unclassifiable', confirmed: false, operation: operations[0] || null, sha: null, deployedSha: null,
+      kind: 'deploy', confirmed: true, operation: 'deploy', sha: artifactSha, deployedSha: artifactSha,
+    };
+  }
+  if (operation === 'deploy' || !operation) {
+    return {
+      kind: 'unclassifiable', confirmed: false, operation, sha: null, deployedSha: null,
     };
   }
   return {
-    kind: 'non-deploy', confirmed: true, operation: operations[0], sha: null, deployedSha: null,
+    kind: 'non-deploy', confirmed: true, operation, sha: null, deployedSha: null,
   };
 }
 
@@ -374,10 +403,11 @@ async function classifyDeployRun(run, {
   now,
   logBudget,
   readLog,
+  retryExpired = true,
 }) {
   const runId = Number(run?.id);
   if (!Number.isSafeInteger(runId)) return { classification: { kind: 'unavailable' }, logRead: false };
-  const detailFile = path.join(cacheDir, `run-${runId}.json`);
+  const detailFile = path.join(cacheDir, `run-v2-${runId}.json`);
   const cached = normalizeCachedRun(readTimedCache(detailFile, Number.MAX_SAFE_INTEGER, {
     allowStale: true, now,
   }));
@@ -386,6 +416,9 @@ async function classifyDeployRun(run, {
   }
   const temporary = normalizeCachedRun(readTimedCache(detailFile, UNCLASSIFIED_DEPLOY_CACHE_TTL_MS, { now }));
   if (temporary?.kind === 'unclassifiable') return { classification: temporary, logRead: false };
+  if (cached?.kind === 'unclassifiable' && !retryExpired) {
+    return { classification: null, logRead: false, retryDeferred: true };
+  }
   if (logBudget <= 0) return { classification: null, logRead: false, budgetExhausted: true };
 
   let log;
@@ -452,10 +485,34 @@ export async function getCurrentProductionSha({
     const candidates = listedRuns
       .filter((run) => run?.conclusion === 'success')
       .sort((a, b) => Date.parse(b.updated_at || '') - Date.parse(a.updated_at || ''));
+    const expiredRetries = [];
     for (const run of candidates) {
       stats.runsInspected += 1;
       const classified = await classifyDeployRun(run, {
-        cwd, repo, cacheDir, now, logBudget: MAX_DEPLOY_LOG_READS - stats.logReads, readLog: loadLog,
+        cwd, repo, cacheDir, now, logBudget: MAX_DEPLOY_LOG_READS - stats.logReads,
+        readLog: loadLog, retryExpired: false,
+      });
+      if (classified.logRead) stats.logReads += 1;
+      if (classified.budgetExhausted) throw new Error('Escaneo de producción incompleto: límite de logs alcanzado');
+      if (classified.retryDeferred) {
+        expiredRetries.push(run);
+        continue;
+      }
+      if (classified.classification?.kind !== 'deploy') continue;
+      const production = {
+        sha: classified.classification.sha,
+        runId: Number(run.id),
+        completedAt: run.updated_at || run.created_at || null,
+      };
+      writeTimedCache(cacheDir, currentFile, production, { now });
+      return markProductionStale(production, false);
+    }
+    // Solo después de recorrer los nunca inspeccionados se gasta el remanente
+    // en reintentos de clasificaciones temporales vencidas, también de nuevo a viejo.
+    for (const run of expiredRetries) {
+      const classified = await classifyDeployRun(run, {
+        cwd, repo, cacheDir, now, logBudget: MAX_DEPLOY_LOG_READS - stats.logReads,
+        readLog: loadLog, retryExpired: true,
       });
       if (classified.logRead) stats.logReads += 1;
       if (classified.budgetExhausted) throw new Error('Escaneo de producción incompleto: límite de logs alcanzado');

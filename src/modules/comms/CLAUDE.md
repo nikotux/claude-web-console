@@ -22,8 +22,11 @@ por autor de 150 s y fallback `_stale` al último bueno; `githubUserExists()`
 resuelve existencia, login canónico y nombre con caché corta;
 `getCurrentProductionSha()` recorre una página de runs exitosos `deploy-v2.yml`
 del más nuevo al más viejo hasta el primer `operation=deploy`, y acepta el SHA
-solo desde el JSON estricto de `EXPECTED_ARTIFACT_JSON.sourceSha`; limita cada
-lectura a cinco logs nuevos. Deploys, no-deploys y logs no disponibles se
+solo desde el JSON estricto de `EXPECTED_ARTIFACT_JSON.sourceSha` emitido por el
+mismo job; operaciones o SHAs contradictorios dejan el run inclasificable. La
+caché por run está versionada (`run-v2-*`) y limita cada lectura a cinco logs:
+prioriza runs nunca inspeccionados, de nuevo a viejo, y recién después reintenta
+inclasificables cuyo TTL venció. Deploys, no-deploys y logs no disponibles se
 cachean permanentemente; un run inclasificable reciente vence a los 10 min y
 uno terminado hace más de una hora queda permanente. Errores de red/5xx no se
 cachean y hacen caer al último estado bueno marcado `_stale`. Los runs
