@@ -46,6 +46,11 @@ function addModalHelp(modal) {
   modal.card.querySelector('.dlg-head')?.appendChild(holder.firstElementChild);
 }
 
+function focusForjaEntry(mountEl) {
+  const entry = mountEl?.querySelector('[data-ref="forja-cta"]');
+  if (entry?.isConnected) entry.focus();
+}
+
 function openForgeModal(ctx, me, mountEl, onChangeLogin) {
   let arena = null;
   let arenaPromise = null;
@@ -149,7 +154,7 @@ function openForgeModal(ctx, me, mountEl, onChangeLogin) {
   salonButton.focus();
 }
 
-async function openConfiguration(ctx, onSaved, { mode } = {}) {
+async function openConfiguration(ctx, onSaved, { mode, mountEl } = {}) {
   const isChange = mode === 'change';
   const opener = document.activeElement;
   const title = isChange
@@ -165,7 +170,8 @@ async function openConfiguration(ctx, onSaved, { mode } = {}) {
     title,
     width: 440,
     onClose: () => {
-      if (isChange && opener?.isConnected) opener.focus();
+      if (opener?.isConnected) opener.focus();
+      else focusForjaEntry(mountEl);
     },
   });
   modal.card.classList.add('fj-config-modal');
@@ -176,7 +182,7 @@ async function openConfiguration(ctx, onSaved, { mode } = {}) {
     identity = data.identity || {};
   } catch (error) {
     modal.body.textContent = '';
-    modal.body.appendChild(errorPanel(error, () => { modal.close(); void openConfiguration(ctx, onSaved, { mode }); }));
+    modal.body.appendChild(errorPanel(error, () => { modal.close(); void openConfiguration(ctx, onSaved, { mode, mountEl }); }));
     return;
   }
 
@@ -241,6 +247,7 @@ async function openConfiguration(ctx, onSaved, { mode } = {}) {
       await api('/api/forja/refresh', { method: 'POST' });
       modal.close();
       await onSaved();
+      focusForjaEntry(mountEl);
     } catch (error) {
       feedback.textContent = error?.message || t('forja.configure.saveError', 'No pudimos forjar tu ficha.');
       feedback.classList.add('fj-config-feedback--error');
@@ -273,14 +280,14 @@ export default {
     const openModal = () => {
       if (!state.data?.configured) return;
       openForgeModal(ctx, state.data, el, () => {
-        void openConfiguration(ctx, () => load(), { mode: 'change' });
+        void openConfiguration(ctx, () => load(), { mode: 'change', mountEl: el });
       });
     };
     const render = () => {
       if (!active) return;
       renderFicha(el, state, {
         onOpen: openModal,
-        onConfigure: () => { void openConfiguration(ctx, () => load()); },
+        onConfigure: () => { void openConfiguration(ctx, () => load(), { mountEl: el }); },
         onRetry: () => { void load(); },
         onToggle: (open) => {
           state.open = open;
