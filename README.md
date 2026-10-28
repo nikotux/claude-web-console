@@ -51,6 +51,20 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-10-28 14:50 — main
+- feat(forja): construye La Forja v2
+- docs(forja): documenta validación y festejos productivos
+- fix: deploys por delta, parser estricto, primer nombre y fila accesible
+- refactor: festejo de producción por estado y parser robusto
+- fix: caché versionada, correlación por job y presupuesto de logs
+- fix: frescura al cambiar producción, re-forja inmediata y docs
+- fix: backoff del re-forjado y perfil stale
+- feat(forja): permitir cambiar el usuario de GitHub
+- docs(forja): documentar el cambio de login
+- fix(forja): restaurar el foco tras cambiar el login
+- fix(forja): apagar temporalmente el overlay de festejos
+- Archivar módulos legacy (tickets, tasks, learning, seguimientos, audio, cerebro, lab)
+
 ### 2026-10-28 08:41 — main
 - Arreglar el teclado del chat en móvil y respetar títulos puestos a mano
 - feat: agrega datos y refresco de La Forja
@@ -355,18 +369,6 @@ since the previous push. Newest entry first.
 - Modified `public/js/modules/tolkien/bug-board.js`
 - Added `src/modules/bugfixes/engine.js`
 - Modified `src/modules/bugfixes/index.js`
-
-### 2026-07-03 21:10 — main
-- Salud/revisión: resolución autónoma (acceptEdits) + hallazgos colapsables en móvil
-- Modified `CLAUDE.md`
-- Modified `public/css/style.css`
-- Modified `public/js/modules/tolkien/bug-board.js`
-- Modified `src/core/auth.js`
-- Modified `src/modules/backup/index.js`
-- Modified `src/modules/bugfixes/index.js`
-- Modified `src/modules/bugs/index.js`
-- Modified `src/modules/bugs/shared.js`
-- Modified `src/modules/tmux/index.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
