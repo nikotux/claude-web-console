@@ -86,13 +86,16 @@
   `{status,startedAt,commits,files,count,error,updatedAt?,rawTail?}` (poda de
   jobs >24 h en cada escritura) + `news.log` de `bin/cwc-news-runner.js`,
   `forja/me.json` snapshot PRIVADO de progresión + `forja/festejos.json` cola
-  PRIVADA de festejos de cada dueño (ambos bajo el `userDataDir(owner)`
-  correspondiente) + `forja/arena.json` snapshot de la arena pública +
+  PRIVADA de festejos merge/producción y sets durablemente celebrados/desplegados +
+  `forja/github-profile.json` fallback validado de login/nombre GitHub (los tres
+  bajo el `userDataDir(owner)` correspondiente) + `forja/arena.json` snapshot de la arena pública +
   `forja/bot-prs.json` historial acumulado del bot, estos dos últimos en el
-  `userDataDir(hostUser())`; los cuatro se escriben atómicamente,
-  se reconstruyen desde GitHub cada 3 minutos y conservan el último bueno ante
-  fallos de red. Las cachés canónicas de esos listados viven en
-  `comms/pr-author-cache/` con TTL corto,
+  `userDataDir(hostUser())`; todos se escriben atómicamente; snapshots e historiales
+  se refrescan desde GitHub cada 3 minutos y conservan el último bueno ante
+  fallos de red. Las cachés canónicas viven en `comms/pr-author-cache/` (PRs por
+  autor), `comms/github-user-cache/` (perfil), `comms/production-deploy-cache/`
+  (listado/clasificación de runs; TTL 150 s con último bueno) y
+  `comms/commit-compare-cache/` (pares de SHAs inmutables, sin vencimiento),
   `tolkien-refresh.json` job del refresh DESACOPLADO
   de la DB LOCAL de Tolkien (lo reserva POST /api/tolkien/refresh-data, lo completa
   `bin/cwc-tolkien-refresh-runner.js`; staleness 12 min) + `tolkien-refresh.log`,
