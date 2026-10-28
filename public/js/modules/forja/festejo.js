@@ -314,7 +314,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
   };
 
   const fetchPending = () => {
-    if (destroyed || fetching || document.hidden) return fetching;
+    if (!FESTEJO_OVERLAY_ENABLED || destroyed || fetching || document.hidden) return fetching;
     if (!active && !queue.length) pendingOpener = document.activeElement;
     fetching = api('/api/forja/festejos').then((data) => {
       if (destroyed) return;
@@ -374,7 +374,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
       active.overlay.hidden = false;
       startTimers(active.escEntry.close, queue.length + 1);
     } else if (queue.length) showNext();
-    else if (wanted) void fetchPending();
+    else if (FESTEJO_OVERLAY_ENABLED && wanted) void fetchPending();
   };
   document.addEventListener('keydown', onKeydown, true);
   document.addEventListener('visibilitychange', onVisibilityChange);
@@ -384,7 +384,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
       if (destroyed) return;
       celebrationName = name || celebrationName;
       wanted = Number(count) > 0;
-      if (wanted) void fetchPending();
+      if (FESTEJO_OVERLAY_ENABLED && wanted) void fetchPending();
     },
     destroy() {
       if (destroyed) return;

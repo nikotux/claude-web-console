@@ -30,7 +30,8 @@ comparten la secuencia visual, con anulación bajo `prefers-reduced-motion`. Un
 estado `refreshing` repregunta `/api/forja/me` cada 5 s hasta recibir la ficha
 del login configurado. `festejo.js` presenta por separado el merge y la llegada
 a producción; el festejo de deploy admite varios PRs y confirma su cola privada
-solo al cerrarse o avanzar.
+solo al cerrarse o avanzar. Mientras su overlay temporal está apagado, conserva
+el badge desde `pendingFestejos` de `/me` sin pedir `/api/forja/festejos`.
 
 ### public/js/modules/          launcher · sessions · forja (RADAR DE TRABAJO EN SEGUNDO PLANO, PLAN-892,
 2026-07-22): la tarjeta de sesión ya no sólo dice vivo/dormido; la

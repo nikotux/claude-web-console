@@ -31,6 +31,12 @@ function sameLogin(left, right) {
   return typeof left === 'string' && left.toLowerCase() === String(right || '').toLowerCase();
 }
 
+function publicMeSnapshot(snapshot) {
+  const result = { ...snapshot };
+  delete result.prs;
+  return result;
+}
+
 function refreshingSnapshotState({
   owner, player, snapshot, pending, enqueue = refreshOwner, now = Date.now(),
 }) {
@@ -113,7 +119,7 @@ export default {
           pendingFestejos: pendingFestejos(owner),
           error: 'La Forja todavía no tiene un snapshot.',
         });
-        return res.json({ ...snapshot, pendingFestejos: pendingFestejos(owner) });
+        return res.json({ ...publicMeSnapshot(snapshot), pendingFestejos: pendingFestejos(owner) });
       } catch (error) {
         return respondHandlerError(res, 'no se pudo cargar la ficha', error);
       }
