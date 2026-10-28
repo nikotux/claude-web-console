@@ -1,4 +1,6 @@
-import { listMergedPrsByAuthor } from '../comms/pr-read-shared.js';
+import {
+  githubUserExists, isCommitIncluded, listMergedPrsByAuthor, listProductionDeploys,
+} from '../comms/pr-read-shared.js';
 import {
   computeForja, deskNumbers, FORJA_TIMEZONE, monthKey, normalizePr, playerIdFor,
 } from './compute.js';
@@ -7,7 +9,7 @@ import {
 } from './players.js';
 import {
   getBotPrs, getFestejos, getMeSnapshot, loadFromDisk, saveArenaSnapshot, saveBotPrs,
-  saveFestejos, saveMeSnapshot,
+  saveFestejos, saveGithubProfile, saveMeSnapshot,
   snapshotAgeMs,
 } from './store.js';
 
@@ -17,6 +19,7 @@ const FULL_FETCH_LIMIT = 1000;
 const INCREMENTAL_FETCH_LIMIT = 50;
 const FETCH_CONCURRENCY = 3;
 const FESTEJOS_MAX_PENDING = 10;
+export const DEPLOY_COMPARE_MAX_PER_CYCLE = 10;
 const MONTHS = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
@@ -27,6 +30,9 @@ let queueTail = Promise.resolve();
 let fullCycle = null;
 const ownerCycles = new Map();
 let fetchMergedPrsByAuthor = listMergedPrsByAuthor;
+let fetchProductionDeploys = listProductionDeploys;
+let compareCommitInclusion = isCommitIncluded;
+let fetchGithubProfile = githubUserExists;
 
 function sameLogin(left, right) {
   return typeof left === 'string' && left.toLowerCase() === String(right || '').toLowerCase();
@@ -60,6 +66,9 @@ function compactBotPr(raw) {
     deletions: Math.max(0, Number(raw?.deletions) || 0),
     headRefName: String(raw?.headRefName || ''),
     url: typeof raw?.url === 'string' ? raw.url : null,
+    mergeCommitOid: typeof raw?.mergeCommitOid === 'string'
+      ? raw.mergeCommitOid
+      : (typeof raw?.mergeCommit?.oid === 'string' ? raw.mergeCommit.oid : null),
   };
 }
 
@@ -150,6 +159,8 @@ function buildFestejo(player, pr, prs, arena) {
   const month = monthKey(new Date(pr.mergedAt), FORJA_TIMEZONE);
   const monthNumber = Number(month.slice(5));
   return {
+    id: `merge:${pr.number}`,
+    kind: 'merge',
     number: pr.number,
     title: pr.title,
     url: pr.url,
@@ -164,34 +175,135 @@ function buildFestejo(player, pr, prs, arena) {
   };
 }
 
-function recordFestejos(player, prs, arena, now) {
-  const state = getFestejos(player.username);
+function nextMergeFestejoState(state, player, prs, arena, now) {
   const numbers = prs.map((pr) => pr.number);
   if (!state || !sameLogin(state.login, player.login)) {
-    saveFestejos(player.username, {
+    return {
       login: player.login,
       initializedAt: now,
       celebrated: numbers,
+      deployed: numbers,
+      deployCelebrated: [],
       pending: [],
-    });
-    return;
+    };
   }
 
   const celebrated = new Set(state.celebrated);
   const unseen = prs.filter((pr) => !celebrated.has(pr.number));
   for (const pr of unseen) celebrated.add(pr.number);
-  saveFestejos(player.username, {
+  return {
     ...state,
     celebrated: [...celebrated],
+    // Un festejos.json anterior a producción se siembra con todo lo actual:
+    // nunca convierte el historial de merges en una avalancha retroactiva.
+    deployed: state.deployed === null ? numbers : state.deployed,
     pending: [
       ...state.pending,
       ...unseen.map((pr) => buildFestejo(player, pr, prs, arena)),
     ].slice(-FESTEJOS_MAX_PENDING),
-  });
+  };
+}
+
+function recordMergeFestejos(player, prs, arena, now) {
+  saveFestejos(player.username, nextMergeFestejoState(
+    getFestejos(player.username), player, prs, arena, now,
+  ));
+}
+
+export function __nextMergeFestejoStateForTests(state, player, prs, arena, now) {
+  return nextMergeFestejoState(state, player, prs, arena, now);
+}
+
+function buildDeployFestejo(player, prs, deploy) {
+  const completedAt = deploy.completedAt || new Date().toISOString();
+  const items = prs.map((pr) => ({
+    number: pr.number,
+    title: pr.title,
+    url: pr.url,
+    mergedAt: pr.mergedAt,
+    durationMin: Math.max(0, Math.round((new Date(completedAt) - new Date(pr.mergedAt)) / 60000)),
+  }));
+  return {
+    id: `deploy:${deploy.deployedSha}`,
+    kind: 'deploy',
+    deploySha: deploy.deployedSha,
+    completedAt,
+    displayName: player.displayName,
+    numbers: items.map((item) => item.number),
+    prs: items,
+  };
+}
+
+async function detectDeployFestejos({
+  players,
+  prsByUsername,
+  statesByUsername,
+  deploy,
+  compare = compareCommitInclusion,
+  maxComparisons = DEPLOY_COMPARE_MAX_PER_CYCLE,
+}) {
+  let compareCalls = 0;
+  const nextStates = new Map();
+  const work = new Map();
+  for (const player of players) {
+    const state = statesByUsername.get(player.username);
+    if (!state || state.deployed === null) continue;
+    const deployed = new Set(state.deployed);
+    const candidates = [...(prsByUsername.get(player.username) || [])]
+      .filter((pr) => !deployed.has(pr.number) && typeof pr.mergeCommitOid === 'string')
+      .map((pr) => ({ player, pr }));
+    work.set(player.username, { player, state, deployed, landed: [] });
+    work.get(player.username).candidates = candidates;
+  }
+  const candidates = [...work.values()].flatMap((item) => item.candidates)
+    .sort((a, b) => new Date(b.pr.mergedAt) - new Date(a.pr.mergedAt) || b.pr.number - a.pr.number);
+  for (const { player, pr } of candidates.slice(0, maxComparisons)) {
+    compareCalls += 1;
+    if (await compare(pr.mergeCommitOid, deploy.deployedSha)) {
+      const item = work.get(player.username);
+      item.deployed.add(pr.number);
+      item.landed.push(pr);
+    }
+  }
+  for (const { player, state, deployed, landed } of work.values()) {
+    if (!landed.length) continue;
+    const celebratedDeploys = new Set(state.deployCelebrated || []);
+    const alreadyCelebrated = celebratedDeploys.has(deploy.deployedSha);
+    celebratedDeploys.add(deploy.deployedSha);
+    const pending = [...state.pending];
+    if (!alreadyCelebrated) pending.push(buildDeployFestejo(player, landed, deploy));
+    nextStates.set(player.username, {
+      ...state,
+      deployed: [...deployed],
+      deployCelebrated: [...celebratedDeploys],
+      pending: pending.slice(-FESTEJOS_MAX_PENDING),
+    });
+  }
+  return { states: nextStates, compareCalls };
+}
+
+export async function __detectDeployFestejosForTests(options) {
+  return detectDeployFestejos(options);
 }
 
 async function runCycle({ onlyOwner = null } = {}) {
-  const players = resolvePlayers();
+  let players = resolvePlayers();
+  const missingProfiles = players.filter((player) => player.needsGithubName);
+  if (missingProfiles.length) {
+    const profiles = await runFetchPool(missingProfiles.map((player) => async () => {
+      try { return { player, profile: await fetchGithubProfile(player.login) }; }
+      catch { return null; }
+    }));
+    for (const result of profiles) {
+      if (result?.profile?.exists) {
+        saveGithubProfile(result.player.username, {
+          login: result.profile.canonicalLogin || result.player.login,
+          name: result.profile.name || '',
+        });
+      }
+    }
+    players = resolvePlayers();
+  }
   loadFromDisk(players.map((player) => player.username));
   const target = onlyOwner ? playerForUsername(onlyOwner, players) : null;
   if (onlyOwner && !target) return null;
@@ -265,7 +377,32 @@ async function runCycle({ onlyOwner = null } = {}) {
     const direct = directByOwner.get(player.username);
     if (!direct?.ok || direct.value.stale || !bot.ok || bot.value.stale) continue;
     const prs = computed.snapshots.get(player.username)?.prs || [];
-    recordFestejos(player, prs, computed.arena, attemptedAt);
+    recordMergeFestejos(player, prs, computed.arena, attemptedAt);
+  }
+
+  // Producción es un segundo paso del mismo ciclo serializado. Solo corre con
+  // las lecturas directa+bot frescas y con un listado de deploys también fresco.
+  const freshPlayers = requested.filter((player) => {
+    const direct = directByOwner.get(player.username);
+    return direct?.ok && !direct.value.stale && bot.ok && !bot.value.stale;
+  });
+  if (freshPlayers.length) {
+    try {
+      const deploys = await fetchProductionDeploys({ limit: 1 });
+      const newestDeploy = deploys[0];
+      if (newestDeploy && deploys._stale !== true) {
+        const statesByUsername = new Map(freshPlayers.map((player) => [player.username, getFestejos(player.username)]));
+        const deployStep = await detectDeployFestejos({
+          players: freshPlayers,
+          prsByUsername,
+          statesByUsername,
+          deploy: newestDeploy,
+        });
+        for (const [owner, state] of deployStep.states) saveFestejos(owner, state);
+      }
+    } catch (error) {
+      console.warn('[forja] no se pudieron leer los deploys de producción:', error?.message || error);
+    }
   }
   for (const player of players) {
     const snapshot = computed.snapshots.get(player.username);
@@ -327,4 +464,10 @@ export function startRefresher() {
 
 export function __setFetchForTests(fn) {
   fetchMergedPrsByAuthor = typeof fn === 'function' ? fn : listMergedPrsByAuthor;
+}
+
+export function __setProductionReadersForTests({ deploys, compare, profile } = {}) {
+  fetchProductionDeploys = typeof deploys === 'function' ? deploys : listProductionDeploys;
+  compareCommitInclusion = typeof compare === 'function' ? compare : isCommitIncluded;
+  fetchGithubProfile = typeof profile === 'function' ? profile : githubUserExists;
 }

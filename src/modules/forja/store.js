@@ -11,6 +11,7 @@ let botPrs = null;
 // una constante de módulo (invariante multi-tenant BUG-2185).
 function meFile(owner) { return path.join(userDataDir(owner), 'forja', 'me.json'); }
 function festejosFile(owner) { return path.join(userDataDir(owner), 'forja', 'festejos.json'); }
+function githubProfileFile(owner) { return path.join(userDataDir(owner), 'forja', 'github-profile.json'); }
 function arenaFile() { return path.join(userDataDir(hostUser()), 'forja', 'arena.json'); }
 function botPrsFile() { return path.join(userDataDir(hostUser()), 'forja', 'bot-prs.json'); }
 
@@ -52,6 +53,12 @@ export function getFestejos(owner) {
     celebrated: Array.isArray(saved.celebrated)
       ? saved.celebrated.filter(Number.isSafeInteger)
       : [],
+    deployed: Array.isArray(saved.deployed)
+      ? saved.deployed.filter(Number.isSafeInteger)
+      : null,
+    deployCelebrated: Array.isArray(saved.deployCelebrated)
+      ? saved.deployCelebrated.filter((value) => typeof value === 'string')
+      : [],
     pending: Array.isArray(saved.pending) ? saved.pending : [],
   };
 }
@@ -64,8 +71,16 @@ export function saveFestejos(owner, state) {
     celebrated: Array.isArray(state?.celebrated)
       ? [...new Set(state.celebrated.filter(Number.isSafeInteger))]
       : [],
+    deployCelebrated: Array.isArray(state?.deployCelebrated)
+      ? [...new Set(state.deployCelebrated.filter((value) => typeof value === 'string'))]
+      : [],
     pending: Array.isArray(state?.pending) ? state.pending.slice(-10) : [],
   };
+  // Ausente/null conserva el marcador de migración: el refresher debe sembrar
+  // todos los PR actuales antes de empezar a detectar producción.
+  if (Array.isArray(state?.deployed)) {
+    next.deployed = [...new Set(state.deployed.filter(Number.isSafeInteger))];
+  }
   writeJsonAtomic(festejosFile(owner), next, { space: 2 });
   return next;
 }
@@ -74,14 +89,40 @@ export function pendingFestejos(owner) {
   return getFestejos(owner)?.pending.length || 0;
 }
 
-export function markFestejosSeen(owner, numbers) {
+export function markFestejosSeen(owner, { ids = [], numbers = [] } = {}) {
   const state = getFestejos(owner);
   if (!state) return { pending: [] };
-  const seen = new Set(numbers);
+  const seenIds = new Set(ids);
+  const seenNumbers = new Set(numbers);
   return saveFestejos(owner, {
     ...state,
-    pending: state.pending.filter((festejo) => !seen.has(festejo?.number)),
+    pending: state.pending.filter((festejo) => {
+      if (typeof festejo?.id === 'string' && seenIds.has(festejo.id)) return false;
+      return !seenNumbers.has(festejo?.number);
+    }),
   });
+}
+
+export function getGithubProfile(owner) {
+  const saved = readJson(githubProfileFile(owner));
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
+  const login = typeof saved.login === 'string' ? saved.login.trim() : '';
+  if (!login) return null;
+  return {
+    login,
+    name: typeof saved.name === 'string' ? saved.name.trim() : '',
+    validatedAt: typeof saved.validatedAt === 'string' ? saved.validatedAt : null,
+  };
+}
+
+export function saveGithubProfile(owner, profile) {
+  const next = {
+    login: String(profile?.login || '').trim(),
+    name: String(profile?.name || '').trim(),
+    validatedAt: new Date().toISOString(),
+  };
+  writeJsonAtomic(githubProfileFile(owner), next, { space: 2 });
+  return next;
 }
 
 export function getArenaSnapshot() {

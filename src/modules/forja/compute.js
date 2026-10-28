@@ -85,6 +85,9 @@ export function normalizePr(pr, player, attributedFrom = 'author') {
     deletions: Math.max(0, Number(pr?.deletions) || 0),
     headRefName: String(pr?.headRefName || ''),
     url: typeof pr?.url === 'string' ? pr.url : null,
+    mergeCommitOid: typeof pr?.mergeCommitOid === 'string'
+      ? pr.mergeCommitOid
+      : (typeof pr?.mergeCommit?.oid === 'string' ? pr.mergeCommit.oid : null),
     playerLogin: player.login,
     attributedFrom,
   };

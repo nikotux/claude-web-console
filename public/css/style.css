@@ -11,6 +11,28 @@ html, body {
 .fj-head { color: var(--forja-gold); text-shadow: 0 0 9px color-mix(in srgb, var(--forja-ember) 30%, transparent); }
 .fj-head-title { display: flex; align-items: center; gap: 6px; font-weight: 900; }
 .fj-head-ember { width: 7px; height: 7px; flex: none; border: 1px solid var(--forja-ember); background: color-mix(in srgb, var(--forja-lava) 45%, transparent); filter: drop-shadow(0 0 4px var(--forja-lava)); transform: rotate(45deg); }
+.fj-head--toggle { cursor: pointer; user-select: none; }
+.fj-toggle { flex: none; color: var(--forja-molten); }
+.fj-collapsed-row { position: relative; min-height: 36px; margin: 0 .35rem; padding: 5px 7px 5px 5px !important; overflow: hidden; border: 1px solid color-mix(in srgb, var(--forja-lava) 28%, var(--cwc-border)); border-radius: var(--cwc-radius-sm); background: linear-gradient(90deg, color-mix(in srgb, var(--forja-basalt) 52%, var(--cwc-bg-panel)), var(--cwc-bg-panel)); isolation: isolate; }
+.fj-collapsed-row::before { position: absolute; z-index: -1; inset: 0; border-radius: inherit; content: ''; pointer-events: none; }
+.fj-collapsed-row:hover { border-color: color-mix(in srgb, var(--forja-ember) 48%, var(--cwc-border)); }
+.fj-collapsed-row .fj-head-title { min-width: 0; flex: 1; color: var(--forja-gold); font-size: .64rem; letter-spacing: .055em; white-space: nowrap; }
+.fj-collapsed-row .fj-head-ember { width: 6px; height: 6px; }
+.fj-collapsed-chip { flex: none; padding: 3px 6px; border: 1px solid color-mix(in srgb, var(--forja-ember) 36%, var(--cwc-border)); border-radius: 999px; background: color-mix(in srgb, var(--forja-lava) 14%, var(--cwc-bg-chip)); color: var(--forja-molten); font: 750 .56rem/1.2 var(--cwc-font-ui), "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fj-collapsed-loading { width: 17px; height: 17px; flex: none; }
+.fj-collapsed-forge { position: relative; width: 27px; height: 25px; flex: none; }
+.fj-collapsed-forge img { position: absolute; bottom: 1px; left: 0; width: 24px; height: 17px; object-fit: contain; filter: drop-shadow(0 0 3px color-mix(in srgb, var(--forja-ember) 38%, transparent)); }
+.fj-collapsed-hammer { position: absolute; z-index: 2; top: -1px; right: -1px; width: 15px; height: 4px; border-radius: 2px; background: var(--forja-gold); box-shadow: 0 0 4px color-mix(in srgb, var(--forja-molten) 60%, transparent); transform: rotate(-34deg); transform-origin: 12px 2px; animation: fj-collapsed-hammer 5s ease-in-out infinite; }
+.fj-collapsed-hammer::after { position: absolute; top: 2px; right: 0; width: 2px; height: 13px; border-radius: 2px; background: var(--forja-metal); content: ''; }
+.fj-collapsed-sparks { position: absolute; z-index: 3; top: 10px; left: 8px; width: 3px; height: 3px; border-radius: 50%; background: var(--forja-molten); box-shadow: -5px -5px 0 var(--forja-ember), 5px -7px 0 var(--forja-gold), 8px -1px 0 var(--forja-ember); opacity: 0; animation: fj-collapsed-sparks 5s ease-out infinite; }
+.fj-collapsed-row--hammer::before { animation: fj-collapsed-ember 5s ease-out infinite; }
+.fj-collapsed-ring { position: relative; width: 22px; height: 22px; flex: none; border: 2px solid var(--forja-gold); border-radius: 50%; box-shadow: 0 0 8px var(--forja-ember), inset 0 0 4px var(--forja-molten); animation: fj-collapsed-ring 5s ease-in-out infinite; }
+.fj-collapsed-ring::after { position: absolute; inset: 3px; border: 1px dashed color-mix(in srgb, var(--forja-molten) 70%, transparent); border-radius: 50%; content: ''; }
+.fj-collapsed-chip--pending { border-color: var(--forja-ember); background: var(--forja-lava); color: var(--forja-cream); box-shadow: 0 0 8px color-mix(in srgb, var(--forja-ember) 45%, transparent); animation: fj-collapsed-badge 5s ease-in-out infinite; }
+.fj-collapsed-row--pending.fj-collapsed-row--alert::before { animation: fj-collapsed-event 5s ease-in-out infinite; }
+.fj-collapsed-lock { display: grid; width: 22px; height: 22px; flex: none; place-items: center; }
+.fj-collapsed-lock img { width: 18px; height: 18px; opacity: .78; }
+.fj-collapsed-row--invite::before { background: linear-gradient(105deg, transparent 15%, color-mix(in srgb, var(--forja-gold) 16%, transparent) 46%, transparent 72%); background-size: 240% 100%; animation: fj-collapsed-shimmer 6s ease-in-out infinite; }
 .fj-loading { min-height: 72px; }
 .fj-ficha { position: relative; display: grid; gap: 8px; overflow: hidden; padding: 10px; border: 1px solid transparent; border-radius: var(--cwc-radius-md); background: linear-gradient(145deg, color-mix(in srgb, var(--forja-basalt) 94%, var(--cwc-bg-panel)), var(--forja-obsidian)) padding-box, linear-gradient(110deg, color-mix(in srgb, var(--forja-lava) 55%, var(--cwc-border)), var(--forja-ember) 42%, color-mix(in srgb, var(--forja-lava) 45%, var(--cwc-border)) 72%, var(--cwc-border)) border-box; box-shadow: inset 0 1px color-mix(in srgb, var(--forja-molten) 10%, transparent), 0 0 14px color-mix(in srgb, var(--forja-lava) 17%, transparent); color: var(--forja-cream); cursor: pointer; }
 .fj-ficha::before, .fj-ficha::after { position: absolute; z-index: 2; width: 12px; height: 12px; content: ''; pointer-events: none; }
@@ -220,6 +242,8 @@ html, body {
 .fj-festejo-eye { display: block; width: 112px; height: 60px; filter: drop-shadow(0 0 17px var(--forja-lava)); animation: fj-festejo-eye-pulse 1.7s ease-in-out infinite; }
 .fj-festejo-title { max-width: 900px; margin: 15px 0 0; color: var(--forja-cream); font: 900 calc(var(--cwc-fs-xl) * 1.45)/1.2 var(--cwc-font-serif), "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"; letter-spacing: .055em; text-shadow: 0 0 14px var(--forja-lava); text-transform: uppercase; }
 .fj-festejo-pr { max-width: 900px; margin: 17px auto 0; color: var(--forja-cream); font-size: var(--cwc-fs-lg); line-height: 1.45; }
+.fj-festejo-pr-list { display: grid; width: min(860px, 100%); max-height: 180px; gap: 7px; margin: 17px auto 0; overflow: auto; padding: 0; list-style: none; text-align: left; }
+.fj-festejo-pr-list li { padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--forja-metal) 28%, var(--forja-coal)); border-radius: var(--cwc-radius-sm); background: color-mix(in srgb, var(--forja-coal) 80%, transparent); color: var(--forja-cream); line-height: 1.35; }
 .fj-festejo-number { color: var(--forja-ember); font-family: var(--cwc-font-mono), "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"; font-weight: 900; }
 .fj-festejo-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 22px; }
 .fj-festejo-chip { padding: 8px 11px; border: 1px solid color-mix(in srgb, var(--forja-metal) 46%, var(--forja-coal)); border-radius: var(--cwc-radius-sm); background: var(--forja-coal); color: var(--forja-cream); font-size: var(--cwc-fs-md); }
@@ -243,15 +267,22 @@ html, body {
 @keyframes fj-spark-burst { 0%, 70%, 100% { opacity: 0; transform: scale(.3); } 77% { opacity: 1; transform: scale(1.2); } 88% { opacity: 0; transform: scale(2); } }
 @keyframes fj-festejo-eye-pulse { 0%, 100% { filter: drop-shadow(0 0 8px var(--forja-lava)); transform: scale(.96); } 50% { filter: drop-shadow(0 0 18px var(--forja-ember)); transform: scale(1.04); } }
 @keyframes fj-festejo-ember-rise { from { opacity: 0; transform: translateY(55px); } 20% { opacity: 1; } to { opacity: 0; transform: translate(18px, -280px); } }
-.fj-ficha { animation: fj-card-glow 3.2s ease-in-out infinite; }
-.fj-emblem { animation: fj-emblem-breathe 2.8s ease-in-out infinite; }
+@keyframes fj-collapsed-hammer { 0%, 8%, 100% { transform: rotate(-34deg); } 10% { transform: rotate(29deg) translate(-1px, 3px); } 12% { transform: rotate(-8deg); } 15%, 94% { transform: rotate(-34deg); } }
+@keyframes fj-collapsed-sparks { 0%, 8%, 18%, 100% { opacity: 0; transform: scale(.2); } 10% { opacity: 1; transform: scale(1); } 15% { opacity: 0; transform: translateY(-5px) scale(1.55); } }
+@keyframes fj-collapsed-ember { 0%, 8%, 23%, 100% { box-shadow: inset 0 0 0 transparent; } 11% { box-shadow: inset 0 0 17px color-mix(in srgb, var(--forja-ember) 18%, transparent), 0 0 10px color-mix(in srgb, var(--forja-lava) 15%, transparent); } }
+@keyframes fj-collapsed-ring { 0%, 8%, 28%, 100% { transform: rotate(0deg) scale(1); } 17% { transform: rotate(180deg) scale(1.08); } 25% { transform: rotate(360deg) scale(1); } }
+@keyframes fj-collapsed-badge { 0%, 8%, 31%, 100% { transform: scale(1); } 17% { transform: scale(1.08); box-shadow: 0 0 13px color-mix(in srgb, var(--forja-molten) 65%, transparent); } }
+@keyframes fj-collapsed-event { 0%, 8%, 34%, 100% { box-shadow: inset 0 0 0 transparent; } 17% { box-shadow: inset 0 0 18px color-mix(in srgb, var(--forja-ember) 16%, transparent), 0 0 9px color-mix(in srgb, var(--forja-lava) 18%, transparent); } }
+@keyframes fj-collapsed-shimmer { 0%, 6% { background-position: 120% 0; } 20% { background-position: -80% 0; } 21%, 100% { background-position: -80% 0; } }
 .fj-anvil { animation: fj-anvil-strike 3.2s ease-in-out infinite; }
 .fj-sparks { animation: fj-spark-burst 3.2s ease-out infinite; }
 
 @media (max-width: 700px) {
-  .fj-festejo-card { min-height: 70vh; padding: 54px 22px 34px; }
+  .fj-festejo-overlay { padding: 0; }
+  .fj-festejo-card { width: 100vw; max-height: 100dvh; min-height: 100dvh; justify-content: flex-start; padding: 50px 18px 28px; border-right: 0; border-radius: 0; }
   .fj-festejo-title { font-size: var(--cwc-fs-xl); }
   .fj-festejo-pr { font-size: var(--cwc-fs-md); }
+  .fj-festejo-pr-list { max-height: 150px; font-size: var(--cwc-fs-sm); }
   .fj-festejo-chip { padding: 6px 8px; font-size: var(--cwc-fs-sm); }
 }
 
@@ -280,7 +311,12 @@ html, body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fj-ficha, .fj-emblem, .fj-anvil, .fj-sparks, .fj-festejo-eye, .fj-festejo-ember { animation: none !important; }
+  .fj-collapsed-row::before, .fj-collapsed-hammer, .fj-collapsed-sparks, .fj-collapsed-ring,
+  .fj-collapsed-chip, .fj-anvil, .fj-sparks, .fj-festejo-eye, .fj-festejo-ember { animation: none !important; }
+  .fj-collapsed-hammer { transform: rotate(-34deg); }
+  .fj-collapsed-sparks { opacity: 0; }
+  .fj-collapsed-row--pending { box-shadow: inset 3px 0 var(--forja-ember); }
+  .fj-collapsed-row--invite::before { background-position: 50% 0; opacity: .55; }
 }
 
 /* ===== Login ===== */

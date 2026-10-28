@@ -7,6 +7,8 @@ import { renderSalon } from './salon.js';
 import { node } from './view.js';
 
 const POLL_MS = 60_000;
+const OPEN_KEY = 'cwc.forja.open';
+const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const mountCleanups = new WeakMap();
 let modalSequence = 0;
 
@@ -15,6 +17,11 @@ async function api(url, options) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || t('forja.error.request', 'La Forja no respondió.'));
   return data;
+}
+
+function readOpen() {
+  try { return localStorage.getItem(OPEN_KEY) === '1'; }
+  catch { return false; }
 }
 
 function loadingPanel(label) {
@@ -172,8 +179,10 @@ async function openConfiguration(ctx, onSaved) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const github = input.value.trim();
-    if (!github) {
-      feedback.textContent = t('forja.configure.required', 'Ingresá un login de GitHub.');
+    feedback.classList.remove('fj-config-feedback--error');
+    if (!GITHUB_LOGIN_RE.test(github)) {
+      feedback.textContent = t('forja.configure.invalidFormat', 'Es tu @usuario de GitHub, no tu nombre. Ej: rarboledaAtMordor');
+      feedback.classList.add('fj-config-feedback--error');
       feedback.hidden = false;
       input.focus();
       return;
@@ -184,8 +193,14 @@ async function openConfiguration(ctx, onSaved) {
     feedback.textContent = t('forja.configure.saving', 'Guardando identidad y encendiendo la fragua…');
     feedback.hidden = false;
     try {
+      const validation = await api('/api/forja/validate-login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: github }),
+      });
+      if (!validation.exists || !validation.canonicalLogin) {
+        throw new Error(t('forja.configure.notFound', 'No encontramos ese @usuario en GitHub. Revisalo e intentá de nuevo.'));
+      }
       const freshData = await api('/api/projects/me/identity');
-      const nextIdentity = { ...(freshData.identity || {}), github };
+      const nextIdentity = { ...(freshData.identity || {}), github: validation.canonicalLogin };
       await api('/api/projects/me/identity', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identity: nextIdentity }),
       });
@@ -209,7 +224,13 @@ export default {
 
   mount(el, ctx) {
     mountCleanups.get(el)?.();
-    const state = { loading: true, data: null, error: null };
+    const state = {
+      loading: true,
+      data: null,
+      error: null,
+      open: readOpen(),
+      pendingNoticed: false,
+    };
     let lastLoadedAt = 0;
     let inFlight = null;
     let active = true;
@@ -221,6 +242,12 @@ export default {
         onOpen: () => { if (state.data?.configured) openForgeModal(ctx, state.data, el); },
         onConfigure: () => { void openConfiguration(ctx, () => load()); },
         onRetry: () => { void load(); },
+        onToggle: (open) => {
+          state.open = open;
+          if (open) state.pendingNoticed = true;
+          try { localStorage.setItem(OPEN_KEY, open ? '1' : '0'); } catch { /* localStorage puede estar bloqueado. */ }
+          render();
+        },
       });
       el.querySelector('.fj-enter')?.setAttribute('data-ref', 'forja-cta');
     };
@@ -229,7 +256,10 @@ export default {
       onOpen: () => { if (state.data?.configured) openForgeModal(ctx, state.data, el); },
       onPendingChange: (count) => {
         if (!active || !state.data?.configured) return;
+        const previous = Number(state.data.pendingFestejos) || 0;
         state.data = { ...state.data, pendingFestejos: count };
+        if (count <= 0) state.pendingNoticed = true;
+        else if (count > previous && !state.open) state.pendingNoticed = false;
         render();
       },
     });

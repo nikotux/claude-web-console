@@ -1,9 +1,17 @@
 import { loadInstance } from '../../core/instance-config.js';
 import { listUsers } from '../../core/users.js';
 import { hostUser, userDataDir } from '../../core/user-space.js';
+import { getGithubProfile } from './store.js';
 
 export const ATTRIBUTED_BOT_AUTHOR = 'app/tolkien-builder';
 export const EXCLUDED_BOT_AUTHORS = ['app/mordor-staffing-updates', 'app/renovate', 'app/dependabot'];
+export const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+
+export function githubLoginStatusForUsername(username) {
+  const identity = loadInstance({ dataDir: userDataDir(username) })?.identity || {};
+  const login = typeof identity.github === 'string' ? identity.github.trim() : '';
+  return { login, configured: Boolean(login), valid: Boolean(login && GITHUB_LOGIN_RE.test(login)) };
+}
 
 function initialsFor(name, login) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
@@ -39,10 +47,20 @@ export function resolvePlayers({ warnDuplicateClaims = true } = {}) {
     if (cabinaUsers.has(username)) continue;
     const identity = loadInstance({ dataDir: userDataDir(username) })?.identity || {};
     const login = typeof identity.github === 'string' ? identity.github.trim() : '';
-    if (!login || EXCLUDED_BOT_AUTHORS.some((author) => author.toLowerCase() === login.toLowerCase())
+    if (!login || !GITHUB_LOGIN_RE.test(login)
+      || EXCLUDED_BOT_AUTHORS.some((author) => author.toLowerCase() === login.toLowerCase())
       || login.toLowerCase() === ATTRIBUTED_BOT_AUTHOR.toLowerCase()) continue;
-    const displayName = (typeof identity.name === 'string' && identity.name.trim()) || username;
-    candidates.push({ username, login, displayName, initials: initialsFor(displayName, login) });
+    const identityName = typeof identity.name === 'string' ? identity.name.trim() : '';
+    const profile = getGithubProfile(username);
+    const profileName = profile && profile.login.toLowerCase() === login.toLowerCase() ? profile.name : '';
+    const displayName = identityName || profileName || username;
+    candidates.push({
+      username,
+      login,
+      displayName,
+      initials: initialsFor(displayName, login),
+      needsGithubName: !identityName && !profileName,
+    });
   }
 
   const players = excludeDuplicateLoginClaims(candidates, { warn: warnDuplicateClaims });

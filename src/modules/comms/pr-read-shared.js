@@ -144,6 +144,7 @@ export const PR_AUTHOR_CACHE_TTL_MS = 150 * 1000;
 export const TOLKIEN_GITHUB_REPO = 'Mordor-Staffing/tolkien';
 export const PR_AUTHOR_FIELDS = [
   'number', 'title', 'mergedAt', 'createdAt', 'additions', 'deletions', 'headRefName', 'url',
+  'mergeCommit',
 ].join(',');
 
 function authorCacheKey({ author, limit, repo }) {
@@ -217,4 +218,186 @@ export async function listMergedPrsByAuthor(author, {
     if (lastGood) return markListStale(lastGood, true);
     throw error;
   }
+}
+
+// ===== Identidad GitHub + deploys de producción — insumos de La Forja =====
+const GITHUB_USER_CACHE_DIR = path.join(COMMS_DIR, 'github-user-cache');
+const PRODUCTION_CACHE_DIR = path.join(COMMS_DIR, 'production-deploy-cache');
+const COMMIT_COMPARE_CACHE_DIR = path.join(COMMS_DIR, 'commit-compare-cache');
+export const GITHUB_USER_CACHE_TTL_MS = 150 * 1000;
+export const PRODUCTION_DEPLOY_CACHE_TTL_MS = 150 * 1000;
+const DEPLOY_WORKFLOW = 'deploy-v2.yml';
+const SHA_RE = /^[0-9a-f]{40}$/i;
+
+function safeCacheName(value) {
+  return crypto.createHash('sha1').update(String(value)).digest('hex').slice(0, 24);
+}
+
+function readTimedCache(file, ttl, { allowStale = false } = {}) {
+  try {
+    const cached = JSON.parse(fss.readFileSync(file, 'utf8'));
+    if (!cached || !cached.ts || !Object.hasOwn(cached, 'data')) return null;
+    if (!allowStale && Date.now() - cached.ts >= ttl) return null;
+    return cached.data;
+  } catch { return null; }
+}
+
+function writeTimedCache(dir, file, data) {
+  try {
+    ensureDir();
+    fss.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fss.chmodSync(dir, 0o700);
+    writeJsonAtomic(file, { ts: Date.now(), data }, { mode: 0o600 });
+  } catch { /* cache best-effort */ }
+}
+
+function ghJson(args, { cwd = config.projectDir, label = 'gh api' } = {}) {
+  return new Promise((resolve, reject) => {
+    execFile('gh', args, { cwd, timeout: 90000, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        const detail = String(stderr || err.message).trim().slice(0, 500);
+        const error = new Error(`${label}: ${detail}`);
+        error.notFound = /(?:HTTP\s+404|status(?: code)?\s+404|Not Found)/i.test(detail);
+        reject(error);
+        return;
+      }
+      try { resolve(JSON.parse(String(stdout))); }
+      catch { reject(new Error(`${label}: respuesta JSON inválida`)); }
+    });
+  });
+}
+
+function ghText(args, { cwd = config.projectDir, label = 'gh' } = {}) {
+  return new Promise((resolve, reject) => {
+    execFile('gh', args, { cwd, timeout: 90000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) reject(new Error(`${label}: ${String(stderr || err.message).trim().slice(0, 500)}`));
+      else resolve(String(stdout));
+    });
+  });
+}
+
+export async function githubUserExists(login, { cwd = config.projectDir, fresh = false } = {}) {
+  const normalized = String(login || '').trim();
+  if (!normalized) throw new Error('Login de GitHub vacío');
+  const cacheFile = path.join(GITHUB_USER_CACHE_DIR, `${safeCacheName(normalized.toLowerCase())}.json`);
+  if (!fresh) {
+    const cached = readTimedCache(cacheFile, GITHUB_USER_CACHE_TTL_MS);
+    if (cached) return cached;
+  }
+  try {
+    const profile = await ghJson(['api', `users/${encodeURIComponent(normalized)}`], {
+      cwd, label: `gh api users/${normalized}`,
+    });
+    const result = {
+      exists: true,
+      canonicalLogin: String(profile?.login || normalized),
+      name: typeof profile?.name === 'string' ? profile.name.trim() : '',
+    };
+    writeTimedCache(GITHUB_USER_CACHE_DIR, cacheFile, result);
+    return result;
+  } catch (error) {
+    if (error?.notFound) {
+      const result = { exists: false, canonicalLogin: null, name: '' };
+      writeTimedCache(GITHUB_USER_CACHE_DIR, cacheFile, result);
+      return result;
+    }
+    const lastGood = readTimedCache(cacheFile, GITHUB_USER_CACHE_TTL_MS, { allowStale: true });
+    if (lastGood) return { ...lastGood, _stale: true };
+    throw error;
+  }
+}
+
+function deployedShaFromTitle(title) {
+  const value = String(title || '');
+  if (!/deploy/i.test(value)) return null;
+  return value.match(/\b([0-9a-f]{40})\b/i)?.[1]?.toLowerCase() || null;
+}
+
+function deployedShaFromLog(log) {
+  if (!/(?:^|\s)OPERATION:\s*deploy(?:\s|$)/im.test(log)) return null;
+  return log.match(/EXPECTED_ARTIFACT_JSON:.*?"sourceSha"\s*:\s*"([0-9a-f]{40})"/i)?.[1]?.toLowerCase()
+    || log.match(/(?:DEPLOYED_SHA|SOURCE_SHA|MAIN_SHA):\s*([0-9a-f]{40})/i)?.[1]?.toLowerCase()
+    || null;
+}
+
+async function classifyDeployRun(run, { cwd, repo }) {
+  const titleSha = deployedShaFromTitle(run?.display_title);
+  if (titleSha) return titleSha;
+  const runId = Number(run?.id);
+  if (!Number.isSafeInteger(runId)) return null;
+  const detailFile = path.join(PRODUCTION_CACHE_DIR, `run-${runId}.json`);
+  const cached = readTimedCache(detailFile, Number.MAX_SAFE_INTEGER, { allowStale: true });
+  if (cached) return cached.deployedSha || null;
+  const log = await ghText(['run', 'view', String(runId), '--repo', repo, '--log'], {
+    cwd, label: `gh run view ${runId} --log`,
+  });
+  const deployedSha = deployedShaFromLog(log);
+  writeTimedCache(PRODUCTION_CACHE_DIR, detailFile, { deployedSha });
+  return deployedSha;
+}
+
+function markDeployListStale(deploys, stale) {
+  const result = Array.isArray(deploys) ? deploys : [];
+  Object.defineProperty(result, '_stale', { value: stale, enumerable: false, configurable: true });
+  return result;
+}
+
+export async function listProductionDeploys({
+  limit = 5,
+  repo = TOLKIEN_GITHUB_REPO,
+  cwd = config.projectDir,
+  fresh = false,
+} = {}) {
+  const normalizedLimit = Math.max(1, Math.min(20, Number(limit) || 5));
+  const listFile = path.join(PRODUCTION_CACHE_DIR, `deploys-${safeCacheName(repo)}.json`);
+  if (!fresh) {
+    const cached = readTimedCache(listFile, PRODUCTION_DEPLOY_CACHE_TTL_MS);
+    if (cached) return markDeployListStale(cached.slice(0, normalizedLimit), false);
+  }
+  try {
+    const scanLimit = Math.min(100, Math.max(20, normalizedLimit * 5));
+    const response = await ghJson([
+      'api', `repos/${repo}/actions/workflows/${DEPLOY_WORKFLOW}/runs?status=success&per_page=${scanLimit}`,
+    ], { cwd, label: `gh api ${DEPLOY_WORKFLOW} runs` });
+    const candidates = (Array.isArray(response?.workflow_runs) ? response.workflow_runs : [])
+      .filter((run) => run?.event === 'workflow_dispatch' && run?.conclusion === 'success')
+      .sort((a, b) => Date.parse(b.updated_at || '') - Date.parse(a.updated_at || ''));
+    const deploys = [];
+    for (const run of candidates) {
+      const deployedSha = await classifyDeployRun(run, { cwd, repo });
+      if (!SHA_RE.test(deployedSha || '')) continue;
+      deploys.push({
+        runId: Number(run.id),
+        deployedSha,
+        completedAt: run.updated_at || run.created_at || null,
+        displayTitle: String(run.display_title || run.name || DEPLOY_WORKFLOW),
+      });
+      if (deploys.length >= normalizedLimit) break;
+    }
+    writeTimedCache(PRODUCTION_CACHE_DIR, listFile, deploys);
+    return markDeployListStale(deploys, false);
+  } catch (error) {
+    const lastGood = readTimedCache(listFile, PRODUCTION_DEPLOY_CACHE_TTL_MS, { allowStale: true });
+    if (lastGood) return markDeployListStale(lastGood.slice(0, normalizedLimit), true);
+    throw error;
+  }
+}
+
+export async function isCommitIncluded(baseSha, headSha, {
+  repo = TOLKIEN_GITHUB_REPO,
+  cwd = config.projectDir,
+} = {}) {
+  const base = String(baseSha || '').trim().toLowerCase();
+  const head = String(headSha || '').trim().toLowerCase();
+  if (!SHA_RE.test(base) || !SHA_RE.test(head)) throw new Error('SHA inválido para comparar');
+  const cacheFile = path.join(COMMIT_COMPARE_CACHE_DIR, `${safeCacheName(`${repo}:${base}:${head}`)}.json`);
+  const cached = readTimedCache(cacheFile, Number.MAX_SAFE_INTEGER, { allowStale: true });
+  if (cached && typeof cached.included === 'boolean') return cached.included;
+  const comparison = await ghJson(['api', `repos/${repo}/compare/${base}...${head}`], {
+    cwd, label: `gh api compare ${base.slice(0, 8)}...${head.slice(0, 8)}`,
+  });
+  const status = String(comparison?.status || '');
+  const included = status === 'ahead' || status === 'identical';
+  writeTimedCache(COMMIT_COMPARE_CACHE_DIR, cacheFile, { status, included });
+  return included;
 }

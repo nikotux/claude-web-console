@@ -57,7 +57,15 @@ function addChip(parent, text) {
   parent.appendChild(node('span', 'fj-festejo-chip', text));
 }
 
+function festejoKey(festejo) {
+  if (typeof festejo?.id === 'string' && festejo.id) return festejo.id;
+  return Number.isSafeInteger(festejo?.number) ? `merge:${festejo.number}` : '';
+}
+
 function celebrationCard(festejo, { displayName, position, total, onDismiss, onOpen }) {
+  const isDeploy = festejo.kind === 'deploy';
+  const deployPrs = Array.isArray(festejo.prs) ? festejo.prs : [];
+  const resolvedName = String(festejo.displayName || displayName || '').toLocaleUpperCase();
   const overlay = node('div', 'fj-festejo-overlay');
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
@@ -75,24 +83,48 @@ function celebrationCard(festejo, { displayName, position, total, onDismiss, onO
   eye.src = '/img/forja/ojo-sauron.svg';
   eye.alt = '';
   eye.setAttribute('aria-hidden', 'true');
-  const title = node('h1', 'fj-festejo-title', t('forja.festejo.title', '🔥 ¡UN NUEVO ANILLO FUE FORJADO, {name}!', {
-    name: String(displayName || '').toLocaleUpperCase(),
-  }));
+  const title = node('h1', 'fj-festejo-title', isDeploy
+    ? (deployPrs.length === 1
+      ? t('forja.festejo.deploy.title.one', '🚀 ¡TU ANILLO LLEGÓ A PRODUCCIÓN, {name}!', { name: resolvedName })
+      : t('forja.festejo.deploy.title.many', '🚀 ¡{count} ANILLOS LLEGARON A PRODUCCIÓN, {name}!', {
+        count: deployPrs.length, name: resolvedName,
+      }))
+    : t('forja.festejo.title', '🔥 ¡UN NUEVO ANILLO FUE FORJADO, {name}!', { name: resolvedName }));
   title.id = `fj-festejo-title-${++dialogSequence}`;
   overlay.setAttribute('aria-labelledby', title.id);
-  const pr = node('p', 'fj-festejo-pr');
-  pr.append(node('strong', 'fj-festejo-number', `#${festejo.number}`), document.createTextNode(` · ${festejo.title || ''}`));
+  let pr;
+  if (isDeploy) {
+    pr = node('ul', 'fj-festejo-pr-list');
+    deployPrs.forEach((item) => {
+      const row = node('li');
+      row.append(node('strong', 'fj-festejo-number', `#${item.number}`), document.createTextNode(` · ${item.title || ''}`));
+      pr.appendChild(row);
+    });
+  } else {
+    pr = node('p', 'fj-festejo-pr');
+    pr.append(node('strong', 'fj-festejo-number', `#${festejo.number}`), document.createTextNode(` · ${festejo.title || ''}`));
+  }
   const chips = node('div', 'fj-festejo-chips');
-  if (festejo.deskTicket) addChip(chips, t('forja.festejo.desk', '🎫 Desk #{number}', { number: festejo.deskTicket }));
-  addChip(chips, t('forja.festejo.duration', '⏱ abierto → mergeado: {duration}', { duration: durationLabel(festejo.durationMin) }));
-  addChip(chips, t('forja.festejo.lines', '📊 +{additions} / −{deletions}', {
-    additions: festejo.additions || 0, deletions: festejo.deletions || 0,
-  }));
-  addChip(chips, t('forja.festejo.monthRing', '💍 Anillo nº {number} de {month}', {
-    number: festejo.ringOfMonth || 0, month: translatedMonth(festejo.monthLabel),
-  }));
-  const quote = node('p', 'fj-festejo-quote', t('forja.festejo.quote', 'El Ojo te observa… y aprueba. 👁'));
-  const throne = node('div', 'fj-festejo-throne', throneLabel(festejo.throne));
+  if (isDeploy) {
+    deployPrs.forEach((item) => addChip(chips, deployPrs.length === 1
+      ? t('forja.festejo.deploy.duration', '⏱ merge → producción: {duration}', { duration: durationLabel(item.durationMin) })
+      : t('forja.festejo.deploy.durationPr', '⏱ #{number} · merge → producción: {duration}', {
+        number: item.number, duration: durationLabel(item.durationMin),
+      })));
+  } else {
+    if (festejo.deskTicket) addChip(chips, t('forja.festejo.desk', '🎫 Desk #{number}', { number: festejo.deskTicket }));
+    addChip(chips, t('forja.festejo.duration', '⏱ abierto → mergeado: {duration}', { duration: durationLabel(festejo.durationMin) }));
+    addChip(chips, t('forja.festejo.lines', '📊 +{additions} / −{deletions}', {
+      additions: festejo.additions || 0, deletions: festejo.deletions || 0,
+    }));
+    addChip(chips, t('forja.festejo.monthRing', '💍 Anillo nº {number} de {month}', {
+      number: festejo.ringOfMonth || 0, month: translatedMonth(festejo.monthLabel),
+    }));
+  }
+  const quote = node('p', 'fj-festejo-quote', isDeploy
+    ? t('forja.festejo.deploy.quote', 'Ya arde en Barad-dûr.')
+    : t('forja.festejo.quote', 'El Ojo te observa… y aprueba. 👁'));
+  const throne = isDeploy ? null : node('div', 'fj-festejo-throne', throneLabel(festejo.throne));
   const actions = node('div', 'fj-festejo-actions');
   const open = node('button', 'btn fj-festejo-open', t('forja.festejo.openSalon', '🔥 Ver en Mi salón'));
   open.type = 'button';
@@ -102,7 +134,9 @@ function celebrationCard(festejo, { displayName, position, total, onDismiss, onO
   overlay.addEventListener('click', (event) => {
     if (!event.target.closest('button')) onDismiss();
   });
-  card.append(embers, close, counter, eye, title, pr, chips, quote, throne, actions);
+  card.append(embers, close, counter, eye, title, pr, chips, quote);
+  if (throne) card.appendChild(throne);
+  card.appendChild(actions);
   overlay.appendChild(card);
   return { overlay, card, close };
 }
@@ -186,16 +220,20 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
     target?.focus();
   };
 
-  const acknowledge = (number) => {
-    acking.add(number);
+  const acknowledge = (festejo) => {
+    const key = festejoKey(festejo);
+    acking.add(key);
+    const body = typeof festejo?.id === 'string'
+      ? { ids: [festejo.id] }
+      : { numbers: [festejo.number] };
     acknowledgeTail = acknowledgeTail.then(() => api('/api/forja/festejos/visto', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ numbers: [number] }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     })).then((data) => {
       if (destroyed) return;
       const count = data.pendingFestejos ?? data.pending?.length ?? 0;
       wanted = Number(count) > 0;
       onPendingChange(count);
-    }).catch(() => {}).finally(() => { acking.delete(number); });
+    }).catch(() => {}).finally(() => { acking.delete(key); });
     return acknowledgeTail;
   };
 
@@ -227,7 +265,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
       removeEscLayer(closing?.escEntry);
       active = null;
       const shouldRestoreFocus = !auto || focusWasInside;
-      const acknowledged = acknowledge(festejo.number);
+      const acknowledged = acknowledge(festejo);
       if (shouldRestoreFocus) restoreFocus(opener, openerRef);
       void acknowledged.then(() => {
         if (shouldRestoreFocus && !opener?.isConnected && document.activeElement === document.body) {
@@ -239,7 +277,7 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
     active = celebrationCard(festejo, {
       displayName, position: batchPosition, total: batchTotal, onDismiss: dismiss, onOpen,
     });
-    active.number = festejo.number;
+    active.key = festejoKey(festejo);
     active.opener = opener;
     active.openerRef = openerRef;
     active.pointerInside = false;
@@ -271,12 +309,12 @@ export function createFestejoController({ api, onOpen, onPendingChange }) {
     fetching = api('/api/forja/festejos').then((data) => {
       if (destroyed) return;
       const existing = new Set([
-        ...(active ? [active.number] : []),
-        ...queue.map((item) => item.number),
+        ...(active ? [active.key] : []),
+        ...queue.map(festejoKey),
         ...acking,
       ]);
       const incoming = (Array.isArray(data.pending) ? data.pending : [])
-        .filter((item) => Number.isSafeInteger(item?.number) && !existing.has(item.number));
+        .filter((item) => festejoKey(item) && !existing.has(festejoKey(item)));
       if (!active && !queue.length) {
         batchPosition = 0;
         batchTotal = incoming.length;
