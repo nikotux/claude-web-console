@@ -214,6 +214,9 @@ export async function listMergedPrsByAuthor(author, {
     writeAuthorCache(key, prs);
     return markListStale(prs, false);
   } catch (error) {
+    // Un pedido fresh se usa para decidir festejos de producción: devolver el
+    // último bueno en ese caso podría adelantar prodSha y perder el festejo.
+    if (fresh) throw error;
     const lastGood = readAuthorCache(key, { allowStale: true });
     if (lastGood) return markListStale(lastGood, true);
     throw error;

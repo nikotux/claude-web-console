@@ -6,6 +6,7 @@ import { getGithubProfile } from './store.js';
 export const ATTRIBUTED_BOT_AUTHOR = 'app/tolkien-builder';
 export const EXCLUDED_BOT_AUTHORS = ['app/mordor-staffing-updates', 'app/renovate', 'app/dependabot'];
 export const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+export const GITHUB_PROFILE_NAME_REFRESH_MS = 24 * 60 * 60 * 1000;
 
 export function githubLoginStatusForUsername(username) {
   const identity = loadInstance({ dataDir: userDataDir(username) })?.identity || {};
@@ -25,6 +26,19 @@ function firstGivenName(value) {
 
 export function celebrationNameFrom(identityName, profileName) {
   return firstGivenName(identityName) || firstGivenName(profileName) || null;
+}
+
+function needsGithubName(identityName, login, profile, now = Date.now()) {
+  if (identityName) return false;
+  const matches = profile && profile.login.toLowerCase() === login.toLowerCase();
+  if (!matches) return true;
+  if (profile.name) return false;
+  const validatedAt = Date.parse(profile.validatedAt || '');
+  return !Number.isFinite(validatedAt) || now - validatedAt >= GITHUB_PROFILE_NAME_REFRESH_MS;
+}
+
+export function __needsGithubNameForTests(identityName, login, profile, now) {
+  return needsGithubName(identityName, login, profile, now);
 }
 
 export function excludeDuplicateLoginClaims(candidates, { warn = true } = {}) {
@@ -60,7 +74,8 @@ export function resolvePlayers({ warnDuplicateClaims = true } = {}) {
       || login.toLowerCase() === ATTRIBUTED_BOT_AUTHOR.toLowerCase()) continue;
     const identityName = typeof identity.name === 'string' ? identity.name.trim() : '';
     const profile = getGithubProfile(username);
-    const profileName = profile && profile.login.toLowerCase() === login.toLowerCase() ? profile.name : '';
+    const profileMatches = profile && profile.login.toLowerCase() === login.toLowerCase();
+    const profileName = profileMatches ? profile.name : '';
     const displayName = identityName || profileName || username;
     candidates.push({
       username,
@@ -68,7 +83,7 @@ export function resolvePlayers({ warnDuplicateClaims = true } = {}) {
       displayName,
       celebrationName: celebrationNameFrom(identityName, profileName),
       initials: initialsFor(displayName, login),
-      needsGithubName: !identityName && !profileName,
+      needsGithubName: needsGithubName(identityName, login, profile),
     });
   }
 

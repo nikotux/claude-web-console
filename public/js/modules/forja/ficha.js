@@ -3,7 +3,11 @@ import { t } from '../../ui/i18n.js';
 import { icon } from '../../ui/icons.js';
 import { levelCode, levelName, node, percent, staleLabel } from './view.js';
 
+const REFRESHING_POLL_MS = 5_000;
+const refreshingTimers = new WeakMap();
+
 function throneTooltip(data) {
+  if (data?.refreshing) return t('forja.refreshing.tooltip', 'Estamos forjando tu ficha con el nuevo usuario de GitHub');
   if (data?.configured === false) return t('forja.collapsed.tooltip.unconfigured', 'Forjá tu ficha y entrá a la arena');
   const throne = data?.mission?.throne || {};
   if (throne.id === 'defend-throne' && throne.targetDisplayName) {
@@ -27,6 +31,13 @@ function collapsedVisual(data) {
     };
   }
   const pending = Math.max(0, Number(data?.pendingFestejos) || 0);
+  if (data?.refreshing) {
+    return {
+      visual: node('span', 'cwc-spinner fj-collapsed-loading'),
+      mode: 'refreshing',
+      chip: t('forja.refreshing.short', 'Forjando tu ficha…'),
+    };
+  }
   if (data?.configured === false) {
     const visual = node('span', 'fj-collapsed-lock');
     const image = document.createElement('img');
@@ -41,7 +52,9 @@ function collapsedVisual(data) {
       mode: 'pending',
       chip: t('forja.collapsed.pending', '+{count} {label}', {
         count: pending,
-        label: pending === 1 ? t('forja.collapsed.ring.one', 'anillo') : t('forja.collapsed.ring.many', 'anillos'),
+        label: pending === 1
+          ? t('forja.collapsed.festejo.one', 'festejo')
+          : t('forja.collapsed.festejo.many', 'festejos'),
       }),
     };
   }
@@ -180,6 +193,19 @@ function renderUnconfigured(el, data, onConfigure) {
   el.appendChild(card);
 }
 
+function renderRefreshing(el) {
+  const box = node('div', 'cwc-loading fj-loading');
+  box.append(
+    node('span', 'cwc-spinner'),
+    document.createTextNode(t('forja.refreshing.title', 'Forjando tu ficha…')),
+  );
+  box.appendChild(node('span', '', t(
+    'forja.refreshing.detail',
+    'Estamos trayendo tu historia con el nuevo usuario de GitHub.',
+  )));
+  el.appendChild(box);
+}
+
 function renderError(el, error, onRetry) {
   const box = node('div', 'fj-error');
   box.append(
@@ -194,6 +220,9 @@ function renderError(el, error, onRetry) {
 }
 
 export function renderFicha(el, state, actions) {
+  const previousTimer = refreshingTimers.get(el);
+  if (previousTimer) clearTimeout(previousTimer);
+  refreshingTimers.delete(el);
   el.textContent = '';
   const panelId = 'fj-sidebar-panel';
   const context = header(el, state, actions, panelId);
@@ -201,10 +230,20 @@ export function renderFicha(el, state, actions) {
   panel.id = panelId;
   panel.hidden = !state.open;
   el.appendChild(panel);
+  if (state.data?.refreshing) {
+    const timer = setTimeout(() => {
+      refreshingTimers.delete(el);
+      if (el.isConnected) actions.onRetry();
+    }, REFRESHING_POLL_MS);
+    refreshingTimers.set(el, timer);
+  }
   if (!state.open) return;
   panel.appendChild(node('p', 'fj-expanded-context', context));
   if (state.loading) renderLoading(panel);
   else if (state.error) renderError(panel, state.error, actions.onRetry);
+  else if (state.data?.refreshing) {
+    renderRefreshing(panel);
+  }
   else if (state.data?.configured === false) renderUnconfigured(panel, state.data, actions.onConfigure);
   else renderConfigured(panel, state.data || {}, actions.onOpen);
 }

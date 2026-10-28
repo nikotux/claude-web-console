@@ -93,9 +93,15 @@
   `userDataDir(hostUser())`; todos se escriben atómicamente; snapshots e historiales
   se refrescan desde GitHub cada 3 minutos y conservan el último bueno ante
   fallos de red. Las cachés canónicas viven en `comms/pr-author-cache/` (PRs por
-  autor), `comms/github-user-cache/` (perfil), `comms/production-deploy-cache/`
-  (listado/clasificación de runs; TTL 150 s con último bueno) y
-  `comms/commit-compare-cache/` (pares de SHAs inmutables, sin vencimiento),
+  autor; TTL 150 s, salvo la lectura `fresh` obligatoria al cambiar producción),
+  `comms/github-user-cache/` (respuesta de GitHub; TTL 150 s) y
+  `forja/github-profile.json` (perfil resuelto por usuario; si el login coincide,
+  incluso un nombre vacío vale 24 h antes de intentar completarlo otra vez).
+  En `comms/production-deploy-cache/`, cada `run-v2-<id>.json` clasificado como
+  deploy/no-deploy/unavailable es permanente; un run todavía inclasificable se
+  reintenta a los 10 min y pasa a permanente al superar una hora. Finalmente,
+  `comms/commit-compare-cache/v2-*.json` conserva cada par de SHAs inmutable sin
+  vencimiento,
   `tolkien-refresh.json` job del refresh DESACOPLADO
   de la DB LOCAL de Tolkien (lo reserva POST /api/tolkien/refresh-data, lo completa
   `bin/cwc-tolkien-refresh-runner.js`; staleness 12 min) + `tolkien-refresh.log`,

@@ -46,8 +46,8 @@ function storedState(player) {
   return { snapshot, loginMatches, storedPrs, prs, hasAuthorHistory };
 }
 
-async function fetchAuthor(author, limit) {
-  const prs = await fetchMergedPrsByAuthor(author, { limit });
+async function fetchAuthor(author, limit, { fresh = false } = {}) {
+  const prs = await fetchMergedPrsByAuthor(author, { limit, fresh });
   return { prs, stale: prs._stale === true };
 }
 
@@ -98,8 +98,8 @@ function mergePlayerPrs(player, previous, direct, botPrs, players) {
   return [...merged.values()];
 }
 
-async function settledFetch(author, limit) {
-  try { return { ok: true, value: await fetchAuthor(author, limit) }; }
+async function settledFetch(author, limit, options) {
+  try { return { ok: true, value: await fetchAuthor(author, limit, options) }; }
   catch (error) { return { ok: false, error }; }
 }
 
@@ -299,6 +299,64 @@ export async function __detectDeployFestejosForTests(options) {
   return detectDeployFestejos(options);
 }
 
+async function refreshDeployPrs({
+  players,
+  allPlayers,
+  prsByUsername,
+  statesByUsername,
+  storedByUsername,
+  previousBotPrs,
+  botLimit,
+  production,
+}) {
+  const currentSha = typeof production?.sha === 'string' ? production.sha : '';
+  const changedPlayers = players.filter((player) => {
+    const state = statesByUsername.get(player.username);
+    const previousSha = typeof state?.prodSha === 'string' ? state.prodSha : '';
+    return Boolean(state && currentSha && previousSha !== currentSha);
+  });
+  if (!changedPlayers.length) return { players, botPrs: null, refreshedOwners: [], failedOwners: [] };
+
+  const [bot, ...directResults] = await runFetchPool([
+    () => settledFetch(ATTRIBUTED_BOT_AUTHOR, botLimit, { fresh: true }),
+    ...changedPlayers.map((player) => () => settledFetch(
+      player.login,
+      storedByUsername.get(player.username)?.hasAuthorHistory ? INCREMENTAL_FETCH_LIMIT : FULL_FETCH_LIMIT,
+      { fresh: true },
+    )),
+  ]);
+  const botReady = bot.ok && !bot.value.stale;
+  const refreshedBotPrs = botReady ? unionBotPrs(previousBotPrs, bot.value.prs) : previousBotPrs;
+  const ready = new Set();
+  const failedOwners = [];
+  changedPlayers.forEach((player, index) => {
+    const direct = directResults[index];
+    if (!botReady || !direct?.ok || direct.value.stale) {
+      failedOwners.push(player.username);
+      return;
+    }
+    ready.add(player.username);
+    prsByUsername.set(player.username, mergePlayerPrs(
+      player,
+      prsByUsername.get(player.username) || [],
+      direct,
+      refreshedBotPrs,
+      allPlayers,
+    ));
+  });
+  const changedOwners = new Set(changedPlayers.map((player) => player.username));
+  return {
+    players: players.filter((player) => !changedOwners.has(player.username) || ready.has(player.username)),
+    botPrs: ready.size ? refreshedBotPrs : null,
+    refreshedOwners: [...ready],
+    failedOwners,
+  };
+}
+
+export async function __refreshDeployPrsForTests(options) {
+  return refreshDeployPrs(options);
+}
+
 async function runCycle({ onlyOwner = null } = {}) {
   let players = resolvePlayers();
   const missingProfiles = players.filter((player) => player.needsGithubName);
@@ -404,8 +462,19 @@ async function runCycle({ onlyOwner = null } = {}) {
       const production = await fetchCurrentProduction();
       if (production && production._stale !== true) {
         const statesByUsername = new Map(freshPlayers.map((player) => [player.username, getFestejos(player.username)]));
-        const deployStep = await detectDeployFestejos({
+        const refreshed = await refreshDeployPrs({
           players: freshPlayers,
+          allPlayers: players,
+          prsByUsername,
+          statesByUsername,
+          storedByUsername: states,
+          previousBotPrs: botPrs,
+          botLimit,
+          production,
+        });
+        if (refreshed.botPrs) saveBotPrs(refreshed.botPrs);
+        const deployStep = await detectDeployFestejos({
+          players: refreshed.players,
           prsByUsername,
           statesByUsername,
           production,
@@ -446,13 +515,13 @@ export function refreshNow() {
 }
 
 export function refreshOwner(owner, { rateLimitMs = MANUAL_RATE_LIMIT_MS } = {}) {
-  if (fullCycle) {
+  if (ownerCycles.has(owner)) return ownerCycles.get(owner);
+  if (fullCycle && rateLimitMs > 0) {
     return fullCycle.then(() => ({ ignored: true, snapshot: getMeSnapshot(owner) }));
   }
   if (snapshotAgeMs(owner) < rateLimitMs) {
     return Promise.resolve({ ignored: true, snapshot: getMeSnapshot(owner) });
   }
-  if (ownerCycles.has(owner)) return ownerCycles.get(owner);
   const promise = enqueueCycle(() => runCycle({ onlyOwner: owner }))
     .then((snapshot) => ({ ignored: false, snapshot }))
     .catch((error) => {

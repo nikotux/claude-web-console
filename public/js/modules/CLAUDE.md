@@ -18,6 +18,18 @@ fail-closed del backend (`isAdmin` y ownership por usuario). Todo endpoint que
 requiera protección debe imponerla en el backend, aunque su módulo no sea
 visible para un perfil.
 
+### La Forja en el sidebar
+`forja/forja.js` monta el último módulo del sidebar, inmediatamente después de
+Laboratorio. Es una excepción deliberada a las secciones estáticas: su ficha se
+pliega desde `.fj-head-main` y persiste apertura en `cwc.forja.open`. Cerrada,
+`ficha.js` distingue calentando, invitación, re-forja por cambio de login, ficha
+activa y festejos pendientes; martillo/chispas, brasa, anillo, badge y shimmer
+comparten la secuencia visual, con anulación bajo `prefers-reduced-motion`. Un
+estado `refreshing` repregunta `/api/forja/me` cada 5 s hasta recibir la ficha
+del login configurado. `festejo.js` presenta por separado el merge y la llegada
+a producción; el festejo de deploy admite varios PRs y confirma su cola privada
+solo al cerrarse o avanzar.
+
 ### public/js/modules/          launcher · sessions · forja (RADAR DE TRABAJO EN SEGUNDO PLANO, PLAN-892,
 2026-07-22): la tarjeta de sesión ya no sólo dice vivo/dormido; la
 fila 2 suma una LÍNEA VIVA (`.sess-live`, `liveText()`) con prioridad

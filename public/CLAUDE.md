@@ -24,7 +24,8 @@ montados por [data-module]; ctx={icon,dialog,bus,whoami,...}
 (patrón completo en docs/frontend-modules.md).
 DOS BARRAS LATERALES (2026-07-07, pedido del usuario "Sesiones
 ocupa mucho espacio"): #sidebar IZQUIERDA = control/módulos
-(Tickets & Features → Pendientes → Comunicaciones, en ese orden)
+(Tickets & Features → Pendientes → Visado → Mejora Continua → Laboratorio →
+La Forja; Laboratorio y La Forja cierran la lista, en ese orden)
 + CABECERA con el chip del usuario conectado (`#acct-chip`, desde
 2026-07-31) + pie de estado (plan-limits · usage · explorador · raw ·
 seguimientos · ayuda · system). #sidebar-right DERECHA = Sesiones + "Nueva sesión"
@@ -70,6 +71,13 @@ cursor/click y TODO el bloque de main.js que aplicaba/toggleaba
 .sec-collapsed + las keys cwc.sec.<mod>.collapsed. Todo nace expandido
 (la distribución en 2 barras da espacio). Si se vuelve a necesitar
 plegado, hay que reponer ese listener + la clase.
+EXCEPCIÓN LA FORJA (2026-10-28): su propio header `.fj-head-main` sí alterna
+el cuerpo y persiste el estado en `cwc.forja.open`; cerrada conserva una fila
+viva con estados calentando/invitación/forjando/ficha activa/festejo pendiente.
+Las animaciones coordinan martillo, chispas, brasa, anillo, badge y shimmer, y
+respetan `prefers-reduced-motion`. Los festejos incluyen tanto merges nuevos
+como PRs que acaban de llegar a producción; estos últimos pueden agrupar varios
+PRs y solo se marcan vistos mediante el endpoint de festejos.
 En MÓVIL ambas barras son drawers overlay que se abren con DOS ASAS
 flotantes (#sidebar-handle izq = módulos / #sidebar-right-handle der
 = Sesiones; look compartido espejado, solo móvil) UBICADAS SOBRE EL

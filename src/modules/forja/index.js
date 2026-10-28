@@ -24,6 +24,24 @@ function configuredPlayer(owner) {
   return playerForUsername(owner, resolvePlayers({ warnDuplicateClaims: false }));
 }
 
+function sameLogin(left, right) {
+  return typeof left === 'string' && left.toLowerCase() === String(right || '').toLowerCase();
+}
+
+function refreshingSnapshotState({ owner, player, snapshot, pending, enqueue = refreshOwner }) {
+  if (!snapshot || sameLogin(snapshot.login, player.login)) return null;
+  void enqueue(owner, { rateLimitMs: 0 });
+  return {
+    configured: true,
+    refreshing: true,
+    pendingFestejos: pending,
+  };
+}
+
+export function __refreshingSnapshotStateForTests(options) {
+  return refreshingSnapshotState(options);
+}
+
 function consumeValidation(owner, now = Date.now()) {
   const previous = validationBuckets.get(owner);
   const bucket = !previous || now - previous.since >= VALIDATION_WINDOW_MS
@@ -44,7 +62,8 @@ export default {
 
     r.get('/me', async (req, res) => {
       const owner = ownerOf(req);
-      if (!configuredPlayer(owner)) {
+      const player = configuredPlayer(owner);
+      if (!player) {
         const status = githubLoginStatusForUsername(owner);
         return res.json({
           configured: false,
@@ -54,6 +73,13 @@ export default {
         });
       }
       let snapshot = getMeSnapshot(owner);
+      const refreshing = refreshingSnapshotState({
+        owner,
+        player,
+        snapshot,
+        pending: pendingFestejos(owner),
+      });
+      if (refreshing) return res.json(refreshing);
       if (!snapshot) snapshot = (await refreshOwner(owner, { rateLimitMs: 0 })).snapshot;
       if (!snapshot) return res.status(503).json({
         configured: true,
@@ -134,7 +160,15 @@ export default {
 
     r.post('/refresh', async (req, res) => {
       const owner = ownerOf(req);
-      if (!configuredPlayer(owner)) return res.json({ configured: false, hint: 'identity.github' });
+      const player = configuredPlayer(owner);
+      if (!player) return res.json({ configured: false, hint: 'identity.github' });
+      const refreshing = refreshingSnapshotState({
+        owner,
+        player,
+        snapshot: getMeSnapshot(owner),
+        pending: pendingFestejos(owner),
+      });
+      if (refreshing) return res.json({ ok: true, ...refreshing });
       const result = await refreshOwner(owner);
       if (!result.snapshot) return res.status(503).json({ ok: false, error: result.error || 'No se pudo refrescar La Forja.' });
       return res.json({ ok: true, ignored: result.ignored, snapshot: result.snapshot });
