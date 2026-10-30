@@ -279,7 +279,6 @@ function buildMe(player, context) {
     username: player.username,
     login: player.login,
     displayName: player.displayName,
-    celebrationName: player.celebrationName || null,
     initials: player.initials,
     total: player.total,
     impact: { deskTickets, tasks, daysForging: days, total: player.total },

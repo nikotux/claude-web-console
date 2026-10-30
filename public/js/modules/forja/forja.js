@@ -1,7 +1,6 @@
 import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { renderArena } from './arena.js';
-import { createFestejoController } from './festejo.js';
 import { renderFicha } from './ficha.js';
 import { renderSalon } from './salon.js';
 import { node } from './view.js';
@@ -270,13 +269,11 @@ export default {
       data: null,
       error: null,
       open: readOpen(),
-      pendingNoticed: false,
     };
     let lastLoadedAt = 0;
     let inFlight = null;
     let active = true;
 
-    let festejos = null;
     const openModal = () => {
       if (!state.data?.configured) return;
       openForgeModal(ctx, state.data, el, () => {
@@ -291,26 +288,12 @@ export default {
         onRetry: () => { void load(); },
         onToggle: (open) => {
           state.open = open;
-          if (open) state.pendingNoticed = true;
           try { localStorage.setItem(OPEN_KEY, open ? '1' : '0'); } catch { /* localStorage puede estar bloqueado. */ }
           render();
         },
       });
       el.querySelector('.fj-enter')?.setAttribute('data-ref', 'forja-cta');
     };
-    festejos = createFestejoController({
-      api,
-      onOpen: openModal,
-      onPendingChange: (count) => {
-        if (!active || !state.data?.configured) return;
-        const previous = Number(state.data.pendingFestejos) || 0;
-        state.data = { ...state.data, pendingFestejos: count };
-        if (count <= 0) state.pendingNoticed = true;
-        else if (count > previous && !state.open) state.pendingNoticed = false;
-        render();
-      },
-    });
-
     const load = ({ silent = false } = {}) => {
       if (inFlight) return inFlight;
       if (!silent) {
@@ -325,7 +308,6 @@ export default {
           state.loading = false;
           lastLoadedAt = Date.now();
           render();
-          if (active) festejos.sync(data.pendingFestejos, data.celebrationName);
           return data;
         })
         .catch((error) => {
@@ -347,7 +329,6 @@ export default {
     document.addEventListener('visibilitychange', onVisibilityChange);
     mountCleanups.set(el, () => {
       active = false;
-      festejos.destroy();
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     });

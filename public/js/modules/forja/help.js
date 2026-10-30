@@ -21,23 +21,12 @@ export default function forjaHelp() {
         ],
       },
       {
-        title: t('forja.help.festejos.title', 'Festejos de merge y producción'),
-        blocks: [
-          {
-            type: 'note',
-            tone: 'info',
-            text: t('forja.help.festejos.text', 'La Forja festeja dos hitos privados: cuando tu PR se mergea y cuando ese anillo llega en un deploy exitoso de producción. Un deploy agrupa todos tus PRs incluidos. El overlay aparece incluso en móvil con el drawer cerrado; se cierra solo a los 12 segundos salvo mientras interactuás, y cualquier cierre lo marca como visto.'),
-          },
-        ],
-      },
-      {
         title: t('forja.help.legend.title', 'Leyenda'),
         blocks: [
           {
             type: 'legend',
             items: [
               { icon: 'flame', name: t('forja.help.legend.ring.name', 'Anillo'), desc: t('forja.help.legend.ring.desc', 'un PR mergeado en Tolkien') },
-              { icon: 'upload', name: t('forja.help.legend.production.name', 'Producción'), desc: t('forja.help.legend.production.desc', 'un deploy exitoso que ya incluye uno o más de tus anillos') },
               { icon: 'trophy', name: t('forja.help.legend.trophy.name', 'Trofeo'), desc: t('forja.help.legend.trophy.desc', 'un logro forjado o un objetivo en progreso') },
               { icon: 'swords', name: t('forja.help.legend.arena.name', 'Arena'), desc: t('forja.help.legend.arena.desc', 'ranking mensual basado en anillos de la temporada') },
               { icon: 'lock', name: t('forja.help.legend.private.name', 'Privado'), desc: t('forja.help.legend.private.desc', 'los títulos y detalles de tus PRs solo aparecen en tu salón') },

@@ -31,10 +31,6 @@ html, body {
 .fj-collapsed-hammer::after { position: absolute; top: 2px; right: 0; width: 2px; height: 13px; border-radius: 2px; background: var(--forja-metal); content: ''; }
 .fj-collapsed-sparks { position: absolute; z-index: 3; top: 10px; left: 8px; width: 3px; height: 3px; border-radius: 50%; background: var(--forja-molten); box-shadow: -5px -5px 0 var(--forja-ember), 5px -7px 0 var(--forja-gold), 8px -1px 0 var(--forja-ember); opacity: 0; animation: fj-collapsed-sparks 5s ease-out infinite; }
 .fj-collapsed-row--hammer::before { animation: fj-collapsed-ember 5s ease-out infinite; }
-.fj-collapsed-ring { position: relative; width: 22px; height: 22px; flex: none; border: 2px solid var(--forja-gold); border-radius: 50%; box-shadow: 0 0 8px var(--forja-ember), inset 0 0 4px var(--forja-molten); animation: fj-collapsed-ring 5s ease-in-out infinite; }
-.fj-collapsed-ring::after { position: absolute; inset: 3px; border: 1px dashed color-mix(in srgb, var(--forja-molten) 70%, transparent); border-radius: 50%; content: ''; }
-.fj-collapsed-chip--pending { border-color: var(--forja-ember); background: var(--forja-lava); color: var(--forja-cream); box-shadow: 0 0 8px color-mix(in srgb, var(--forja-ember) 45%, transparent); animation: fj-collapsed-badge 5s ease-in-out infinite; }
-.fj-collapsed-row--pending.fj-collapsed-row--alert::before { animation: fj-collapsed-event 5s ease-in-out infinite; }
 .fj-collapsed-lock { display: grid; width: 22px; height: 22px; flex: none; place-items: center; }
 .fj-collapsed-lock img { width: 18px; height: 18px; opacity: .78; }
 .fj-collapsed-row--invite::before { background: linear-gradient(105deg, transparent 15%, color-mix(in srgb, var(--forja-gold) 16%, transparent) 46%, transparent 72%); background-size: 240% 100%; animation: fj-collapsed-shimmer 6s ease-in-out infinite; }
@@ -241,59 +237,14 @@ html, body {
 .fj-config-feedback { margin: 0; color: var(--cwc-ok); font-size: var(--cwc-fs-sm); }
 .fj-config-feedback--error { color: var(--cwc-danger-strong); }
 
-.fj-festejo-overlay { position: fixed; z-index: 10000; inset: 0; display: grid; place-items: center; padding: clamp(18px, 5vw, 64px); background: color-mix(in srgb, var(--forja-obsidian) 86%, transparent); font-family: var(--cwc-font-ui), "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"; font-variant-numeric: tabular-nums; backdrop-filter: blur(7px); }
-.fj-festejo-overlay[hidden] { display: none; }
-.fj-festejo-card { position: relative; display: flex; width: min(1040px, 94vw); max-height: calc(100dvh - 32px); min-height: min(520px, 78vh); flex-direction: column; align-items: center; justify-content: center; overflow-x: hidden; overflow-y: auto; padding: 48px 54px 42px; border: 1px solid var(--forja-lava); border-left: 6px solid var(--forja-ember); border-radius: var(--cwc-radius-lg); background: radial-gradient(circle at 50% -12%, color-mix(in srgb, var(--forja-ember) 26%, transparent), transparent 34%), linear-gradient(145deg, var(--forja-basalt), var(--forja-obsidian) 69%); box-shadow: 0 20px 48px color-mix(in srgb, var(--forja-obsidian) 70%, transparent), 0 0 32px color-mix(in srgb, var(--forja-lava) 22%, transparent), inset 0 1px color-mix(in srgb, var(--forja-gold) 12%, transparent); color: var(--forja-cream); text-align: center; }
-.fj-festejo-card::before, .fj-festejo-card::after { position: absolute; width: 48px; height: 48px; content: ''; }
-.fj-festejo-card::before { top: 14px; left: 14px; border-top: 1px solid var(--forja-gold); border-left: 1px solid var(--forja-gold); }
-.fj-festejo-card::after { right: 14px; bottom: 14px; border-right: 1px solid var(--forja-ember); border-bottom: 1px solid var(--forja-ember); }
-.fj-festejo-close { position: absolute; z-index: 3; top: 14px; right: 14px; width: 34px; min-height: 34px; padding: 0; border-color: color-mix(in srgb, var(--forja-metal) 48%, transparent); border-radius: 50%; background: var(--forja-coal); color: var(--forja-muted); }
-.fj-festejo-close:hover, .fj-festejo-close:focus-visible { border-color: var(--forja-ember); color: var(--forja-cream); outline: none; }
-.fj-festejo-position { position: absolute; top: 20px; left: 50%; color: var(--forja-muted); font: 800 var(--cwc-fs-xs)/1 var(--cwc-font-mono), "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"; transform: translateX(-50%); }
-.fj-festejo-eye { display: block; width: 112px; height: 60px; filter: drop-shadow(0 0 17px var(--forja-lava)); animation: fj-festejo-eye-pulse 1.7s ease-in-out infinite; }
-.fj-festejo-title { max-width: 900px; margin: 15px 0 0; color: var(--forja-cream); font: 900 calc(var(--cwc-fs-xl) * 1.45)/1.2 var(--cwc-font-serif), "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"; letter-spacing: .055em; text-shadow: 0 0 14px var(--forja-lava); text-transform: uppercase; }
-.fj-festejo-pr { max-width: 900px; margin: 17px auto 0; color: var(--forja-cream); font-size: var(--cwc-fs-lg); line-height: 1.45; }
-.fj-festejo-pr-list { display: grid; width: min(860px, 100%); max-height: 180px; gap: 7px; margin: 17px auto 0; overflow: auto; padding: 0; list-style: none; text-align: left; }
-.fj-festejo-pr-list li { padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--forja-metal) 28%, var(--forja-coal)); border-radius: var(--cwc-radius-sm); background: color-mix(in srgb, var(--forja-coal) 80%, transparent); color: var(--forja-cream); line-height: 1.35; }
-.fj-festejo-number { color: var(--forja-ember); font-family: var(--cwc-font-mono), "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"; font-weight: 900; }
-.fj-festejo-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 22px; }
-.fj-festejo-chip { padding: 8px 11px; border: 1px solid color-mix(in srgb, var(--forja-metal) 46%, var(--forja-coal)); border-radius: var(--cwc-radius-sm); background: var(--forja-coal); color: var(--forja-cream); font-size: var(--cwc-fs-md); }
-.fj-festejo-quote { margin: 22px 0 0; color: var(--forja-gold); font: italic var(--cwc-fs-xl)/1.3 var(--cwc-font-serif), "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"; }
-.fj-festejo-throne { margin: 13px 0 0; padding: 9px 16px; border: 1px solid color-mix(in srgb, var(--forja-gold) 55%, var(--forja-coal)); border-radius: 999px; background: var(--forja-coal); color: var(--forja-gold); font: 800 var(--cwc-fs-md)/1 var(--cwc-font-mono), "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"; }
-.fj-festejo-actions { z-index: 2; display: flex; justify-content: center; margin-top: 20px; }
-.fj-festejo-open { min-height: 35px; border-color: var(--forja-ember); background: linear-gradient(135deg, var(--forja-lava), var(--forja-ember)); color: var(--forja-obsidian); font-weight: 900; }
-.fj-festejo-embers { position: absolute; inset: 0; pointer-events: none; }
-.fj-festejo-ember { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: var(--forja-gold); box-shadow: 0 0 8px var(--forja-lava); animation: fj-festejo-ember-rise 3.8s linear infinite; }
-.fj-festejo-ember:nth-child(1) { top: 76%; left: 6%; }
-.fj-festejo-ember:nth-child(2) { top: 20%; left: 13%; animation-delay: -1.8s; }
-.fj-festejo-ember:nth-child(3) { top: 88%; left: 25%; animation-delay: -.8s; }
-.fj-festejo-ember:nth-child(4) { top: 17%; left: 72%; animation-delay: -2.2s; }
-.fj-festejo-ember:nth-child(5) { top: 74%; left: 86%; animation-delay: -1.2s; }
-.fj-festejo-ember:nth-child(6) { top: 36%; left: 94%; animation-delay: -2.8s; }
-.fj-festejo-badge { position: absolute; z-index: 4; top: 7px; right: 7px; border-color: var(--forja-ember); background: var(--forja-lava); color: var(--forja-cream); box-shadow: 0 0 10px var(--forja-lava); }
-
 @keyframes fj-anvil-strike { 0%, 72%, 100% { transform: translateY(0) scale(1); } 76% { transform: translateY(3px) scale(.995); } 80% { transform: translateY(-1px) scale(1.005); } }
 @keyframes fj-spark-burst { 0%, 70%, 100% { opacity: 0; transform: scale(.3); } 77% { opacity: 1; transform: scale(1.2); } 88% { opacity: 0; transform: scale(2); } }
-@keyframes fj-festejo-eye-pulse { 0%, 100% { filter: drop-shadow(0 0 8px var(--forja-lava)); transform: scale(.96); } 50% { filter: drop-shadow(0 0 18px var(--forja-ember)); transform: scale(1.04); } }
-@keyframes fj-festejo-ember-rise { from { opacity: 0; transform: translateY(55px); } 20% { opacity: 1; } to { opacity: 0; transform: translate(18px, -280px); } }
 @keyframes fj-collapsed-hammer { 0%, 8%, 100% { transform: rotate(-34deg); } 10% { transform: rotate(29deg) translate(-1px, 3px); } 12% { transform: rotate(-8deg); } 15%, 94% { transform: rotate(-34deg); } }
 @keyframes fj-collapsed-sparks { 0%, 8%, 18%, 100% { opacity: 0; transform: scale(.2); } 10% { opacity: 1; transform: scale(1); } 15% { opacity: 0; transform: translateY(-5px) scale(1.55); } }
 @keyframes fj-collapsed-ember { 0%, 8%, 23%, 100% { box-shadow: inset 0 0 0 transparent; } 11% { box-shadow: inset 0 0 17px color-mix(in srgb, var(--forja-ember) 18%, transparent), 0 0 10px color-mix(in srgb, var(--forja-lava) 15%, transparent); } }
-@keyframes fj-collapsed-ring { 0%, 8%, 28%, 100% { transform: rotate(0deg) scale(1); } 17% { transform: rotate(180deg) scale(1.08); } 25% { transform: rotate(360deg) scale(1); } }
-@keyframes fj-collapsed-badge { 0%, 8%, 31%, 100% { transform: scale(1); } 17% { transform: scale(1.08); box-shadow: 0 0 13px color-mix(in srgb, var(--forja-molten) 65%, transparent); } }
-@keyframes fj-collapsed-event { 0%, 8%, 34%, 100% { box-shadow: inset 0 0 0 transparent; } 17% { box-shadow: inset 0 0 18px color-mix(in srgb, var(--forja-ember) 16%, transparent), 0 0 9px color-mix(in srgb, var(--forja-lava) 18%, transparent); } }
 @keyframes fj-collapsed-shimmer { 0%, 6% { background-position: 120% 0; } 20% { background-position: -80% 0; } 21%, 100% { background-position: -80% 0; } }
 .fj-anvil { animation: fj-anvil-strike 3.2s ease-in-out infinite; }
 .fj-sparks { animation: fj-spark-burst 3.2s ease-out infinite; }
-
-@media (max-width: 700px) {
-  .fj-festejo-overlay { padding: 0; }
-  .fj-festejo-card { width: 100vw; max-height: 100dvh; min-height: 100dvh; justify-content: flex-start; padding: 50px 18px 28px; border-right: 0; border-radius: 0; }
-  .fj-festejo-title { font-size: var(--cwc-fs-xl); }
-  .fj-festejo-pr { font-size: var(--cwc-fs-md); }
-  .fj-festejo-pr-list { max-height: 150px; font-size: var(--cwc-fs-sm); }
-  .fj-festejo-chip { padding: 6px 8px; font-size: var(--cwc-fs-sm); }
-}
 
 @media (max-width: 900px) {
   .fj-modal { height: 94vh; }
@@ -321,11 +272,10 @@ html, body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fj-collapsed-row::before, .fj-collapsed-hammer, .fj-collapsed-sparks, .fj-collapsed-ring,
-  .fj-collapsed-chip, .fj-anvil, .fj-sparks, .fj-festejo-eye, .fj-festejo-ember { animation: none !important; }
+  .fj-collapsed-row::before, .fj-collapsed-hammer, .fj-collapsed-sparks,
+  .fj-collapsed-chip, .fj-anvil, .fj-sparks { animation: none !important; }
   .fj-collapsed-hammer { transform: rotate(-34deg); }
   .fj-collapsed-sparks { opacity: 0; }
-  .fj-collapsed-row--pending { box-shadow: inset 3px 0 var(--forja-ember); }
   .fj-collapsed-row--invite::before { background-position: 50% 0; opacity: .55; }
 }
 

@@ -8,13 +8,11 @@ import {
 } from './players.js';
 import { refreshOwner, startRefresher } from './refresher.js';
 import {
-  getArenaSnapshot, getFestejos, getMeSnapshot, markFestejosSeen, pendingFestejos,
-  saveGithubProfile,
+  getArenaSnapshot, getMeSnapshot, saveGithubProfile,
 } from './store.js';
 
 const VALIDATION_WINDOW_MS = 60 * 1000;
 const VALIDATION_MAX_PER_WINDOW = 8;
-const MAX_FESTEJOS_IDS = 50;
 const AUTOMATIC_REFRESH_COOLDOWN_MS = 30 * 1000;
 const validationBuckets = new Map();
 const automaticRefreshByOwner = new Map();
@@ -38,7 +36,7 @@ function publicMeSnapshot(snapshot) {
 }
 
 function refreshingSnapshotState({
-  owner, player, snapshot, pending, enqueue = refreshOwner, now = Date.now(),
+  owner, player, snapshot, enqueue = refreshOwner, now = Date.now(),
 }) {
   if (!snapshot || sameLogin(snapshot.login, player.login)) return null;
   const previous = automaticRefreshByOwner.get(owner);
@@ -49,7 +47,6 @@ function refreshingSnapshotState({
   return {
     configured: true,
     refreshing: true,
-    pendingFestejos: pending,
   };
 }
 
@@ -101,7 +98,6 @@ export default {
             configured: false,
             hint: status.configured && !status.valid ? 'identity.github.invalid' : 'identity.github',
             invalidLogin: status.configured && !status.valid,
-            pendingFestejos: 0,
           });
         }
         let snapshot = getMeSnapshot(owner);
@@ -109,51 +105,17 @@ export default {
           owner,
           player,
           snapshot,
-          pending: pendingFestejos(owner),
         });
         if (refreshing) return res.json(refreshing);
         if (!snapshot) snapshot = (await refreshOwner(owner, { rateLimitMs: 0 })).snapshot;
         if (!snapshot) return res.status(503).json({
           configured: true,
           stale: true,
-          pendingFestejos: pendingFestejos(owner),
           error: 'La Forja todavía no tiene un snapshot.',
         });
-        return res.json({ ...publicMeSnapshot(snapshot), pendingFestejos: pendingFestejos(owner) });
+        return res.json(publicMeSnapshot(snapshot));
       } catch (error) {
         return respondHandlerError(res, 'no se pudo cargar la ficha', error);
-      }
-    });
-
-    r.get('/festejos', (req, res) => {
-      try {
-        const owner = ownerOf(req);
-        return res.json({ pending: getFestejos(owner)?.pending || [] });
-      } catch (error) {
-        return respondHandlerError(res, 'no se pudieron cargar los festejos', error);
-      }
-    });
-
-    r.post('/festejos/visto', (req, res) => {
-      try {
-        const owner = ownerOf(req);
-        const numbers = req.body?.numbers ?? [];
-        const ids = req.body?.ids ?? [];
-        if ((Array.isArray(numbers) && numbers.length > MAX_FESTEJOS_IDS)
-          || (Array.isArray(ids) && ids.length > MAX_FESTEJOS_IDS)) {
-          return res.status(400).json({ error: `ids y numbers admiten hasta ${MAX_FESTEJOS_IDS} elementos.` });
-        }
-        const validNumbers = Array.isArray(numbers)
-          && numbers.every((number) => Number.isSafeInteger(number) && number > 0);
-        const validIds = Array.isArray(ids)
-          && ids.every((id) => typeof id === 'string' && /^(?:merge:\d+|deploy:[0-9a-f]{40})$/i.test(id));
-        if (!validNumbers || !validIds || (!numbers.length && !ids.length)) {
-          return res.status(400).json({ error: 'ids o numbers debe identificar al menos un festejo válido.' });
-        }
-        const state = markFestejosSeen(owner, { ids, numbers });
-        return res.json({ ok: true, pending: state.pending, pendingFestejos: state.pending.length });
-      } catch (error) {
-        return respondHandlerError(res, 'no se pudo registrar el festejo visto', error);
       }
     });
 
@@ -233,7 +195,6 @@ export default {
           owner,
           player,
           snapshot: getMeSnapshot(owner),
-          pending: pendingFestejos(owner),
         });
         if (refreshing) return res.json({ ok: true, ...refreshing });
         const result = await refreshOwner(owner);

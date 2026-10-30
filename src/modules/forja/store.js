@@ -10,7 +10,6 @@ let botPrs = null;
 // Las rutas se resuelven por llamada: nunca congelar un dataDir de usuario en
 // una constante de módulo (invariante multi-tenant BUG-2185).
 function meFile(owner) { return path.join(userDataDir(owner), 'forja', 'me.json'); }
-function festejosFile(owner) { return path.join(userDataDir(owner), 'forja', 'festejos.json'); }
 function githubProfileFile(owner) { return path.join(userDataDir(owner), 'forja', 'github-profile.json'); }
 function arenaFile() { return path.join(userDataDir(hostUser()), 'forja', 'arena.json'); }
 function botPrsFile() { return path.join(userDataDir(hostUser()), 'forja', 'bot-prs.json'); }
@@ -42,70 +41,6 @@ export function saveMeSnapshot(owner, snapshot) {
   writeJsonAtomic(meFile(owner), snapshot, { space: 2 });
   snapshots.set(owner, snapshot);
   return snapshot;
-}
-
-function normalizeFestejos(saved) {
-  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
-  return {
-    login: typeof saved.login === 'string' ? saved.login : '',
-    initializedAt: typeof saved.initializedAt === 'string' ? saved.initializedAt : null,
-    celebrated: Array.isArray(saved.celebrated)
-      ? saved.celebrated.filter(Number.isSafeInteger)
-      : [],
-    deployed: Array.isArray(saved.deployed)
-      ? saved.deployed.filter(Number.isSafeInteger)
-      : null,
-    // Un archivo anterior al modelo por estado no tiene prodSha: el refresher
-    // lo reconoce como legacy y lo siembra sin festejar historia vieja.
-    prodSha: typeof saved.prodSha === 'string' ? saved.prodSha : null,
-    pending: Array.isArray(saved.pending) ? saved.pending : [],
-  };
-}
-
-export function getFestejos(owner) {
-  return normalizeFestejos(readJson(festejosFile(owner)));
-}
-
-export function __normalizeFestejosForTests(saved) {
-  return normalizeFestejos(saved);
-}
-
-export function saveFestejos(owner, state) {
-  const next = {
-    login: String(state?.login || ''),
-    initializedAt: typeof state?.initializedAt === 'string'
-      ? state.initializedAt : new Date().toISOString(),
-    celebrated: Array.isArray(state?.celebrated)
-      ? [...new Set(state.celebrated.filter(Number.isSafeInteger))]
-      : [],
-    prodSha: typeof state?.prodSha === 'string' ? state.prodSha : null,
-    pending: Array.isArray(state?.pending) ? state.pending.slice(-10) : [],
-  };
-  // Ausente/null conserva el marcador de migración: el refresher debe sembrar
-  // todos los PR actuales antes de empezar a detectar producción.
-  if (Array.isArray(state?.deployed)) {
-    next.deployed = [...new Set(state.deployed.filter(Number.isSafeInteger))];
-  }
-  writeJsonAtomic(festejosFile(owner), next, { space: 2 });
-  return next;
-}
-
-export function pendingFestejos(owner) {
-  return getFestejos(owner)?.pending.length || 0;
-}
-
-export function markFestejosSeen(owner, { ids = [], numbers = [] } = {}) {
-  const state = getFestejos(owner);
-  if (!state) return { pending: [] };
-  const seenIds = new Set(ids);
-  const seenNumbers = new Set(numbers);
-  return saveFestejos(owner, {
-    ...state,
-    pending: state.pending.filter((festejo) => {
-      if (typeof festejo?.id === 'string' && seenIds.has(festejo.id)) return false;
-      return !seenNumbers.has(festejo?.number);
-    }),
-  });
 }
 
 export function getGithubProfile(owner) {

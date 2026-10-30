@@ -20,14 +20,6 @@ function initialsFor(name, login) {
   return (parts.length === 1 ? String(login || parts[0]).slice(0, 2) : `${parts[0][0]}${parts.at(-1)[0]}`).toUpperCase();
 }
 
-function firstGivenName(value) {
-  return String(value || '').trim().split(/\s+/).find((token) => /\p{L}/u.test(token)) || null;
-}
-
-export function celebrationNameFrom(identityName, profileName) {
-  return firstGivenName(identityName) || firstGivenName(profileName) || null;
-}
-
 function needsGithubName(identityName, login, profile, now = Date.now()) {
   if (identityName) return false;
   const matches = profile && profile.login.toLowerCase() === login.toLowerCase();
@@ -81,7 +73,6 @@ export function resolvePlayers({ warnDuplicateClaims = true } = {}) {
       username,
       login,
       displayName,
-      celebrationName: celebrationNameFrom(identityName, profileName),
       initials: initialsFor(displayName, login),
       needsGithubName: needsGithubName(identityName, login, profile),
     });

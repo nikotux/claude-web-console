@@ -17,26 +17,11 @@ son LIBRERÍAS SHARED que otros módulos consumen (NO es un módulo
 registrado): `shared.js` (constantes ~/.cwc-data/comms/*, contactos/
 self/overrides, buildIndex(), ledgers JSONL, y las constantes
 WHATSAPP_* que usa el daemon), `pr-read-shared.js` (LECTOR ÚNICO de
-PRs y despliegues de GitHub — lo importan `tickets/sources.js` y `forja/refresher.js`;
+PRs de GitHub — lo importan los runners de comunicaciones y `forja/refresher.js`;
 `listMergedPrsByAuthor()` usa repo explícito Tolkien, incluye `mergeCommit` y `headRefOid`, caché
 por autor de 150 s y fallback `_stale` al último bueno; `getLatestMergedActivity()`
 sondea sin caché el PR mergeado actualizado más reciente; `githubUserExists()`
-resuelve existencia, login canónico y nombre con caché corta;
-`getCurrentProductionSha()` recorre una página de runs exitosos `deploy-v2.yml`
-del más nuevo al más viejo hasta el primer `operation=deploy`, y acepta el SHA
-solo desde el JSON estricto de `EXPECTED_ARTIFACT_JSON.sourceSha` emitido por el
-mismo job; operaciones o SHAs contradictorios dejan el run inclasificable. La
-caché por run está versionada (`run-v2-*`) y limita cada lectura a cinco logs:
-prioriza runs nunca inspeccionados, de nuevo a viejo, y recién después reintenta
-inclasificables cuyo TTL venció. Deploys, no-deploys y logs no disponibles se
-cachean permanentemente; un run inclasificable reciente vence a los 10 min y
-uno terminado hace más de una hora queda permanente. Errores de red/5xx no se
-cachean y hacen caer al último estado bueno marcado `_stale`. Los runs
-`OPERATION: rollback` se clasifican como no-deploy y se omiten: no representan
-el estado actual de producción en este modelo simplificado.
-`listCommitsBetween(base,head)` pagina compare, devuelve commits `ahead` y los
-exclusivos del head en `diverged`, deja `behind` vacío y cachea permanentemente
-cada par inmutable),
+resuelve existencia, login canónico y nombre con caché corta),
 `gateway-shared.js`
 (GATEWAY de envíos Desk/Teams/GitHub — lo importa el CLI
 `bin/cwc-comms.js`; el send-runner aborta a los 5 min y persiste `status:"timeout"`), `teams-shared.js` · `chatbot-shared.js` ·

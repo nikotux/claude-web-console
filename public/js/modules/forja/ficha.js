@@ -119,7 +119,6 @@ function collapsedVisual(data) {
       chip: t('forja.collapsed.loading', 'Calentando…'),
     };
   }
-  const pending = Math.max(0, Number(data?.pendingFestejos) || 0);
   if (data?.refreshingTerminal) {
     return {
       visual: node('span', 'fj-collapsed-lock', '!'),
@@ -141,18 +140,6 @@ function collapsedVisual(data) {
     image.alt = '';
     visual.appendChild(image);
     return { visual, mode: 'invite', chip: t('forja.collapsed.waiting', 'Tu ficha te espera') };
-  }
-  if (pending) {
-    return {
-      visual: node('span', 'fj-collapsed-ring'),
-      mode: 'pending',
-      chip: t('forja.collapsed.pending', '+{count} {label}', {
-        count: pending,
-        label: pending === 1
-          ? t('forja.collapsed.festejo.one', 'festejo')
-          : t('forja.collapsed.festejo.many', 'festejos'),
-      }),
-    };
   }
   const visual = node('span', 'fj-collapsed-forge');
   const anvil = document.createElement('img');
@@ -191,9 +178,8 @@ function header(el, state, actions, panelId) {
   toggle.append(chevron, brand);
   if (!open) {
     collapsed.visual.setAttribute('aria-hidden', 'true');
-    const chip = node('span', `fj-collapsed-chip${collapsed.mode === 'pending' ? ' fj-collapsed-chip--pending' : ''}`, collapsed.chip);
+    const chip = node('span', 'fj-collapsed-chip', collapsed.chip);
     toggle.append(collapsed.visual, chip);
-    if (collapsed.mode === 'pending' && !state.pendingNoticed) toggle.classList.add('fj-collapsed-row--alert');
   }
   const help = node('span');
   help.innerHTML = helpBtn('forja');
@@ -214,13 +200,6 @@ function renderLoading(el) {
 
 function renderConfigured(el, data, onOpen) {
   const card = node('div', 'fj-ficha');
-  const pending = Math.max(0, Number(data.pendingFestejos) || 0);
-  if (pending) {
-    const badge = node('span', 'fj-chip fj-festejo-badge', `+${pending}`);
-    badge.setAttribute('aria-label', t('forja.festejo.pendingBadge', '{count} festejos pendientes', { count: pending }));
-    card.appendChild(badge);
-  }
-
   const player = node('div', 'fj-ficha-player');
   const emblemWrap = node('div', 'fj-emblem-wrap');
   const emblem = document.createElement('img');
