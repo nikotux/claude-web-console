@@ -14,6 +14,7 @@ import { placeFor, resolvePlace, PLACES, LIMBO_PLACE } from '../../ui/places.js'
 import { readCache, writeCache } from '../../ui/cache-store.js';
 import { t } from '../../ui/i18n.js';
 import { helpBtn } from '../../ui/help.js';
+import { milestoneChipText, milestoneGlyph } from '../../ui/pr-milestone.js';
 
 // Punto de estado de una tarjeta: motor Pac-Man (ui/pacman.js) — color Y
 // animación por estado vienen del catálogo central (ver ui.css); acá solo
@@ -595,6 +596,27 @@ export default {
         </div>`;
     }
 
+    function syncPrBadge(cardEl, c, kidCount) {
+      const badge = c.prBadge || null;
+      const key = badge ? `${badge.kind}:${badge.number}` : '';
+      const toggle = cardEl.querySelector('.sess-kids-toggle');
+      const hideToggle = !!badge && kidCount === 0;
+      if (toggle && toggle.hidden !== hideToggle) toggle.hidden = hideToggle;
+      if (cardEl.dataset.hitoKey === key) return;
+      cardEl.dataset.hitoKey = key;
+      cardEl.classList.toggle('hito-card', !!badge);
+      cardEl.querySelector('.sess-pac')?.classList.toggle('hito-status-ring', !!badge);
+      cardEl.querySelector('.hito-session-chip')?.remove();
+      if (!badge) return;
+      const chip = document.createElement('span');
+      chip.className = 'hito-session-chip';
+      chip.dataset.kind = badge.kind;
+      chip.title = milestoneChipText(badge);
+      chip.innerHTML = `${milestoneGlyph(badge.kind, { size: 12 })}<span>${milestoneChipText(badge)}</span>`;
+      const row2 = cardEl.querySelector('.sess-row2');
+      if (row2) row2.insertBefore(chip, toggle || null);
+    }
+
     function syncKids(cardEl, c) {
       const key = `chat:${c.id}`;
       cardEl._cwcKidsChat = c;
@@ -638,6 +660,7 @@ export default {
           : (open ? t('sessions.live.hideKids', 'Ocultar trabajos de esta sesión') : t('sessions.live.showKids', 'Ver trabajos de esta sesión'));
         toggle.innerHTML = `${icon(open ? 'chevronDown' : 'chevronRight', { size: 12 })}<span class="sess-kids-n">${kids.length}</span>`;
       }
+      syncPrBadge(cardEl, c, kids.length);
       box.hidden = !open;
       box.innerHTML = kids.length
         ? kids.map(kidRowHtml).join('')
@@ -2452,7 +2475,7 @@ export default {
             const c = chatMap.get(key);
             const dot = chatDotInfo(c, tmuxByName);
             const dotEl = cardEl.querySelector('.sess-pac');
-            dotEl.className = pacCls(dot.state);
+            dotEl.className = `${pacCls(dot.state)}${c.prBadge ? ' hito-status-ring' : ''}`;
             dotEl.title = dot.label;
             const isTui = c.viewMode === 'tui';
             const icEl = cardEl.querySelector('.sess-type-ic');

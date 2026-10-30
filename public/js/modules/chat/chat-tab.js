@@ -17,6 +17,7 @@ import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
 import { t } from '../../ui/i18n.js';
 import { helpBtn } from '../../ui/help.js';
 import { avatarFor, avatarNodeFrom } from '../../ui/avatars.js';
+import { milestoneGlyph, milestoneToastTitle, milestoneTrackHtml } from '../../ui/pr-milestone.js';
 import { openPeticionDialog } from '../visado/peticion-dialog.js';
 import { fetchPreview } from '../visado/api.js';
 
@@ -327,6 +328,11 @@ export class ChatTab {
     this._historyRendering = false;
     this._historySayIndex = 0;
     this._historySayTotal = 0;
+    this._prQueue = [];
+    this._prKeys = new Set();
+    this._prCurrent = null;
+    this._prToastTimer = null;
+    this._active = false;
     this._salaSayCount = 0;
     this._salaAskCount = 0;
     this._cutPending = false;
@@ -384,6 +390,7 @@ export class ChatTab {
             aria-pressed="false">${icon('docMode', { size: 15 })}</button>
           ${helpBtn('chat')}
         </header>
+        <div class="hito-toast-host" aria-live="polite" aria-atomic="true"></div>
         <div class="chat-body">
           <div class="chat-main">
             <details class="chat-acta" hidden>
@@ -433,6 +440,9 @@ export class ChatTab {
     this.titleEl = container.querySelector('.chat-title');
     this.titleEl.title = this.title;
     this.worldEl = container.querySelector('.chat-world');
+    this.prToastHost = container.querySelector('.hito-toast-host');
+    this._onPrVisibility = () => this._drainPrMilestones();
+    document.addEventListener('visibilitychange', this._onPrVisibility);
     this.peersEl = container.querySelector('.chat-peers');
     this.visadoBtn = container.querySelector('.chat-visado-btn');
     this.visadoBtn.addEventListener('click', () => {
@@ -1204,6 +1214,7 @@ export class ChatTab {
         this._effort = m.effort || null;           // eje thinking effort (PEND-391 #3): 2ª línea del banderín
         this._effortPinned = !!m.effortPinned;
         this._applyModel(m.model); // sin auto: solo poblar el badge al abrir/reconectar
+        this._enqueuePrMilestones(m.prMilestones);
         this._sendInitialPrompt();
         // Historial renderizado: destraba al splash de arranque (ver arriba).
         this._readyResolve?.();
@@ -1266,6 +1277,9 @@ export class ChatTab {
       // `active` al instante, sin esperar el poll de 8 s.
       case 'interfono':
         window.dispatchEvent(new CustomEvent('cwc:interfono', { detail: { chatId: this.id, pending: m.pending || [] } }));
+        break;
+      case 'pr-milestone':
+        this._enqueuePrMilestones([m.milestone]);
         break;
       case 'result': this._result(m); break;
       case 'status': this._setWorking(m.state === 'working'); break;
@@ -2990,6 +3004,66 @@ export class ChatTab {
     });
   }
 
+  _enqueuePrMilestones(items) {
+    for (const milestone of Array.isArray(items) ? items : []) {
+      if (!milestone?.key || this._prKeys.has(milestone.key)) continue;
+      this._prKeys.add(milestone.key);
+      this._prQueue.push(milestone);
+    }
+    this._drainPrMilestones();
+  }
+
+  _drainPrMilestones() {
+    if (this._prCurrent || !this._prQueue.length || !this._active || document.visibilityState !== 'visible') return;
+    const milestone = this._prQueue.shift();
+    this._prCurrent = milestone;
+    const toast = document.createElement('div');
+    toast.className = 'hito-toast';
+    toast.dataset.kind = milestone.kind;
+    toast.setAttribute('role', 'link');
+    toast.tabIndex = 0;
+    toast.innerHTML = `
+      <span class="hito-toast-mark">${milestoneGlyph(milestone.kind, { size: 16 })}</span>
+      <span class="hito-toast-copy">
+        <span class="hito-toast-title">${milestoneToastTitle(milestone.kind)} <span>${t('chat.prMilestone.prNumber', '· PR #{number}', { number: milestone.number })}</span></span>
+        <span class="hito-track">${milestoneTrackHtml(milestone)}</span>
+      </span>
+      <button type="button" class="hito-toast-close" title="${t('chat.prMilestone.close', 'Cerrar')}" aria-label="${t('chat.prMilestone.close', 'Cerrar')}">×</button>
+      <span class="hito-toast-drain" aria-hidden="true"></span>`;
+    const open = () => {
+      if (milestone.url) window.open(milestone.url, '_blank', 'noopener');
+    };
+    toast.addEventListener('click', (event) => { if (!event.target.closest('.hito-toast-close')) open(); });
+    toast.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
+    });
+    toast.querySelector('.hito-toast-close').addEventListener('click', () => this._dismissPrMilestone());
+    this.prToastHost.replaceChildren(toast);
+    this._ackPrMilestones([milestone.key]);
+    this._prToastTimer = setTimeout(() => this._dismissPrMilestone(), 5000);
+  }
+
+  _dismissPrMilestone() {
+    clearTimeout(this._prToastTimer);
+    this._prToastTimer = null;
+    this._prCurrent = null;
+    this.prToastHost?.replaceChildren();
+    this._drainPrMilestones();
+  }
+
+  _ackPrMilestones(keys) {
+    void fetch(`/api/chat/${encodeURIComponent(this.id)}/pr-milestones/seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys }),
+    }).catch(() => { /* el poll conserva el chip y permite reintentar tras recargar */ });
+  }
+
+  setActive(active) {
+    this._active = !!active;
+    if (this._active) this._drainPrMilestones();
+  }
+
   // Recalcula el alto del textarea según su contenido. NO fija 0px cuando el
   // pane está oculto (display:none) o sin layout: ahí scrollHeight es 0 y
   // fijarlo colapsaría el input a un sliver ilegible (bug: composer chico e
@@ -3004,6 +3078,7 @@ export class ChatTab {
   }
 
   focus() {
+    this.setActive(true);
     // Re-anclar SIEMPRE al final al activar la pestaña: mientras el panel está
     // oculto (display:none) scrollTop se pierde (scrollHeight=0), así que el
     // historial re-renderizado o los eventos llegados en background dejaban la
@@ -3022,6 +3097,8 @@ export class ChatTab {
   dispose() {
     this.closedByUser = true;
     window.removeEventListener(DOC_MODE_EVENT, this._onDocMode);
+    document.removeEventListener('visibilitychange', this._onPrVisibility);
+    clearTimeout(this._prToastTimer);
     this._slashClose();
     this._clearTyping();
     this._stopPreviewPolling();

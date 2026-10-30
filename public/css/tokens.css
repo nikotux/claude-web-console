@@ -33,6 +33,11 @@
          segundo acento de marca — solo barra/detalles del hablante IA) ===== */
   --cwc-accent-cool: #5b8fc7;
 
+  /* ===== Hitos de PR (señales sobrias, compartidas por consola y Cabina) ===== */
+  --hito-ember: #c27a57;
+  --hito-sage: #78917b;
+  --hito-steel: #71869d;
+
   /* ===== La Forja (paleta semántica del HUD, salón privado y arena) ===== */
   --forja-obsidian: #090706;
   --forja-coal: #17110e;

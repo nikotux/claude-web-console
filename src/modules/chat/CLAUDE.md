@@ -2126,6 +2126,15 @@ que las demás escrituras del chat, acepta hasta 20 claves
 compacto restante. La lógica pura y su contrato de presupuesto viven en
 `pr-milestones.js`; la prueba determinista es `bin/cwc-test-pr-milestones.js`.
 
+La UI comparte glifos/textos en `public/js/ui/pr-milestone.js`. `ChatTab`
+encola history + eventos WS, espera pestaña activa y documento visible, muestra
+un solo toast dentro del pane durante 5 s y confirma su clave al empezar a
+mostrarlo; `focus()`/`setActive()` reutilizan el hook de activación existente y
+`visibilitychange` despierta la cola sin polling nuevo. El mismo `prBadge` del
+poll existente reemplaza el contador idle de trabajos en la tarjeta de
+Sesiones, marca el punto del rail y deja un glifo mínimo en Cabina. La paleta
+semántica vive en `tokens.css` y todo el bloque compartido usa prefijo `hito-`.
+
 ## Sala con entorno de preview (PLAN-3236 E2/E3)
 Una sala resuelve su entorno efímero por `salaId`, porque el registro usa ese valor como `chatId`.
 `Chat._salaEnv()` exige registro vivo y worktree existente, separado siempre de `chat.tolkienEnv`.

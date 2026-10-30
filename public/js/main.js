@@ -12,6 +12,7 @@ import { initInterfonoCenter } from './ui/interfono-center.js';
 import { initI18n, applyI18n, t } from './ui/i18n.js';
 import { bindHelp, helpBtn, openHelpIndex } from './ui/help.js';
 import { allowModule } from './ui/profile.js';
+import { milestoneChipText, milestoneGlyph } from './ui/pr-milestone.js';
 import { initAuxBar } from './modules/mobile/auxbar.js';
 
 import launcher from './modules/launcher/launcher.js';
@@ -71,12 +72,25 @@ function paintChip(entry, modelKey) {
   }
 }
 
+function syncRailMilestone(entry, badge) {
+  const key = badge ? `${badge.kind}:${badge.number}` : '';
+  const changed = entry.statusDot.dataset.hitoKey !== key;
+  entry.statusDot.dataset.hitoKey = key;
+  entry.statusDot.classList.toggle('hito-rail-glyph', !!badge);
+  if (badge) entry.statusDot.dataset.kind = badge.kind;
+  else delete entry.statusDot.dataset.kind;
+  if (!changed) return;
+  entry.statusDot.innerHTML = badge ? milestoneGlyph(badge.kind, { size: 12 }) : '';
+  entry.statusDot.title = badge ? milestoneChipText(badge) : '';
+}
+
 function setActive(id) {
   activeId = id;
   for (const [tid, entry] of tabs) {
     const on = tid === id;
     entry.pane.classList.toggle('active', on);
     entry.tabButton.classList.toggle('active', on);
+    entry.tab?.setActive?.(on);
     if (on) {
       // Lazy-connect: una conversación (vista Chat) abre su WebSocket —y recién
       // ahí el server le baja el historial— al MOSTRARSE por primera vez, no al
@@ -336,6 +350,7 @@ async function pollTabStatus() {
         cls = st === 'working' ? 'st-working' : st === 'waiting' ? 'st-waiting' : s?.model ? 'st-idle' : 'st-shell';
       }
       entry.statusDot.className = `rail-status ${cls}`;
+      syncRailMilestone(entry, entry.type === 'chat' ? byChat.get(id)?.prBadge : null);
     }
     if (titleChanged) bus.dispatchEvent(new Event('sessions-changed'));
   } catch { /* noop */ }

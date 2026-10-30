@@ -2075,6 +2075,80 @@ html, body {
 /* Salto de línea flex del header (ver el bloque de móvil): en escritorio no
    existe, así que el header sigue siendo UNA sola fila como siempre. */
 .chat-head-break { display: none; }
+
+/* ===== Hitos de PR por sesión ===== */
+.hito-glyph { display: inline-block; flex: none; vertical-align: middle; }
+.hito-glyph[data-kind="approved"],
+.hito-toast[data-kind="approved"],
+.hito-session-chip[data-kind="approved"],
+.hito-rail-glyph[data-kind="approved"] { color: var(--hito-sage); }
+.hito-glyph[data-kind="merged"],
+.hito-toast[data-kind="merged"],
+.hito-session-chip[data-kind="merged"],
+.hito-rail-glyph[data-kind="merged"] { color: var(--hito-ember); }
+.hito-glyph[data-kind="deployed"],
+.hito-toast[data-kind="deployed"],
+.hito-session-chip[data-kind="deployed"],
+.hito-rail-glyph[data-kind="deployed"] { color: var(--hito-steel); }
+.chat-view:has(> .hito-toast-host) { position: relative; }
+.hito-toast-host {
+  position: absolute; z-index: 12; top: 3.25rem; right: .75rem; width: min(320px, calc(100% - 1.5rem));
+  pointer-events: none;
+}
+.hito-toast {
+  position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr) 20px;
+  align-items: start; gap: .55rem; overflow: hidden; padding: .65rem .65rem .72rem;
+  border: 1px solid color-mix(in srgb, currentColor 38%, var(--cwc-border));
+  border-radius: var(--cwc-radius-lg); background: color-mix(in srgb, var(--cwc-bg-elevated) 94%, currentColor 6%);
+  box-shadow: var(--cwc-shadow-md); cursor: pointer; pointer-events: auto;
+}
+.hito-toast:hover { border-color: color-mix(in srgb, currentColor 58%, var(--cwc-border)); }
+.hito-toast:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.hito-toast-mark {
+  display: grid; place-items: center; width: 24px; height: 24px;
+  border: 1px solid color-mix(in srgb, currentColor 36%, transparent); border-radius: 50%;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.hito-toast-copy { display: flex; min-width: 0; flex-direction: column; gap: .35rem; }
+.hito-toast-title { color: var(--cwc-text); font-size: var(--cwc-fs-sm); font-weight: 650; }
+.hito-toast-title > span { color: var(--cwc-text-dim); font-weight: 500; }
+.hito-toast-close {
+  display: grid; place-items: center; width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; color: var(--cwc-text-dim);
+  font: inherit; cursor: pointer;
+}
+.hito-toast-close:hover { background: var(--cwc-bg-hover); color: var(--cwc-text); }
+.hito-track { display: flex; align-items: center; gap: .22rem; min-width: 0; color: var(--cwc-text-dimmer); }
+.hito-track-stage { display: inline-flex; align-items: center; gap: .16rem; font-size: var(--cwc-fs-2xs); white-space: nowrap; }
+.hito-track-stage.is-done { color: var(--cwc-text-dim); }
+.hito-track-sep { color: var(--cwc-border-strong); font-size: var(--cwc-fs-2xs); }
+.hito-toast-drain {
+  position: absolute; right: 0; bottom: 0; left: 0; height: 2px; transform-origin: left;
+  background: currentColor; animation: hito-drain 5s linear forwards;
+}
+.hito-toast:hover .hito-toast-drain { animation-play-state: paused; }
+@keyframes hito-drain { to { transform: scaleX(0); } }
+
+.hito-card { border-left: 2px solid color-mix(in srgb, var(--hito-ember) 55%, var(--cwc-border)); }
+.hito-status-ring { outline: 1px solid color-mix(in srgb, var(--hito-ember) 46%, transparent); outline-offset: 2px; border-radius: 50%; }
+.hito-session-chip {
+  display: inline-flex; align-items: center; gap: .2rem; min-width: 0; max-width: 10.5rem;
+  margin-left: auto; padding: .08rem .3rem; border: 1px solid color-mix(in srgb, currentColor 32%, var(--cwc-border));
+  border-radius: 999px; background: color-mix(in srgb, currentColor 8%, var(--cwc-bg-chip));
+  font-size: var(--cwc-fs-2xs); line-height: 1.2; white-space: nowrap;
+}
+.hito-session-chip > span { overflow: hidden; color: var(--cwc-text-secondary); text-overflow: ellipsis; }
+.rail-status.hito-rail-glyph {
+  display: grid; place-items: center; top: -5px; left: -5px; width: 14px; height: 14px;
+  border: 1px solid var(--cwc-bg-panel); background: var(--cwc-bg-elevated); opacity: 1; animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hito-toast-drain { animation: none; }
+}
+@media (max-width: 768px) {
+  .hito-toast-host { top: 5.5rem; right: .5rem; width: min(320px, calc(100% - 1rem)); }
+}
 /* Insignia de MUNDO del header (anti-confusión, PLAN-373): SIEMPRE visible en qué
    mundo está la conversación, con color de identidad. 🏠 Mi Consola = acento
    terracota · 🌳 Tolkien = verde · otro = neutro. */

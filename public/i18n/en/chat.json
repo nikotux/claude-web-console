@@ -317,5 +317,17 @@
   "chat.help.sala.tokens.orchestrate.k": "Orchestrate",
   "chat.help.sala.tokens.orchestrate.v": "Uses no tokens by itself. Usage begins later only if you send the message from the new conversation.",
   "chat.help.sala.warning.title": "Watch out",
-  "chat.help.sala.warning.text": "AI turns are charged to the room host, no matter who taps the cut button. Guests see the entire shared thread, including earlier messages and AI answers."
+  "chat.help.sala.warning.text": "AI turns are charged to the room host, no matter who taps the cut button. Guests see the entire shared thread, including earlier messages and AI answers.",
+  "chat.prMilestone.chip.approved": "#{number} · the Eye approves",
+  "chat.prMilestone.chip.merged": "#{number} · ring forged",
+  "chat.prMilestone.chip.deployed": "#{number} · burning in prod",
+  "chat.prMilestone.toast.approved": "The Eye approves",
+  "chat.prMilestone.toast.merged": "Ring forged",
+  "chat.prMilestone.toast.deployed": "Burning in Barad-dûr",
+  "chat.prMilestone.prNumber": "· PR #{number}",
+  "chat.prMilestone.stage.approved": "Approved",
+  "chat.prMilestone.stage.merged": "Merged",
+  "chat.prMilestone.stage.deployed": "Production",
+  "chat.prMilestone.pending": "pending",
+  "chat.prMilestone.close": "Close"
 }

@@ -4,6 +4,7 @@ import { PLACES, resolvePlace } from '../ui/places.js';
 import { icon } from '../ui/icons.js';
 import { t } from '../ui/i18n.js';
 import { confirmDialog, promptDialog } from '../ui/dialog.js';
+import { milestoneChipText, milestoneGlyph } from '../ui/pr-milestone.js';
 
 let dispose = () => {};
 let mountGeneration = 0;
@@ -44,6 +45,7 @@ function belongsToIdentity(chat, identity) {
 }
 
 function stateLabel(chat, state) {
+  if (chat.prBadge) return milestoneChipText(chat.prBadge);
   if (chat.archived) return t('cabina.conversaciones.archived', 'Archivada');
   if (state === 'working') return chat.delegating
     ? t('cabina.conversaciones.delegating', 'Delegando')
@@ -152,8 +154,10 @@ function floatingPanelIcon(name) {
 
 function rowHtml(chat, ctx, container, { draggable = true } = {}) {
   const state = stateOf(chat);
+  const milestone = chat.prBadge || null;
+  const stateText = stateLabel(chat, state);
   return `
-    <div class="cab-fs-item cab-fs-item--${state}${state === 'working' ? ' cab-fs-item--active' : ''}"
+    <div class="cab-fs-item cab-fs-item--${state}${state === 'working' ? ' cab-fs-item--active' : ''}${milestone ? ' hito-cabina-row' : ''}"
       data-chat-id="${escapeHtml(chat.id)}" data-order-key="${escapeHtml(chatKey(chat))}"
       data-container="${escapeHtml(container || '')}" data-world="${escapeHtml(chatWorld(chat))}"
       draggable="${draggable ? 'true' : 'false'}">
@@ -163,9 +167,8 @@ function rowHtml(chat, ctx, container, { draggable = true } = {}) {
           <span class="cab-fs-item-name">${escapeHtml(chat.title || t('cabina.conversaciones.untitledConversation', 'Conversación sin título'))}</span>
           <span class="cab-fs-item-meta">${escapeHtml(conversationMeta(chat, state))}</span>
         </span>
-        <span class="cab-status-chip cab-status-chip--${state}">
-          ${stateIcon(ctx, state)}
-          ${escapeHtml(stateLabel(chat, state))}
+        <span class="cab-status-chip cab-status-chip--${state}${milestone ? ' hito-cabina-glyph' : ''}"${milestone ? ` data-kind="${escapeHtml(milestone.kind)}" title="${escapeHtml(stateText)}" aria-label="${escapeHtml(stateText)}"` : ''}>
+          ${milestone ? milestoneGlyph(milestone.kind, { size: 14 }) : `${stateIcon(ctx, state)} ${escapeHtml(stateText)}`}
         </span>
       </div>
       <button class="cab-fs-more" type="button" data-chat-menu aria-label="${escapeHtml(t('cabina.conversaciones.conversationOptions', 'Opciones de {title}', { title: chat.title || t('cabina.conversaciones.theConversation', 'la conversación') }))}" title="${t('cabina.conversaciones.options', 'Opciones')}">⋯</button>
