@@ -48,6 +48,7 @@ export function normalizePrLinks(value) {
       deployedAt: validDate(raw.deployedAt),
       deploySha: validSha(raw.deploySha),
       closed: raw.closed === true,
+      baseline: raw.baseline === true,
       pending,
     });
     if (links.length === 10) break;
@@ -99,6 +100,27 @@ export function applyDeployment(current, { deploySha, deployedAt, firstObservati
   const predatesLink = Date.parse(link.deployedAt) < Date.parse(link.linkedAt);
   const milestones = firstObservation || predatesLink ? [] : ['deployed'];
   if (milestones.length && !link.pending.includes('deployed')) link.pending.push('deployed');
+  return { link, milestones };
+}
+
+export function applyPrObservation(current, observed, deployInfo = null, { now = new Date().toISOString() } = {}) {
+  const normalized = normalizePrLinks([current])[0];
+  if (!normalized || !observed) return { link: current, milestones: [] };
+  const firstObservation = normalized.baseline === true;
+  const transition = applyPrTransitions(normalized, observed, { now, firstObservation });
+  let link = transition.link;
+  const milestones = [...transition.milestones];
+  if (deployInfo?.deployed) {
+    const deployment = applyDeployment(link, {
+      deploySha: deployInfo.deploySha,
+      deployedAt: deployInfo.deployedAt,
+      firstObservation,
+    });
+    link = deployment.link;
+    milestones.push(...deployment.milestones);
+  }
+  // El baseline durable se consume incluso si GitHub no reportó cambios.
+  link.baseline = false;
   return { link, milestones };
 }
 

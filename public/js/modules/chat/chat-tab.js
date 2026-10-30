@@ -332,6 +332,9 @@ export class ChatTab {
     this._prKeys = new Set();
     this._prCurrent = null;
     this._prToastTimer = null;
+    this._prToastRemainingMs = 0;
+    this._prToastStartedAt = 0;
+    this._prToastPauseReasons = new Set();
     this._active = false;
     this._salaSayCount = 0;
     this._salaAskCount = 0;
@@ -3014,7 +3017,9 @@ export class ChatTab {
   }
 
   _drainPrMilestones() {
-    if (this._prCurrent || !this._prQueue.length || !this._active || document.visibilityState !== 'visible') return;
+    const host = this.prToastHost;
+    if (this._prCurrent || !this._prQueue.length || !this._active || document.visibilityState !== 'visible'
+      || !host?.isConnected || host.getClientRects().length === 0) return;
     const milestone = this._prQueue.shift();
     this._prCurrent = milestone;
     const toast = document.createElement('div');
@@ -3037,15 +3042,56 @@ export class ChatTab {
     toast.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
     });
+    toast.addEventListener('pointerenter', () => this._pausePrMilestone('pointer'));
+    toast.addEventListener('pointerleave', () => this._resumePrMilestone('pointer'));
+    toast.addEventListener('focusin', () => this._pausePrMilestone('focus'));
+    toast.addEventListener('focusout', (event) => {
+      if (!toast.contains(event.relatedTarget)) this._resumePrMilestone('focus');
+    });
     toast.querySelector('.hito-toast-close').addEventListener('click', () => this._dismissPrMilestone());
-    this.prToastHost.replaceChildren(toast);
+    host.replaceChildren(toast);
+    if (!toast.isConnected || toast.getClientRects().length === 0) {
+      host.replaceChildren();
+      this._prCurrent = null;
+      this._prQueue.unshift(milestone);
+      return;
+    }
     this._ackPrMilestones([milestone.key]);
-    this._prToastTimer = setTimeout(() => this._dismissPrMilestone(), 5000);
+    this._prToastRemainingMs = 5000;
+    this._prToastPauseReasons.clear();
+    this._startPrMilestoneTimer();
+  }
+
+  _startPrMilestoneTimer() {
+    if (!this._prCurrent || this._prToastPauseReasons.size) return;
+    this._prToastStartedAt = performance.now();
+    this._prToastTimer = setTimeout(() => this._dismissPrMilestone(), this._prToastRemainingMs);
+  }
+
+  _pausePrMilestone(reason) {
+    if (!this._prCurrent || this._prToastPauseReasons.has(reason)) return;
+    this._prToastPauseReasons.add(reason);
+    if (this._prToastTimer !== null) {
+      clearTimeout(this._prToastTimer);
+      this._prToastTimer = null;
+      this._prToastRemainingMs = Math.max(0, this._prToastRemainingMs - (performance.now() - this._prToastStartedAt));
+    }
+    this.prToastHost?.firstElementChild?.classList.add('is-paused');
+  }
+
+  _resumePrMilestone(reason) {
+    this._prToastPauseReasons.delete(reason);
+    if (!this._prCurrent || this._prToastPauseReasons.size) return;
+    this.prToastHost?.firstElementChild?.classList.remove('is-paused');
+    if (this._prToastRemainingMs <= 0) this._dismissPrMilestone();
+    else this._startPrMilestoneTimer();
   }
 
   _dismissPrMilestone() {
     clearTimeout(this._prToastTimer);
     this._prToastTimer = null;
+    this._prToastRemainingMs = 0;
+    this._prToastPauseReasons.clear();
     this._prCurrent = null;
     this.prToastHost?.replaceChildren();
     this._drainPrMilestones();

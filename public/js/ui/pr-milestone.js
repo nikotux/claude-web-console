@@ -9,11 +9,11 @@ export function milestoneKind(kind) {
 export function milestoneGlyph(kind, { size = 14, className = '' } = {}) {
   const safe = milestoneKind(kind);
   const paths = {
-    approved: '<path d="M1.5 8s2.2-4 6.5-4 6.5 4 6.5 4-2.2 4-6.5 4S1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="1.8"/>',
-    merged: '<circle cx="8" cy="8" r="5.2"/><path d="M8 2.8v10.4M2.8 8h10.4"/>',
-    deployed: '<path d="M5.5 13.5h5M6.4 13.5 7 5.2h2l.6 8.3M7 5.2 8 1.8l1 3.4M5.8 8.5h4.4M4.4 13.5h7.2"/>',
+    approved: '<path d="M1 6s1.8-3 5-3 5 3 5 3-1.8 3-5 3-5-3-5-3Z"/><path d="M6 4.35v3.3"/>',
+    merged: '<circle cx="6" cy="6.4" r="4.25"/><path d="M4.8 2.25 6 1l1.2 1.25"/>',
+    deployed: '<path d="M2.2 10h7.6M3.8 10 4.7 4.2 6 2l1.3 2.2.9 5.8M4.35 6.1 6 5.15 7.65 6.1M6 2V.8"/>',
   };
-  return `<svg class="hito-glyph ${className}" data-kind="${safe}" viewBox="0 0 16 16" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[safe]}</svg>`;
+  return `<svg class="hito-glyph ${className}" data-kind="${safe}" viewBox="0 0 12 12" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[safe]}</svg>`;
 }
 
 export function milestoneChipText({ kind, number } = {}) {

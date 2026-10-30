@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import {
-  acknowledgeMilestones, applyPrTransitions, buildPrGraphqlQuery,
+  acknowledgeMilestones, applyPrObservation, applyPrTransitions, buildPrGraphqlQuery,
   extractTolkienPrLink, isDeployedCompareStatus, isTolkienPrCommand,
-  parseKamalProductionTitle, validMilestoneKeys,
+  normalizePrLinks, parseKamalProductionTitle, validMilestoneKeys,
 } from '../src/modules/chat/pr-milestones.js';
+import { milestoneGlyph } from '../public/js/ui/pr-milestone.js';
 
 let pass = 0;
 let fail = 0;
@@ -83,6 +84,32 @@ test('primera observación del backfill registra estado sin pendiente', () => {
   assert.equal(out.link.mergedAt, '2026-10-30T11:00:00.000Z');
   assert.deepEqual(out.link.pending, []);
 });
+test('normalize conserva el baseline durable', () => {
+  assert.equal(normalizePrLinks([{ ...base(), baseline: true }])[0].baseline, true);
+});
+test('primera observación consume baseline sin generar pendientes', () => {
+  const out = applyPrObservation({ ...base(), baseline: true }, {
+    state: 'MERGED', reviewDecision: 'APPROVED', mergedAt: '2026-10-30T11:00:00.000Z', mergeCommit: { oid: sha },
+  }, { deployed: true, deploySha: sha, deployedAt: '2026-10-30T11:10:00.000Z' }, { now: '2026-10-30T11:05:00.000Z' });
+  assert.equal(out.link.baseline, false);
+  assert.deepEqual(out.link.pending, []);
+  assert.deepEqual(out.milestones, []);
+});
+test('observación se aplica al índice vigente sin resucitar un ACK', () => {
+  const snapshot = {
+    ...base(), approvedAt: '2026-10-30T10:30:00.000Z', pending: ['approved'],
+  };
+  const prepended = { ...base(), number: 2000, url: 'https://github.com/Mordor-Staffing/tolkien/pull/2000' };
+  const current = [prepended, acknowledgeMilestones([snapshot], ['approved:1934'])[0]];
+  const index = current.findIndex((link) => link.number === snapshot.number);
+  const out = applyPrObservation(current[index], {
+    state: 'MERGED', reviewDecision: 'APPROVED', mergedAt: '2026-10-30T11:00:00.000Z', mergeCommit: { oid: sha },
+  }, null, { now: '2026-10-30T11:05:00.000Z' });
+  current[index] = out.link;
+  assert.equal(current[0].number, 2000);
+  assert.deepEqual(current[1].pending, ['merged']);
+  assert.equal(current[1].number, 1934);
+});
 test('un merge anterior al enlace se registra sin pendiente', () => {
   const out = applyPrTransitions(base(), {
     state: 'MERGED', mergedAt: '2026-10-30T09:00:00.000Z', mergeCommit: { oid: sha },
@@ -124,6 +151,12 @@ test('GraphQL deduplica y usa aliases seguros', () => {
   assert.match(query, /p1934: pullRequest\(number:1934\)/);
   assert.match(query, /p8: pullRequest\(number:8\)/);
   assert.equal((query.match(/p1934:/g) || []).length, 1);
+});
+test('glifos coinciden con el Ojo, el anillo con gema y la torre aprobados', () => {
+  assert.match(milestoneGlyph('approved'), /M1 6s1\.8-3 5-3/);
+  assert.match(milestoneGlyph('merged'), /M4\.8 2\.25 6 1l1\.2 1\.25/);
+  assert.doesNotMatch(milestoneGlyph('merged'), /M2\.8 8h10\.4/);
+  assert.match(milestoneGlyph('deployed'), /M2\.2 10h7\.6/);
 });
 
 console.log(`${pass} pass / ${fail} fail`);

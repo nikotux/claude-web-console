@@ -106,7 +106,7 @@ import {
 import { TANDEM_CODEX_MODEL, TANDEM_CODEX_EFFORT, normalizeCodexModel, normalizeCodexEffort } from './codex-models.js';
 import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, autoPurgeAllChatTrash } from './trash.js';
 import {
-  acknowledgeMilestones, applyDeployment, applyPrTransitions, buildPrGraphqlQuery,
+  acknowledgeMilestones, applyPrObservation, buildPrGraphqlQuery,
   extractTolkienPrLink, isDeployedCompareStatus, isTolkienPrCommand,
   newestPrBadge, normalizePrLinks, parseKamalProductionTitle, pendingMilestones,
   validMilestoneKeys,
@@ -965,7 +965,6 @@ class Chat {
     this.prLinks = [];       // hasta 10 PR de Tolkien enlazadas a esta conversación
     this.prLinksScanned = false; // backfill JSONL ejecutado (o descartado por antigüedad)
     this._pendingPrTools = new Map(); // solo Bash gh pr create/edit aún sin tool_result
-    this._backfilledPrNumbers = new Set(); // su 1ª observación no genera una avalancha
     this.clients = new Set();
     this.link = null;        // RunnerLink al runner (motor desacoplado)
     this._spawnPid = null;    // pid efímero para liberar después el spawn-lock propio (BUG-504)
@@ -1023,12 +1022,12 @@ class Chat {
       deployedAt: null,
       deploySha: null,
       closed: false,
+      baseline: backfilled,
       pending: [],
     }])[0];
     if (!link) return false;
     this.prLinks = [link, ...this.prLinks].slice(0, 10);
-    if (backfilled) this._backfilledPrNumbers.add(found.number);
-    else this.onUpdate?.();
+    if (!backfilled) this.onUpdate?.();
     return true;
   }
 
@@ -3337,50 +3336,56 @@ class ChatManager {
       if (parsed?.errors || !parsed?.data?.repository) throw new Error('respuesta GraphQL inválida');
       const selected = new Set(numbers);
       const now = new Date().toISOString();
-      const staged = [];
-
-      for (const row of tracked) {
-        if (!selected.has(row.link.number)) continue;
-        const observed = parsed.data.repository[`p${row.link.number}`];
+      const observations = new Map();
+      const mergeShas = new Map();
+      for (const number of numbers) {
+        const observed = parsed.data.repository[`p${number}`];
         if (!observed) continue;
-        const baseline = row.chat._backfilledPrNumbers.has(row.link.number);
-        const transition = applyPrTransitions(row.link, observed, { now, firstObservation: baseline });
-        staged.push({ ...row, next: transition.link, milestones: [...transition.milestones], baseline });
+        observations.set(number, observed);
+        const mergeSha = observed.state === 'MERGED' && typeof observed.mergeCommit?.oid === 'string'
+          && /^[0-9a-f]{40}$/i.test(observed.mergeCommit.oid)
+          ? observed.mergeCommit.oid.toLowerCase()
+          : null;
+        if (mergeSha) mergeShas.set(number, mergeSha);
       }
 
-      const merged = staged.filter(({ next }) => next?.mergedAt && next?.mergeSha && !next.deployedAt);
-      const production = merged.length ? await this._productionDeployment() : null;
+      const production = mergeShas.size ? await this._productionDeployment() : null;
+      const deployments = new Map();
       if (production?.sha) {
         const comparisons = new Map();
-        for (const { next } of merged) {
-          const key = `${next.mergeSha}:${production.sha}`;
-          if (!comparisons.has(key)) comparisons.set(key, await this._compareDeployment(next.mergeSha, production.sha));
+        for (const mergeSha of mergeShas.values()) {
+          const key = `${mergeSha}:${production.sha}`;
+          if (!comparisons.has(key)) comparisons.set(key, await this._compareDeployment(mergeSha, production.sha));
         }
-        for (const item of merged) {
-          if (!comparisons.get(`${item.next.mergeSha}:${production.sha}`)) continue;
-          const deployed = applyDeployment(item.next, {
+        for (const [number, mergeSha] of mergeShas) {
+          if (!comparisons.get(`${mergeSha}:${production.sha}`)) continue;
+          deployments.set(number, {
+            deployed: true,
             deploySha: production.sha,
             deployedAt: production.createdAt,
-            firstObservation: item.baseline,
           });
-          item.next = deployed.link;
-          item.milestones.push(...deployed.milestones);
         }
       }
 
+      // Desde acá no hay awaits: cada transición se aplica al enlace ACTUAL.
+      // Un ACK o un prepend ocurrido durante la red queda así incorporado.
       const changedChats = new Set();
-      for (const item of staged) {
-        if (JSON.stringify(item.link) === JSON.stringify(item.next)) {
-          if (item.baseline) item.chat._backfilledPrNumbers.delete(item.link.number);
-          continue;
-        }
-        item.chat.prLinks[item.index] = item.next;
-        if (item.baseline) item.chat._backfilledPrNumbers.delete(item.link.number);
-        changedChats.add(item.chat);
-        const milestones = pendingMilestones([item.next]);
-        for (const kind of item.milestones) {
+      for (const row of tracked) {
+        const number = row.link.number;
+        if (!selected.has(number)) continue;
+        const observed = observations.get(number);
+        if (!observed) continue;
+        const index = row.chat.prLinks.findIndex((link) => link.number === number);
+        if (index < 0) continue;
+        const current = row.chat.prLinks[index];
+        const transition = applyPrObservation(current, observed, deployments.get(number), { now });
+        if (JSON.stringify(current) === JSON.stringify(transition.link)) continue;
+        row.chat.prLinks[index] = transition.link;
+        changedChats.add(row.chat);
+        const milestones = pendingMilestones([transition.link]);
+        for (const kind of transition.milestones) {
           const milestone = milestones.find((entry) => entry.kind === kind);
-          if (milestone) item.chat._broadcast({ type: 'pr-milestone', milestone });
+          if (milestone) row.chat._broadcast({ type: 'pr-milestone', milestone });
         }
       }
       for (const chat of changedChats) chat.onUpdate?.();

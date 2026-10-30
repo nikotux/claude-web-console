@@ -2126,7 +2126,7 @@ html, body {
   position: absolute; right: 0; bottom: 0; left: 0; height: 2px; transform-origin: left;
   background: currentColor; animation: hito-drain 5s linear forwards;
 }
-.hito-toast:hover .hito-toast-drain { animation-play-state: paused; }
+.hito-toast.is-paused .hito-toast-drain { animation-play-state: paused; }
 @keyframes hito-drain { to { transform: scaleX(0); } }
 
 .hito-card { border-left: 2px solid color-mix(in srgb, var(--hito-ember) 55%, var(--cwc-border)); }
