@@ -64,6 +64,7 @@ import fss from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { createInterface } from 'node:readline';
 import { config } from '../../core/config.js';
 import { principalOf } from '../../core/auth.js';
 import { listUsers } from '../../core/users.js';
@@ -104,6 +105,12 @@ import {
 } from './indice-shared.js';
 import { TANDEM_CODEX_MODEL, TANDEM_CODEX_EFFORT, normalizeCodexModel, normalizeCodexEffort } from './codex-models.js';
 import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, autoPurgeAllChatTrash } from './trash.js';
+import {
+  acknowledgeMilestones, applyDeployment, applyPrTransitions, buildPrGraphqlQuery,
+  extractTolkienPrLink, isDeployedCompareStatus, isTolkienPrCommand,
+  newestPrBadge, normalizePrLinks, parseKamalProductionTitle, pendingMilestones,
+  validMilestoneKeys,
+} from './pr-milestones.js';
 import {
   appendSay, appendReact, appendCut, appendOrquestado, appendSubsala, appendEco, appendOrigin,
   readSala, readReads, writeRead, reactionsFromRecords, sayId, ensureSala, safeSalaId,
@@ -619,6 +626,57 @@ function chatProjectDir(cwd, owner = null) {
   // ~/.claude real y un inquilino a ~/.cwc-users/<owner>/.claude.
   return path.join(userClaudeDir(owner || hostUser()), 'projects', encodeCwd(cwd));
 }
+
+const PR_BACKFILL_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+const PR_LINK_MAX_AGE_MS = 21 * 24 * 60 * 60 * 1000;
+const PR_WATCH_MS = 60 * 1000;
+
+// Recorre el JSONL sin cargarlo entero. Solo inspecciona tool_result cuyos ids
+// fueron marcados por un Bash `gh pr create|edit` previo en ese transcript.
+async function backfillPrLinks(chat) {
+  const file = path.join(chatProjectDir(chat.cwd, chat.owner), `${chat.sessionId}.jsonl`);
+  let stat;
+  try { stat = await fss.promises.stat(file); }
+  catch {
+    chat.prLinksScanned = true;
+    chat.onUpdate?.();
+    return;
+  }
+  if (Date.now() - stat.mtimeMs > PR_BACKFILL_MAX_AGE_MS) {
+    chat.prLinksScanned = true;
+    chat.onUpdate?.();
+    return;
+  }
+
+  const pending = new Map();
+  const lines = createInterface({ input: fss.createReadStream(file), crlfDelay: Infinity });
+  for await (const line of lines) {
+    let row;
+    try { row = JSON.parse(line); } catch { continue; }
+    const content = row?.message?.content;
+    if (!Array.isArray(content)) continue;
+    if (row.type === 'assistant') {
+      for (const block of content) {
+        if (block?.type === 'tool_use' && block.id && isTolkienPrCommand(block.name, block.input)) {
+          pending.set(block.id, true);
+          if (pending.size > 30) pending.delete(pending.keys().next().value);
+        }
+      }
+      continue;
+    }
+    if (row.type !== 'user') continue;
+    for (const block of content) {
+      if (block?.type !== 'tool_result' || !pending.has(block.tool_use_id)) continue;
+      pending.delete(block.tool_use_id);
+      const found = extractTolkienPrLink(resultText(block.content));
+      if (!found) continue;
+      const parsed = Date.parse(row.timestamp);
+      chat._linkPr(found, Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date(stat.mtimeMs).toISOString(), true);
+    }
+  }
+  chat.prLinksScanned = true;
+  chat.onUpdate?.();
+}
 // MOVE seguro del transcript (y subagentes) de una sesión de un mundo (projectKey)
 // a otro: copia → verifica → borra el origen (sin ventana de pérdida). La MISMA
 // sessionId pasa a vivir SOLO en el destino → move TRANSPARENTE entre mundos (la
@@ -904,6 +962,10 @@ class Chat {
     this.lastActivity = Date.now();
     this.history = [];       // eventos de UI para replay al re-adjuntar
     this.slashCommands = []; // comandos slash del init del SDK (depende del cwd)
+    this.prLinks = [];       // hasta 10 PR de Tolkien enlazadas a esta conversación
+    this.prLinksScanned = false; // backfill JSONL ejecutado (o descartado por antigüedad)
+    this._pendingPrTools = new Map(); // solo Bash gh pr create/edit aún sin tool_result
+    this._backfilledPrNumbers = new Set(); // su 1ª observación no genera una avalancha
     this.clients = new Set();
     this.link = null;        // RunnerLink al runner (motor desacoplado)
     this._spawnPid = null;    // pid efímero para liberar después el spawn-lock propio (BUG-504)
@@ -944,6 +1006,30 @@ class Chat {
     // hace poco con el mismo nivel vigente (reduce llamadas + volatilidad).
     this._routerClassifyThrottle = 0;
     this._reads = null; // caché lazy de reads.json; writeRead la refresca
+  }
+
+  _linkPr(found, linkedAt = new Date().toISOString(), backfilled = false) {
+    if (!found?.number) return false;
+    const current = this.prLinks.find((link) => link.number === found.number);
+    if (current) return false;
+    const link = normalizePrLinks([{
+      number: found.number,
+      linkedAt,
+      title: null,
+      url: found.url,
+      approvedAt: null,
+      mergedAt: null,
+      mergeSha: null,
+      deployedAt: null,
+      deploySha: null,
+      closed: false,
+      pending: [],
+    }])[0];
+    if (!link) return false;
+    this.prLinks = [link, ...this.prLinks].slice(0, 10);
+    if (backfilled) this._backfilledPrNumbers.add(found.number);
+    else this.onUpdate?.();
+    return true;
   }
 
   // isSala describe el suelo ACTUAL. El origen del log puede seguir siendo una
@@ -1525,6 +1611,10 @@ class Chat {
           this._turnAnswerText = (this._turnAnswerText || '') + e.text;
         }
         if (e.type === 'tool_use') {
+          if (e.id && isTolkienPrCommand(e.name, e.detail)) {
+            this._pendingPrTools.set(e.id, true);
+            if (this._pendingPrTools.size > 20) this._pendingPrTools.delete(this._pendingPrTools.keys().next().value);
+          }
           // Contador del turno en curso (AutoTux v2 — ver _endTurnRouter /
           // insufficiencyEscalation): CUALQUIER herramienta cuenta, no solo
           // Task/Agent.
@@ -1541,6 +1631,13 @@ class Chat {
             if (this._delegatingIds.size === 1) this._delegatingSince = Date.now();
           }
         } else if (e.type === 'tool_result') {
+          // La regex de URL solo corre para resultados de los pocos ids que un
+          // Bash gh pr create/edit dejó pendientes; el resto de tools no paga nada.
+          if (this._pendingPrTools.has(e.id)) {
+            this._pendingPrTools.delete(e.id);
+            const found = extractTolkienPrLink(e.output);
+            if (found) this._linkPr(found);
+          }
           // AutoTux v2 (C5): una herramienta que falló (ok:false, ver runner)
           // es evidencia barata de "el nivel se quedó corto" — la cuenta el
           // escalado por insuficiencia al cerrar el turno.
@@ -3045,6 +3142,7 @@ class Chat {
       acta: this._actaPayload(),
       tolkienEnv: this.tolkienEnv || null,
       pendingPrompt: this.pendingPrompt,
+      prMilestones: pendingMilestones(this.prLinks),
       ...extra,
     };
   }
@@ -3113,6 +3211,8 @@ class Chat {
       // Mensajes del interfono esperando ser tomados por este chat: los consume
       // el centro global de interfono (public/js/ui/interfono-center.js).
       pendingInterfono: this.pendingInterfono(),
+      // Único crecimiento de /api/chat/list: un badge compacto, nunca prLinks.
+      prBadge: newestPrBadge(this.prLinks),
     };
   }
 }
@@ -3121,6 +3221,11 @@ class ChatManager {
   constructor() {
     this.chats = new Map();
     this._seq = 0;
+    this._prWatchRunning = false;
+    this._prWatchOffset = 0;
+    this._prProductionCache = null;
+    this._prCompareCache = new Map();
+    this._prBackfillTimer = null;
     setInterval(() => {
       const now = Date.now();
       let dirty = false;
@@ -3147,6 +3252,151 @@ class ChatManager {
     // se despiertan solos (evita gastar tokens fantasma): quedan para el popup
     // global + botón "Retomar". Cadencia ~12 s (barato: solo lee el bus).
     setInterval(() => { try { this._deliverInterfono(); } catch { /* noop */ } }, INTERFONO_POLL_MS).unref();
+
+    // Un solo watcher global: el guard descarta el tick si la vuelta anterior
+    // sigue viva. Sin PR activas, _watchPrMilestones retorna antes de tocar red.
+    setInterval(() => { void this._watchPrMilestones(); }, PR_WATCH_MS).unref();
+  }
+
+  _gh(args) {
+    return new Promise((resolve, reject) => {
+      execFile('gh', args, { timeout: 30_000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
+        if (error) {
+          const safe = new Error('falló una consulta gh');
+          safe.code = error.code || 'GH_ERROR';
+          reject(safe);
+          return;
+        }
+        resolve(String(stdout || ''));
+      });
+    });
+  }
+
+  _trackedPrLinks() {
+    const cutoff = Date.now() - PR_LINK_MAX_AGE_MS;
+    const rows = [];
+    for (const chat of this.chats.values()) {
+      if (chat.closed || chat.archived) continue;
+      chat.prLinks.forEach((link, index) => {
+        const done = !!link.deployedAt || (link.closed && !link.mergedAt) || Date.parse(link.linkedAt) < cutoff;
+        if (!done) rows.push({ chat, index, link });
+      });
+    }
+    return rows;
+  }
+
+  async _productionDeployment() {
+    const now = Date.now();
+    if (this._prProductionCache && now - this._prProductionCache.cachedAt < PR_WATCH_MS) {
+      return this._prProductionCache.value;
+    }
+    const output = await this._gh([
+      'run', 'list', '-R', 'Mordor-Staffing/tolkien', '--workflow', 'deploy-kamal.yml',
+      '--status', 'success', '-L', '20', '--json', 'displayTitle,createdAt',
+    ]);
+    const runs = JSON.parse(output);
+    const match = (Array.isArray(runs) ? runs : [])
+      .map((run) => ({ ...run, sha: parseKamalProductionTitle(run?.displayTitle) }))
+      .filter((run) => run.sha)
+      .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0))[0] || null;
+    const value = match ? { sha: match.sha, createdAt: match.createdAt } : null;
+    this._prProductionCache = { cachedAt: now, value };
+    return value;
+  }
+
+  async _compareDeployment(mergeSha, prodSha) {
+    const key = `${mergeSha}:${prodSha}`;
+    if (this._prCompareCache.has(key)) {
+      const value = this._prCompareCache.get(key);
+      this._prCompareCache.delete(key);
+      this._prCompareCache.set(key, value);
+      return value;
+    }
+    const status = (await this._gh([
+      'api', `repos/Mordor-Staffing/tolkien/compare/${mergeSha}...${prodSha}`, '--jq', '.status',
+    ])).trim();
+    const value = isDeployedCompareStatus(status);
+    this._prCompareCache.set(key, value);
+    while (this._prCompareCache.size > 200) this._prCompareCache.delete(this._prCompareCache.keys().next().value);
+    return value;
+  }
+
+  async _watchPrMilestones() {
+    if (this._prWatchRunning) return;
+    const tracked = this._trackedPrLinks();
+    if (!tracked.length) return;
+    this._prWatchRunning = true;
+    try {
+      const allNumbers = [...new Set(tracked.map(({ link }) => link.number))];
+      const start = this._prWatchOffset % allNumbers.length;
+      const rotated = [...allNumbers.slice(start), ...allNumbers.slice(0, start)];
+      const numbers = rotated.slice(0, 50);
+      this._prWatchOffset = (start + numbers.length) % allNumbers.length;
+      const raw = await this._gh(['api', 'graphql', '-f', `query=${buildPrGraphqlQuery(numbers)}`]);
+      const parsed = JSON.parse(raw);
+      if (parsed?.errors || !parsed?.data?.repository) throw new Error('respuesta GraphQL inválida');
+      const selected = new Set(numbers);
+      const now = new Date().toISOString();
+      const staged = [];
+
+      for (const row of tracked) {
+        if (!selected.has(row.link.number)) continue;
+        const observed = parsed.data.repository[`p${row.link.number}`];
+        if (!observed) continue;
+        const baseline = row.chat._backfilledPrNumbers.has(row.link.number);
+        const transition = applyPrTransitions(row.link, observed, { now, firstObservation: baseline });
+        staged.push({ ...row, next: transition.link, milestones: [...transition.milestones], baseline });
+      }
+
+      const merged = staged.filter(({ next }) => next?.mergedAt && next?.mergeSha && !next.deployedAt);
+      const production = merged.length ? await this._productionDeployment() : null;
+      if (production?.sha) {
+        const comparisons = new Map();
+        for (const { next } of merged) {
+          const key = `${next.mergeSha}:${production.sha}`;
+          if (!comparisons.has(key)) comparisons.set(key, await this._compareDeployment(next.mergeSha, production.sha));
+        }
+        for (const item of merged) {
+          if (!comparisons.get(`${item.next.mergeSha}:${production.sha}`)) continue;
+          const deployed = applyDeployment(item.next, {
+            deploySha: production.sha,
+            deployedAt: production.createdAt,
+            firstObservation: item.baseline,
+          });
+          item.next = deployed.link;
+          item.milestones.push(...deployed.milestones);
+        }
+      }
+
+      const changedChats = new Set();
+      for (const item of staged) {
+        if (JSON.stringify(item.link) === JSON.stringify(item.next)) {
+          if (item.baseline) item.chat._backfilledPrNumbers.delete(item.link.number);
+          continue;
+        }
+        item.chat.prLinks[item.index] = item.next;
+        if (item.baseline) item.chat._backfilledPrNumbers.delete(item.link.number);
+        changedChats.add(item.chat);
+        const milestones = pendingMilestones([item.next]);
+        for (const kind of item.milestones) {
+          const milestone = milestones.find((entry) => entry.kind === kind);
+          if (milestone) item.chat._broadcast({ type: 'pr-milestone', milestone });
+        }
+      }
+      for (const chat of changedChats) chat.onUpdate?.();
+    } catch (error) {
+      // Una sola línea por ciclo y sin stdout/stderr/comandos, que podrían traer secretos.
+      console.warn(`[chat] watcher de hitos de PR falló (${String(error?.code || 'error').slice(0, 40)}); reintenta en el próximo ciclo.`);
+    } finally {
+      this._prWatchRunning = false;
+    }
+  }
+
+  async _backfillPrLinks() {
+    for (const chat of this.chats.values()) {
+      if (!chat.archived && chat.prLinksScanned !== true) await backfillPrLinks(chat);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
   }
 
   // Recorre los chats y auto-entrega el interfono a los que están ABIERTOS
@@ -3522,6 +3772,8 @@ class ChatManager {
         // "down" seguidos + turnos restantes de cooldown anti-rebote.
         routerDownStreak: c._routerDownStreak || 0,
         routerCooldown: c._routerCooldown || 0,
+        prLinks: normalizePrLinks(c.prLinks),
+        prLinksScanned: c.prLinksScanned === true,
         // BUG-497: ¿ya arrancó (≥1 turno)? Para no re-proteger el "primer turno"
         // de una conversación que en realidad ya venía andando tras un reinicio.
         started: !!c._started,
@@ -3587,6 +3839,8 @@ class ChatManager {
       chat._spawnedTandem = s.spawnedTandem === true;
       chat._routerDownStreak = Number.isFinite(s.routerDownStreak) ? s.routerDownStreak : 0;
       chat._routerCooldown = Number.isFinite(s.routerCooldown) ? s.routerCooldown : 0;
+      chat.prLinks = normalizePrLinks(s.prLinks);
+      chat.prLinksScanned = s.prLinksScanned === true;
       // BUG-497: ¿ya arrancó? Persistido; para snapshots viejos sin el campo,
       // ground-truth de disco (si hay transcript, arrancó). Si NO arrancó (chat
       // nuevo sin turno rehidratado), su próximo mensaje es "primer turno".
@@ -3666,6 +3920,15 @@ class ChatManager {
     if (adoptedRunnerTandem) this.persist();
     for (const chat of this.chats.values()) {
       if (chat.isSala()) void chat.ensureSalaPadItem();
+    }
+    if (!this._prBackfillTimer) {
+      this._prBackfillTimer = setTimeout(() => {
+        this._prBackfillTimer = null;
+        void this._backfillPrLinks().catch(() => {
+          console.warn('[chat] el backfill de hitos de PR falló; se reintentará en el próximo arranque.');
+        });
+      }, 30_000);
+      this._prBackfillTimer.unref?.();
     }
     this._cleanupOrphans();
     return count;
@@ -4083,6 +4346,19 @@ export default {
     });
 
     r.get('/list', (req, res) => res.json({ chats: manager.list(principalOf(req)) }));
+
+    r.post('/:id/pr-milestones/seen', (req, res) => {
+      const chat = participantChat(req, req.params.id);
+      if (!chat) return res.status(404).json({ error: 'Conversación inexistente.' });
+      const keys = req.body?.keys;
+      if (!validMilestoneKeys(keys)) return res.status(400).json({ error: 'Lista de hitos inválida.' });
+      const next = acknowledgeMilestones(chat.prLinks, keys);
+      if (JSON.stringify(next) !== JSON.stringify(chat.prLinks)) {
+        chat.prLinks = next;
+        chat.onUpdate?.();
+      }
+      return res.json({ ok: true, prBadge: newestPrBadge(chat.prLinks) });
+    });
 
     r.post('/pending-prompt/clear', (req, res) => {
       const chat = ownedChat(req, req.body?.id);

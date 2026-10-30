@@ -3,7 +3,7 @@
 
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
 ### chat/                     conversaciones SDK: index.js (server) · shared.js (común) ·
-runner-link.js (spawn/connect) · attachments.js (adjuntos) —
+pr-milestones.js (hitos puros de PR) · runner-link.js (spawn/connect) · attachments.js (adjuntos) —
 el motor real es bin/cwc-chat-runner.js.
 ROBUSTEZ DE SESIÓN NUEVA Y PRIMER TURNO (2026-07-15, PLAN-494 del Pad
 `console`, 4 bugs — ideas de Niko): (BUG-496) un chat NACE con un
@@ -2095,6 +2095,36 @@ real por definición. Además, un runner de chat YA VIVO no conoce el campo
 `files` hasta usar «Reabrir para cambios», el mismo gotcha de siempre con los
 cambios de código y los runners vivos. La prueba de referencia es
 `bin/cwc-test-codex-worktree.js`.
+
+## Hitos de PR por sesión
+
+Un `Chat` enlaza hasta 10 PR de `Mordor-Staffing/tolkien` cuando ve un
+`tool_use` Bash cuyo comando es `gh pr create|edit` y el `tool_result` del
+mismo id devuelve la URL. El mapa efímero de ids evita buscar URLs en cada
+resultado. `prLinks` y `prLinksScanned` están en la whitelist explícita de
+`chats.json`; `info()` nunca expone la lista, solo el `prBadge {number,kind}`
+del pendiente más nuevo. `_historyPayload()` sí entrega los hitos pendientes
+al cliente que abre esa conversación.
+
+Treinta segundos después de rehidratar, el backfill recorre secuencialmente
+solo chats no archivados, no escaneados y con transcript de hasta 14 días. Lee
+el JSONL con stream/readline, nunca entero, conserva los 10 enlaces más nuevos
+y marca la primera observación como baseline para no festejar historia vieja.
+Los `festejos.json` históricos de Forja no intervienen en este estado.
+
+`ChatManager` tiene un único watcher global de 60 s con guard de reentrada. Si
+no hay links activos hace cero red; si hay, hace como máximo un GraphQL total
+con 50 aliases, un `gh run list` memoizado 60 s para `deploy-kamal.yml`, y un
+compare solo por pareja nueva `(mergeSha,prodSha)` en LRU de 200. Solo acepta
+el título exacto `Deploy Kamal deploy production sha-<40 hex>`. Un error aborta
+la mutación completa del ciclo. Los hitos se persisten y se emiten por el WS
+privado del chat; jamás crean turno, despiertan motor ni usan Interfono.
+
+`POST /api/chat/:id/pr-milestones/seen` usa el mismo acceso dueño/participante
+que las demás escrituras del chat, acepta hasta 20 claves
+`approved|merged|deployed:<n>`, elimina esos pendientes y devuelve el badge
+compacto restante. La lógica pura y su contrato de presupuesto viven en
+`pr-milestones.js`; la prueba determinista es `bin/cwc-test-pr-milestones.js`.
 
 ## Sala con entorno de preview (PLAN-3236 E2/E3)
 Una sala resuelve su entorno efímero por `salaId`, porque el registro usa ese valor como `chatId`.
