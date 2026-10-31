@@ -35,6 +35,7 @@ import {
   readCodexJob,
   writeCodexJob,
 } from './codex-shared.js';
+import { normalizeCodexPrLinks } from './pr-milestones.js';
 
 const RUNNER_PATH = fileURLToPath(new URL('../../../bin/cwc-codex-runner.js', import.meta.url));
 const JOB_POLL_MS = 2 * 1000;
@@ -101,10 +102,23 @@ export function createCodexToolServer({
   altWorkdirs,
   onBgStart,
   onBgEnd,
+  onPrLinks,
 }) {
   if (chatDir) { try { fs.mkdirSync(chatDir, { recursive: true }); } catch { /* best-effort */ } }
   const codexModel = normalizeCodexModel(model);
   const codexEffort = normalizeCodexEffort(codexModel, effort);
+
+  function reportPrLinks(job) {
+    if (typeof onPrLinks !== 'function'
+      || job?.chatId !== chatId
+      || !CODEX_JOB_TERMINAL_STATUSES.includes(job?.status)) return;
+    const links = normalizeCodexPrLinks(job.prLinks);
+    if (!links.length) return;
+    try {
+      const pending = onPrLinks(links);
+      if (pending && typeof pending.catch === 'function') pending.catch(() => {});
+    } catch { /* el reporte privado de links nunca rompe el tool result */ }
+  }
 
   function jobCwd(workdir) {
     if (workdir !== 'entorno') return cwd;
@@ -249,6 +263,7 @@ export function createCodexToolServer({
         };
       }
       const job = await waitJob(launched.id);
+      reportPrLinks(job);
       return {
         content: [{ type: 'text', text: jobResultText(job) }],
         ...(resultIsError(job) ? { isError: true } : {}),
@@ -305,6 +320,7 @@ export function createCodexToolServer({
       const jobs = wait === false
         ? accepted
         : await Promise.all(accepted.map((job) => waitJob(job.id)));
+      for (const job of jobs) reportPrLinks(job);
       const blocks = jobs.map((job) => {
         const label = job.label || 'delegación a Codex';
         const body = wait === false ? `estado: ${stateText(job)}` : jobResultText(job);

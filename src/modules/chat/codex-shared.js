@@ -14,6 +14,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { resolveDataDir } from '../../core/data-dir.js';
 import { TANDEM_CODEX_MODEL, TANDEM_CODEX_EFFORT } from './codex-models.js';
+import { MAX_PR_LINKS, prLinkFromCodexEvent } from './pr-milestones.js';
 
 // Defaults del ejecutor Codex (gama alta: gpt-5.6-sol/high). PLAN-519 F2: el
 // usuario puede CONFIGURAR modelo+esfuerzo del Codex desde el selector; estos
@@ -369,7 +370,7 @@ export function diffSnapshots(before, after, cwd, startedAt) {
 }
 
 // Corre `codex exec --json` con el plan y junta el stream JSONL. Devuelve
-// {code|error, msgs[], threadId, usage, stderr}. Kill por tope de seguridad.
+// {code|error, msgs[], threadId, usage, stderr, prLinks[]}. Kill por tope de seguridad.
 // PLAN-519 F2: modelo+esfuerzo configurables (default gama alta). `fullAccess`
 // desactiva el sandbox, necesario para escribir en `.git`.
 export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_EFFORT, fullAccess = false, writableRoots = [], onThread = null) {
@@ -384,6 +385,7 @@ export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_
         threadId: null,
         usage: null,
         stderr: '',
+        prLinks: [],
       });
       return;
     }
@@ -401,7 +403,7 @@ export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_
     try {
       child = spawn('codex', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) {
-      resolve({ error: e.message, msgs: [], threadId: null, usage: null, stderr: '' });
+      resolve({ error: e.message, msgs: [], threadId: null, usage: null, stderr: '', prLinks: [] });
       return;
     }
     let buf = '';
@@ -410,9 +412,10 @@ export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_
     let threadId = null;
     let threadNotified = false;
     let usage = null;
+    const prLinks = [];
     const timer = setTimeout(() => {
       try { child.kill('SIGKILL'); } catch { /* noop */ }
-      resolve({ error: `timeout tras ${Math.round(CODEX_MAX_MS / 60000)} min`, msgs, threadId, usage, stderr });
+      resolve({ error: `timeout tras ${Math.round(CODEX_MAX_MS / 60000)} min`, msgs, threadId, usage, stderr, prLinks });
     }, CODEX_MAX_MS);
     child.stdout.on('data', (d) => {
       buf += d.toString();
@@ -430,16 +433,20 @@ export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_
         }
         else if (ev.type === 'item.completed' && ev.item?.type === 'agent_message' && ev.item.text) msgs.push(ev.item.text);
         else if (ev.type === 'turn.completed' && ev.usage) usage = ev.usage;
+        const prLink = prLinkFromCodexEvent(ev);
+        if (prLink && prLinks.length < MAX_PR_LINKS && !prLinks.some((link) => link.number === prLink.number)) {
+          prLinks.push(prLink);
+        }
       }
     });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, msgs, threadId, usage, stderr }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ code, msgs, threadId, usage, stderr, prLinks }); });
     child.on('error', (e) => {
       clearTimeout(timer);
       const error = e.code === 'ENOENT'
         ? 'El binario `codex` no está en el PATH de este runner.'
         : e.message;
-      resolve({ error, msgs, threadId, usage, stderr });
+      resolve({ error, msgs, threadId, usage, stderr, prLinks });
     });
   });
 }

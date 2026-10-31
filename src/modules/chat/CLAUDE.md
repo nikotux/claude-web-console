@@ -2110,6 +2110,12 @@ resultado. `prLinks` y `prLinksScanned` están en la whitelist explícita de
 del pendiente más nuevo. `_historyPayload()` sí entrega los hitos pendientes
 al cliente que abre esa conversación.
 
+Los PR publicados por Codex se enlazan desde los eventos `command_execution`
+del runner con la misma regla que Bash: solo `gh pr create|edit` exitoso y URL
+tomada exclusivamente de `aggregated_output`, nunca de la prosa de Codex. El
+runner persiste esos `prLinks` en el job y `onPrLinks` los entrega al server por
+el evento privado `pr-link`, que no entra al history ni se retransmite a la UI.
+
 Treinta segundos después de rehidratar, el backfill recorre secuencialmente
 solo chats no archivados, no escaneados y con transcript de hasta 14 días. Lee
 el JSONL con stream/readline, nunca entero, conserva los 10 enlaces más nuevos

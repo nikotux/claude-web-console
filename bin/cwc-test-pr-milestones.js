@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   acknowledgeMilestones, applyPrObservation, applyPrTransitions, buildPrGraphqlQuery,
   extractTolkienPrLink, isDeployedCompareStatus, isTolkienPrCommand,
-  normalizePrLinks, parseKamalProductionTitle, validMilestoneKeys,
+  normalizeCodexPrLinks, normalizePrLinks, parseKamalProductionTitle,
+  prLinkFromCodexEvent, prLinkFromCommand, validMilestoneKeys,
 } from '../src/modules/chat/pr-milestones.js';
 import { milestoneGlyph } from '../public/js/ui/pr-milestone.js';
 
@@ -53,6 +54,94 @@ test('extrae la primera URL de Tolkien', () => {
 });
 test('ignora URLs de otros repos', () => {
   assert.equal(extractTolkienPrLink('https://github.com/Mordor-Staffing/otro/pull/1934'), null);
+});
+test('extrae PR de gh pr create exitoso solo desde su output', () => {
+  assert.deepEqual(prLinkFromCommand({
+    command: 'gh pr create --fill',
+    output: 'https://github.com/Mordor-Staffing/tolkien/pull/1991',
+    exitCode: 0,
+  }), {
+    number: 1991,
+    url: 'https://github.com/Mordor-Staffing/tolkien/pull/1991',
+  });
+});
+test('ignora gh pr create fallido', () => {
+  assert.equal(prLinkFromCommand({
+    command: 'gh pr create --fill',
+    output: 'https://github.com/Mordor-Staffing/tolkien/pull/1991',
+    exitCode: 1,
+  }), null);
+});
+test('ignora gh pr view aunque devuelva una URL', () => {
+  assert.equal(prLinkFromCommand({
+    command: 'gh pr view 1991',
+    output: 'https://github.com/Mordor-Staffing/tolkien/pull/1991',
+    exitCode: 0,
+  }), null);
+});
+test('ignora una URL presente solo en el comando', () => {
+  assert.equal(prLinkFromCommand({
+    command: 'gh pr edit 1991 --body https://github.com/Mordor-Staffing/tolkien/pull/1991',
+    output: 'edición terminada',
+    exitCode: 0,
+  }), null);
+});
+test('ignora URL de otro repo en el output del comando', () => {
+  assert.equal(prLinkFromCommand({
+    command: 'gh pr create --fill',
+    output: 'https://github.com/Mordor-Staffing/otro/pull/1991',
+    exitCode: 0,
+  }), null);
+});
+test('extrae PR de item.completed command_execution de Codex', () => {
+  assert.deepEqual(prLinkFromCodexEvent({
+    type: 'item.completed',
+    item: {
+      type: 'command_execution',
+      command: "/bin/bash -lc 'gh pr create --fill'",
+      aggregated_output: 'https://github.com/Mordor-Staffing/tolkien/pull/1991\n',
+      exit_code: 0,
+      status: 'completed',
+    },
+  }, '2026-10-30T12:00:00.000Z'), {
+    number: 1991,
+    url: 'https://github.com/Mordor-Staffing/tolkien/pull/1991',
+    at: '2026-10-30T12:00:00.000Z',
+  });
+});
+test('ignora item.started de Codex', () => {
+  assert.equal(prLinkFromCodexEvent({
+    type: 'item.started',
+    item: {
+      type: 'command_execution',
+      command: 'gh pr create --fill',
+      aggregated_output: 'https://github.com/Mordor-Staffing/tolkien/pull/1991',
+      exit_code: 0,
+    },
+  }), null);
+});
+test('ignora agent_message de Codex aunque contenga una URL', () => {
+  assert.equal(prLinkFromCodexEvent({
+    type: 'item.completed',
+    item: {
+      type: 'agent_message',
+      text: 'Creé https://github.com/Mordor-Staffing/tolkien/pull/1991',
+    },
+  }), null);
+});
+test('normaliza links de Codex, deduplica, descarta inválidos y limita el total', () => {
+  const at = '2026-10-30T12:00:00.000Z';
+  const links = normalizeCodexPrLinks([
+    { number: 1, url: 'https://example.com/engaño', at },
+    { number: 1, url: 'https://github.com/Mordor-Staffing/tolkien/pull/999', at },
+    { number: 0, at },
+    { number: Number.MAX_SAFE_INTEGER + 1, at },
+    { number: 99, at: 'fecha inválida' },
+    ...Array.from({ length: 10 }, (_, i) => ({ number: i + 2, at })),
+  ]);
+  assert.equal(links.length, 10);
+  assert.deepEqual(links.map((link) => link.number), Array.from({ length: 10 }, (_, i) => i + 1));
+  assert.equal(links[0].url, 'https://github.com/Mordor-Staffing/tolkien/pull/1');
 });
 
 test('transición a aprobado', () => {

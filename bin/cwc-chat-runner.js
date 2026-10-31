@@ -475,6 +475,11 @@ function startEngine() {
         : undefined,
       onBgStart: ({ id, kind, label }) => bgAdd({ id, kind, label }),
       onBgEnd: (id) => bgDone(id),
+      onPrLinks: (links) => {
+        for (const link of links) {
+          emit({ type: 'pr-link', number: link.number, url: link.url, at: link.at }, { record: false });
+        }
+      },
     });
   }
   try {

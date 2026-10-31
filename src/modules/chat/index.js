@@ -108,7 +108,7 @@ import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, autoPurgeAl
 import {
   acknowledgeMilestones, applyPrObservation, buildPrGraphqlQuery,
   extractTolkienPrLink, isDeployedCompareStatus, isTolkienPrCommand,
-  newestPrBadge, normalizePrLinks, parseKamalProductionTitle, pendingMilestones,
+  newestPrBadge, normalizeCodexPrLinks, normalizePrLinks, parseKamalProductionTitle, pendingMilestones,
   validMilestoneKeys,
 } from './pr-milestones.js';
 import {
@@ -1624,6 +1624,12 @@ class Chat {
       case 'tolkien-env-needed':
         this._onTolkienEnvNeeded?.();
         return;
+      case 'pr-link': {
+        // Canal privado runner→server: nunca entra al history ni llega a la UI.
+        const link = normalizeCodexPrLinks([e])[0];
+        if (link) this._linkPr({ number: link.number, url: link.url }, link.at);
+        return;
+      }
       case 'sala-op':
         // Canal privado runner↔server: la solicitud no forma parte del history
         // ni se retransmite a la UI. El handler responde incluso ante errores.

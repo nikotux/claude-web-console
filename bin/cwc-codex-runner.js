@@ -22,6 +22,7 @@ import {
   snapshotTree,
   writeCodexJob,
 } from '../src/modules/chat/codex-shared.js';
+import { normalizeCodexPrLinks } from '../src/modules/chat/pr-milestones.js';
 
 const log = (...args) => console.log(`[${new Date().toISOString()}]`, ...args);
 const usage = () => console.error(`[${new Date().toISOString()}] Uso: node bin/cwc-codex-runner.js --job <id>`);
@@ -131,6 +132,7 @@ async function runJob(id) {
               report,
               isError: true,
               threadId: res.threadId,
+              prLinks: normalizeCodexPrLinks(res.prLinks),
               finishedAt: Date.now(),
             });
             activeJobId = null;
@@ -173,6 +175,7 @@ async function runJob(id) {
             report: text,
             isError,
             threadId: res.threadId,
+            prLinks: normalizeCodexPrLinks(res.prLinks),
             finishedAt: Date.now(),
           });
           activeJobId = null;
@@ -230,6 +233,7 @@ async function runJob(id) {
       report: isolationNote ? `${text}\n\n${isolationNote}` : text,
       isError,
       threadId: res.threadId,
+      prLinks: normalizeCodexPrLinks(res.prLinks),
       finishedAt: Date.now(),
     });
     activeJobId = null;

@@ -649,6 +649,8 @@ Al recibir `thread.started` de Codex, el runner persiste inmediatamente el
 `threadId` en el job mediante el callback `onThread` de `runCodex()`; antes
 quedaba guardado recién al terminar. Es imprescindible para que un rollout
 VIVO se pueda ligar a su delegación mientras todavía está corriendo.
+También persiste `prLinks` detectados solo en comandos `gh pr create|edit`
+exitosos del stream JSONL, usando exclusivamente su `aggregated_output`.
 Cuando el job trae `files` declarados y NO es `fullAccess`, el runner ejecuta
 Codex dentro de un git worktree aislado, sembrado con el estado sucio del árbol
 real. Al terminar aplica de vuelta SOLO los archivos declarados mediante

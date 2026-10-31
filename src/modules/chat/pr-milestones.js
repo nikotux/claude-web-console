@@ -8,6 +8,7 @@ const PR_URL_RE = /https:\/\/github\.com\/Mordor-Staffing\/tolkien\/pull\/(\d+)/
 const PR_COMMAND_RE = /\bgh\s+pr\s+(create|edit)\b/;
 const ACK_KEY_RE = /^(approved|merged|deployed):(\d+)$/;
 const KINDS = ['approved', 'merged', 'deployed'];
+export const MAX_PR_LINKS = 10;
 
 export function isTolkienPrCommand(name, input) {
   if (name !== 'Bash') return false;
@@ -22,6 +23,37 @@ export function extractTolkienPrLink(output) {
   return Number.isSafeInteger(number) && number > 0
     ? { number, url: `${REPO_URL}/pull/${number}` }
     : null;
+}
+
+export function prLinkFromCommand({ command, output, exitCode } = {}) {
+  if (typeof command !== 'string' || !PR_COMMAND_RE.test(command) || exitCode !== 0) return null;
+  return extractTolkienPrLink(output);
+}
+
+export function prLinkFromCodexEvent(ev, now = new Date().toISOString()) {
+  if (ev?.type !== 'item.completed' || ev.item?.type !== 'command_execution') return null;
+  const link = prLinkFromCommand({
+    command: ev.item.command,
+    output: ev.item.aggregated_output,
+    exitCode: ev.item.exit_code,
+  });
+  const at = validDate(now);
+  return link && at ? { ...link, at } : null;
+}
+
+export function normalizeCodexPrLinks(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const links = [];
+  for (const raw of value) {
+    const number = Number(raw?.number);
+    const at = validDate(raw?.at);
+    if (!Number.isSafeInteger(number) || number <= 0 || !at || seen.has(number)) continue;
+    seen.add(number);
+    links.push({ number, url: `${REPO_URL}/pull/${number}`, at });
+    if (links.length === MAX_PR_LINKS) break;
+  }
+  return links;
 }
 
 export function normalizePrLinks(value) {
@@ -51,7 +83,7 @@ export function normalizePrLinks(value) {
       baseline: raw.baseline === true,
       pending,
     });
-    if (links.length === 10) break;
+    if (links.length === MAX_PR_LINKS) break;
   }
   return links;
 }
