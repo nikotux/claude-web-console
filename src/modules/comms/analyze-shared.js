@@ -12,15 +12,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
 
 const DATA_DIR = path.join(os.homedir(), '.cwc-data', 'comms', 'analyze');
-const LOG_FILE = path.join(os.homedir(), '.cwc-data', 'comms', 'analyze.log');
-const RUNNER = path.join(ROOT, 'bin', 'cwc-comms-analyze-runner.js');
 
 export const ANALYZE_TIMEOUT_MS = 60 * 1000;
 export const ANALYZE_STALE_MS = ANALYZE_TIMEOUT_MS + 30 * 1000;
@@ -81,35 +78,6 @@ export function jobResult(job) {
     return { status: 'error', analysis: null, error: 'El análisis no respondió a tiempo. Reintentá.' };
   }
   return { status: job.status, analysis: job.analysis || null, error: job.error || null };
-}
-
-export function spawnAnalyzeRunner(id) {
-  ensureDir();
-  fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true, mode: 0o700 });
-  const logFd = fs.openSync(LOG_FILE, 'a');
-  const markSpawnError = (err) => {
-    try { console.error('[comms] no se pudo lanzar el analyze-runner:', String(err?.message || err)); } catch { /* noop */ }
-    const job = readAnalyzeJob(id);
-    if (job?.status === 'running') {
-      writeAnalyzeJob(id, {
-        ...job,
-        status: 'error',
-        analysis: null,
-        error: 'No se pudo lanzar el runner de análisis.',
-        updatedAt: Date.now(),
-      });
-    }
-  };
-  try {
-    const child = spawn(process.execPath, [RUNNER, id], { detached: true, stdio: ['ignore', logFd, logFd], env: process.env });
-    child.on('error', markSpawnError);
-    child.unref();
-  } catch (err) {
-    markSpawnError(err);
-    throw err;
-  } finally {
-    fs.closeSync(logFd);
-  }
 }
 
 export function analyzePrompt(text, contactName) {

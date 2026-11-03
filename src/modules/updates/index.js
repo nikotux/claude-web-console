@@ -24,6 +24,8 @@ import path from 'node:path';
 import { isAdmin } from '../../core/auth.js';
 import { resolveDataDir } from '../../core/data-dir.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { systemScopeFor } from '../../core/system-scope.js';
+import { requesterSdkEnv } from '../../core/user-space.js';
 import fs from 'node:fs';
 import {
   buildUpdatesCensus, syntaxCheck, readPackageJson, run, ROOT, isCensusStale,
@@ -225,15 +227,18 @@ export default {
     // --- Fase B: ANÁLISIS DE RIESGO IA de los saltos mayores (admin, tokens) ---
     router.post('/updates/analyze', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'admin' });
+      const requester = systemScopeFor(req).user;
+      try { requesterSdkEnv(requester); }
+      catch (e) { return res.status(e?.conflict ? 409 : 500).json({ error: String(e.message || e).slice(0, 200) }); }
       const existing = readRisk();
       if (isRiskRunning(existing)) return res.status(409).json({ error: 'ya hay un análisis en curso', risk: effectiveRisk(existing) });
       // Conservar veredictos previos como base (se re-analiza y sobreescribe).
       const queuedRisk = { running: true, phase: 'queued', startedAt: Date.now(), heartbeat: Date.now(), verdicts: existing?.verdicts || {}, error: null };
-      try { writeRisk(queuedRisk); spawnAnalyzeRunner(); res.json({ ok: true }); }
+      try { writeRisk(queuedRisk); spawnAnalyzeRunner(requester); res.json({ ok: true }); }
       catch (e) {
         const error = String(e.message || e).slice(0, 200);
         try { writeRisk({ ...existing, running: false, phase: 'error', error }); } catch { /* conservar respuesta JSON */ }
-        res.status(500).json({ error });
+        res.status(e?.conflict ? 409 : 500).json({ error });
       }
     });
     // Veredictos de riesgo (0 tokens, solo lee disco).

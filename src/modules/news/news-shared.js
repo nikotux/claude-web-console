@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import { resolveDataDir } from '../../core/data-dir.js';
+import { requesterSdkEnv } from '../../core/user-space.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
@@ -338,7 +339,7 @@ export function findRunningNewsJob() {
   return latest;
 }
 
-export function spawnNewsRunner(jobId) {
+export function spawnNewsRunner(jobId, { requester } = {}) {
   ensureJobsDir();
   fs.mkdirSync(path.dirname(NEWS_LOG_FILE), { recursive: true, mode: 0o700 });
   const logFd = fs.openSync(NEWS_LOG_FILE, 'a');
@@ -362,10 +363,11 @@ export function spawnNewsRunner(jobId) {
   };
 
   try {
+    const env = requesterSdkEnv(requester);
     const child = spawn(process.execPath, [RUNNER, jobId], {
       detached: true,
       stdio: ['ignore', logFd, logFd],
-      env: process.env,
+      env,
     });
     child.on('error', markSpawnError);
     child.unref();

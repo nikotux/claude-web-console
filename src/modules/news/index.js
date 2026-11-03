@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { isAdmin, principalOf } from '../../core/auth.js';
 import { systemScopeFor } from '../../core/system-scope.js';
+import { requesterSdkEnv } from '../../core/user-space.js';
 import {
   ROOT,
   NEWS_ID_RE,
@@ -217,6 +218,8 @@ export default {
     router.post('/news/generate', async (req, res) => {
       if (!requireAdmin(req, res)) return;
       try {
+        const requester = systemScopeFor(req).user;
+        requesterSdkEnv(requester);
         if (findRunningNewsJob()) {
           return res.status(409).json({ error: 'Ya hay una generación de Novedades en curso.' });
         }
@@ -238,10 +241,10 @@ export default {
           count: null,
           error: null,
         });
-        spawnNewsRunner(id);
+        spawnNewsRunner(id, { requester });
         res.json({ id });
       } catch (error) {
-        res.status(500).json({ error: `No se pudo iniciar la generación: ${error?.message || error}` });
+        res.status(error?.conflict ? 409 : 500).json({ error: `No se pudo iniciar la generación: ${error?.message || error}` });
       }
     });
 

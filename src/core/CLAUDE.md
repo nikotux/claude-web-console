@@ -423,7 +423,7 @@ propia `~/.cwc-users/<userId>/` con su `.claude/`, `.cwc-data/`, `.pad/` y
 `codexCredState`/`codexCredLive`/`CODEX_TOKEN_TTL_MS`/`userInfisicalDir`/
 `userInfisicalConfigPath`/`hasInfisicalCreds`/`userPadDir`/`readUserOauthToken`/
 `ensureCliOnboarded`/`userTolkienMcpTokenPath`/`readUserTolkienMcpToken`/`hasTolkienMcpToken`/
-`readUserPadToken`/`userPadWorkspace`/`userRunnerEnv`/`ensureUserSpace`). El
+`readUserPadToken`/`userPadWorkspace`/`userRunnerEnv`/`requesterSdkEnv`/`ensureUserSpace`). El
 HOST (el admin que corre el server) mapea a su HOME real (`hostUser()` →
 `config.home`, retrocompat TOTAL); SOLO los inquilinos obtienen root aislado.
 `ensureCliOnboarded` mergea `hasCompletedOnboarding: true` en el `.claude.json`
@@ -447,6 +447,12 @@ de su raíz aislada.
 principal a `{user, isHost, admin, home, dataDir, claudeDir, workspace,
 padWorkspace}` sin derivar rutas del proceso. Para el host (y el token maestro)
 devuelve exactamente las rutas históricas y el workspace Pad `console`.
+`requesterSdkEnv(requester)` es para runners admin que conservan el HOME, jobs,
+locks y repo del host pero deben pagar el SDK con la cuenta de quien dispara la
+acción: host/vacío conserva `process.env`; un inquilino recibe su OAuth y nunca
+`ANTHROPIC_API_KEY`, o falla con conflicto si no conectó Claude. No reemplaza
+`userRunnerEnv` (HOME/data aislados del dueño) ni `ownerSdkEnv` (credencial
+resuelta por dueño/patrocinio para runners que sí son per-user).
 
 **Capacidad `oversight` (contenido ajeno, no administración).** `users.js`
 persiste el campo booleano en `users.json`: `oversightFor(username)` devuelve

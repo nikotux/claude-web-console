@@ -49,6 +49,8 @@ bloque interno `tech`.
 que sobrevive a un reinicio de la web. Usa `sonnet`, hasta 30 turnos y timeout
 duro de 8 minutos, publica como máximo 6 entradas por corrida y usa `cwd` en la
 raíz de Mi Consola.
+El spawn usa `requesterSdkEnv`: conserva jobs, locks y repo del host, pero el
+SDK consume la cuenta de Claude del admin que disparó la generación.
 
 Es una excepción nominal de **solo lectura** a la regla 6, blindada por las dos
 capas obligatorias y la misma allowlist exacta en ambas:

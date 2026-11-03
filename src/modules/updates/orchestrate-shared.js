@@ -25,6 +25,7 @@ import path from 'node:path';
 import { config } from '../../core/config.js';
 import { findZeroTierIp } from '../../core/zerotier.js';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { requesterSdkEnv } from '../../core/user-space.js';
 import { collectActiveRunners } from '../health/shared.js';
 import { sendMessage } from '../../core/bus.js';
 import { buildUpdatesCensus, installedVersion, run, ROOT } from './shared.js';
@@ -387,11 +388,12 @@ export function spawnUpdatesRunner() {
 // Spawn del runner de ANÁLISIS DE RIESGO (Fase B). Mismo patrón detached+unref.
 const ANALYZE_RUNNER = path.join(ROOT, 'bin', 'cwc-updates-analyze-runner.js');
 const ANALYZE_LOG = path.join(DATA_DIR, 'updates-analyze.log');
-export function spawnAnalyzeRunner() {
+export function spawnAnalyzeRunner(requester) {
+  const env = requesterSdkEnv(requester);
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   const logFd = fs.openSync(ANALYZE_LOG, 'a');
   try {
-    const child = spawn(process.execPath, [ANALYZE_RUNNER], { detached: true, stdio: ['ignore', logFd, logFd], env: process.env });
+    const child = spawn(process.execPath, [ANALYZE_RUNNER], { detached: true, stdio: ['ignore', logFd, logFd], env });
     child.on('error', (err) => { try { fs.appendFileSync(ANALYZE_LOG, `[${new Date().toISOString()}] spawn FAIL: ${err?.message || err}\n`); } catch { /* noop */ } });
     child.unref();
   } catch (err) {

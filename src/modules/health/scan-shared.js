@@ -19,6 +19,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
+import { requesterSdkEnv } from '../../core/user-space.js';
 import * as padLocal from '../../core/pad-service-client.js';
 import { loadArquiIndex, linkItemToArqui } from './arqui-link-shared.js';
 import { loadCorpus, classifyFinding, rulesStatus } from './finding-rules.js';
@@ -74,12 +75,13 @@ export function isScanRunning() {
 // Lanza el orquestador DETACHED (regla de oro). El server reserva el lock con
 // pid:0 ANTES (spawnScan en index.js) para cerrar la ventana TOCTOU; el runner lo
 // reclama con su pid. `mode` = 'incremental' (default) | 'full'.
-export function spawnScanRunner(mode = 'incremental') {
+export function spawnScanRunner(mode = 'incremental', requester) {
+  const env = requesterSdkEnv(requester);
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   const logFd = fss.openSync(SCAN_LOG, 'a');
   const args = [SCAN_RUNNER];
   if (mode === 'full') args.push('--full');
-  const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', logFd, logFd], env: process.env });
+  const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', logFd, logFd], env });
   child.on('error', () => { try { clearScanLock(); } catch { /* noop */ } }); // spawn falló → liberar la reserva (patrón BUG-44)
   child.unref();
   fss.closeSync(logFd);

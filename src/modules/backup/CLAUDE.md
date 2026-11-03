@@ -52,8 +52,9 @@ y el diálogo encuesta cada 1.5 s — si la IA falla, el mensaje se
 escribe a mano (nunca bloquea). GET /git-info ahora expone
 `dirty[]` (name-status contra HEAD, incluye stageados) además de
 dirtyCount. Lógica compartida en backup/commitmsg-shared.js.
-Excepción multi-tenant deliberada: todo el módulo es admin/host-only; por eso
-backups, jobs, logs y el entorno del runner se resuelven contra el HOME del host.
+Excepción multi-tenant deliberada: todo el módulo es admin/host-only; backups,
+jobs y logs se resuelven contra el HOME del host, pero los runners IA usan
+`requesterSdkEnv` para consumir la cuenta de Claude del admin que los dispara.
 Untracked: NUNCA viajan solos — el diálogo de Push los lista con
 checkbox por archivo (body {includeUntracked:[...]}) y el backend
 valida la selección en 3 capas: solo lo que git lista como

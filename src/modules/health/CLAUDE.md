@@ -64,6 +64,8 @@
   el orquestador sostiene sus 4 locks durante el escaneo, así que no hay doble
   corrida. La sección de abajo describe cada motor en detalle (siguen siendo la
   verdad de cómo funciona cada uno).
+  Todos estos spawns admin usan `requesterSdkEnv`: trabajan sobre el estado del
+  host, pero consumen la cuenta de Claude del usuario que disparó la acción.
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime,

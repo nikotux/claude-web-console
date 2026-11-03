@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from '../../core/config.js';
 import { runAdaptivePool } from '../../core/pool.js';
 import { isAdmin, principalOf } from '../../core/auth.js';
-import { hostUser, readInfisicalAccountEmail, readUserPadToken, userClaudeDir, userSpace } from '../../core/user-space.js';
+import { hostUser, readInfisicalAccountEmail, readUserPadToken, requesterSdkEnv, userClaudeDir, userSpace } from '../../core/user-space.js';
 import { listUsers } from '../../core/users.js';
 import { PAD_DEFAULT_URL } from '../../core/pad-url.js';
 import { ownerForSession } from '../../core/session-names.js';
@@ -82,6 +82,10 @@ const VENDOR_PACKAGE_BY_DIR = new Map([
   ['hljs', 'highlight.js'],
   ['xterm', '@xterm/xterm'],
 ]);
+
+function requesterFor(req) {
+  return principalOf(req)?.username || hostUser();
+}
 
 // collectActiveRunners() conserva la forma pública histórica y no expone el
 // owner ni el archivo que respalda cada fila. Para scopear sin tocar esa
@@ -1466,7 +1470,8 @@ const HEALTH_LOG = path.join(DATA_DIR, 'health-review.log');
 const HEALTHFIX_RUNNER = path.join(ROOT, 'bin', 'cwc-healthfix-runner.js');
 const HEALTHFIX_LOG = path.join(DATA_DIR, 'healthfix.log');
 
-function spawnReview(full) {
+function spawnReview(full, requester) {
+  const env = requesterSdkEnv(requester);
   if (isRunning()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   // Placeholder de lock SINCRÓNICO (mismo turno JS que isRunning(), sin await de
@@ -1479,7 +1484,7 @@ function spawnReview(full) {
   const args = [HEALTH_RUNNER];
   if (full) args.push('--full'); // ignora la caché → re-audita TODO
   const child = spawn(process.execPath, args, {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    detached: true, stdio: ['ignore', logFd, logFd], env,
   });
   child.on('error', () => { try { clearLock(); } catch { /* noop */ } }); // spawn falló → liberar la reserva
   child.unref();
@@ -1499,7 +1504,8 @@ function spawnReview(full) {
 // entre el chequeo y la escritura): cierra la ventana de carrera sin depender
 // de que el hijo llegue a tiempo. Devuelve false si ya había una revisión o un
 // auto-fix en curso (no spawnea nada en ese caso).
-function spawnFix(findingIdArg, tandem = false) {
+function spawnFix(findingIdArg, tandem = false, requester) {
+  const env = requesterSdkEnv(requester);
   if (isRunning() || isFixing()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   writeFixLock(0); // placeholder inmediato; el runner lo pisa con su pid real al arrancar (heartbeat)
@@ -1507,7 +1513,7 @@ function spawnFix(findingIdArg, tandem = false) {
   const args = [HEALTHFIX_RUNNER, findingIdArg];
   if (tandem) args.push('--tandem'); // opt-in (2026-07-19): Codex ejecuta, Claude verifica
   const child = spawn(process.execPath, args, {
-    detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+    detached: true, stdio: ['ignore', logFd, logFd], env,
   });
   child.on('error', () => { try { clearFixLock(); } catch { /* noop */ } }); // spawn falló → liberar la reserva ya (BUG-44), no esperar los 20s
   child.unref();
@@ -1521,7 +1527,8 @@ function spawnFix(findingIdArg, tandem = false) {
 // sin depender de que el hijo llegue a escribir su lock).
 const ORCHESTRATOR = path.join(ROOT, 'bin', 'cwc-healthfix-orchestrator.js');
 const ORCH_LOG = path.join(DATA_DIR, 'healthfix-batch.log');
-function spawnOrchestrator() {
+function spawnOrchestrator(requester) {
+  const env = requesterSdkEnv(requester);
   if (isRunning() || isFixing() || isBatchRunning()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   writeBatchLock(0); // placeholder; el runner lo pisa con su pid real (heartbeat)
@@ -1529,7 +1536,7 @@ function spawnOrchestrator() {
   try {
     logFd = fss.openSync(ORCH_LOG, 'a');
     const child = spawn(process.execPath, [ORCHESTRATOR], {
-      detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+      detached: true, stdio: ['ignore', logFd, logFd], env,
     });
     child.on('error', () => { try { clearBatchLock(); } catch { /* noop */ } }); // spawn falló → liberar la reserva (BUG-44)
     child.unref();
@@ -1548,7 +1555,8 @@ function spawnOrchestrator() {
 // carrera que spawnFix: la RESERVA del lock (pid:0) se escribe acá, sincrónica,
 // en el mismo turno de JS que decide spawnear; el runner la reclama con su pid.
 const OPT_RUNNER = path.join(ROOT, 'bin', 'cwc-optimize-runner.js');
-function spawnOptimize() {
+function spawnOptimize(requester) {
+  const env = requesterSdkEnv(requester);
   if (isOptRunning()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   writeOptLock({ pid: 0, phase: 'arrancando…' }); // reserva; el runner la pisa con su pid real
@@ -1556,7 +1564,7 @@ function spawnOptimize() {
   try {
     logFd = fss.openSync(OPT_LOG, 'a');
     const child = spawn(process.execPath, [OPT_RUNNER], {
-      detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+      detached: true, stdio: ['ignore', logFd, logFd], env,
     });
     child.on('error', () => { try { clearOptLock(); } catch { /* noop */ } });
     child.unref();
@@ -1574,7 +1582,8 @@ function spawnOptimize() {
 // de dependencias + hallazgos de cableado + análisis con sonnet → propuestas.
 // Mismo cierre de carrera que spawnOptimize (reserva pid:0 sincrónica).
 const COH_RUNNER = path.join(ROOT, 'bin', 'cwc-coherence-runner.js');
-function spawnCoherence() {
+function spawnCoherence(requester) {
+  const env = requesterSdkEnv(requester);
   if (isCohRunning()) return false;
   fss.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   writeCohLock({ pid: 0, phase: 'arrancando…' }); // reserva; el runner la pisa con su pid real
@@ -1582,7 +1591,7 @@ function spawnCoherence() {
   try {
     logFd = fss.openSync(COH_LOG, 'a');
     const child = spawn(process.execPath, [COH_RUNNER], {
-      detached: true, stdio: ['ignore', logFd, logFd], env: process.env,
+      detached: true, stdio: ['ignore', logFd, logFd], env,
     });
     child.on('error', () => { try { clearCohLock(); } catch { /* noop */ } });
     child.unref();
@@ -1824,12 +1833,12 @@ export default {
         // común (evita el mkdir/spawn si ya sabemos que hay uno corriendo).
         // `tandem` (opt-in, 2026-07-19): el toggle del front — Claude verifica,
         // Codex escribe el diff (bin/cwc-healthfix-runner.js --tandem).
-        if (!spawnFix(id, req.body?.tandem === true)) {
+        if (!spawnFix(id, req.body?.tandem === true, requesterFor(req))) {
           return res.status(409).json({ error: 'Ya hay una resolución automática en curso (una a la vez).' });
         }
         res.json({ ok: true });
       } catch (err) {
-        res.status(500).json({ error: `No se pudo lanzar el auto-fix: ${String(err?.message || err).slice(0, 200)}` });
+        res.status(err?.conflict ? 409 : 500).json({ error: `No se pudo lanzar el auto-fix: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
 
@@ -1891,15 +1900,18 @@ export default {
         });
       }
       if (!items.length) return res.status(400).json({ error: 'Ningún hallazgo elegible (¿todos críticos?).', rejected });
+      const requester = requesterFor(req);
+      try { requesterSdkEnv(requester); }
+      catch (err) { return res.status(err?.conflict ? 409 : 500).json({ error: String(err?.message || err).slice(0, 200) }); }
       writeBatch({ startedAt: Date.now(), updatedAt: Date.now(), running: true, phase: 'arrancando…', done: 0, total: items.length, items, rejected });
       try {
-        if (!spawnOrchestrator()) {
+        if (!spawnOrchestrator(requester)) {
           return res.status(409).json({ error: 'Ya hay una resolución en curso.' });
         }
         res.json({ ok: true, queued: items.length, rejected });
       } catch (err) {
         writeBatch({ ...(readBatch() || {}), running: false, phase: 'error', error: String(err?.message || err).slice(0, 200), updatedAt: Date.now() });
-        res.status(500).json({ error: `No se pudo lanzar el orquestador: ${String(err?.message || err).slice(0, 200)}` });
+        res.status(err?.conflict ? 409 : 500).json({ error: `No se pudo lanzar el orquestador: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
 
@@ -1925,10 +1937,10 @@ export default {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       if (isOptRunning()) return res.status(409).json({ error: 'Ya hay un análisis de optimización en curso.' });
       try {
-        if (!spawnOptimize()) return res.status(409).json({ error: 'Ya hay un análisis de optimización en curso.' });
+        if (!spawnOptimize(requesterFor(req))) return res.status(409).json({ error: 'Ya hay un análisis de optimización en curso.' });
         res.json({ ok: true });
       } catch (err) {
-        res.status(500).json({ error: `No se pudo lanzar el análisis: ${String(err?.message || err).slice(0, 200)}` });
+        res.status(err?.conflict ? 409 : 500).json({ error: `No se pudo lanzar el análisis: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
 
@@ -1993,10 +2005,10 @@ export default {
       if (!isAdmin(req)) return res.status(403).json({ error: 'Requiere administrador.' });
       if (isCohRunning()) return res.status(409).json({ error: 'Ya hay un análisis de coherencia en curso.' });
       try {
-        if (!spawnCoherence()) return res.status(409).json({ error: 'Ya hay un análisis de coherencia en curso.' });
+        if (!spawnCoherence(requesterFor(req))) return res.status(409).json({ error: 'Ya hay un análisis de coherencia en curso.' });
         res.json({ ok: true });
       } catch (err) {
-        res.status(500).json({ error: `No se pudo lanzar el análisis: ${String(err?.message || err).slice(0, 200)}` });
+        res.status(err?.conflict ? 409 : 500).json({ error: `No se pudo lanzar el análisis: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
 
@@ -2043,10 +2055,10 @@ export default {
         // full=true → re-audita TODO (ignora caché); default = INCREMENTAL
         // (solo lo que cambió por fingerprint). spawnReview devuelve false si
         // YA había una revisión corriendo.
-        const started = spawnReview(req.body?.full === true);
+        const started = spawnReview(req.body?.full === true, requesterFor(req));
         res.json({ ...readReview(), running: true, started });
       } catch (err) {
-        res.status(500).json({ error: `No se pudo lanzar la revisión: ${String(err?.message || err).slice(0, 200)}` });
+        res.status(err?.conflict ? 409 : 500).json({ error: `No se pudo lanzar la revisión: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
 
@@ -2084,17 +2096,21 @@ export default {
     r.post('/scan-all', (req, res) => {
       if (!isAdmin(req)) return res.status(403).json({ error: 'El escaneo consume tokens (requiere administrador).' });
       if (isScanRunning()) return res.status(409).json({ error: 'Ya hay un escaneo de salud en curso.' });
+      const requester = requesterFor(req);
+      try { requesterSdkEnv(requester); }
+      catch (err) { return res.status(err?.conflict ? 409 : 500).json({ error: `No se pudo lanzar el escaneo: ${String(err?.message || err).slice(0, 200)}` }); }
       try {
         const mode = req.body?.full === true ? 'full' : 'incremental';
         // Reserva SINCRÓNICA del lock (pid:0) antes del spawn — cierra la ventana
         // TOCTOU (el runner la reclama con su pid, patrón BUG-48).
         writeScanLock(0);
         writeScan({ running: true, startedAt: Date.now(), updatedAt: Date.now(), mode, phase: 'arrancando', progress: null, pad: null, verdict: null, error: null });
-        spawnScanRunner(mode);
+        spawnScanRunner(mode, requester);
         res.json({ ok: true, running: true, mode });
       } catch (err) {
         clearScanLock();
-        res.status(500).json({ error: `No se pudo lanzar el escaneo: ${String(err?.message || err).slice(0, 200)}` });
+        writeScan({ ...(readScan() || {}), running: false, updatedAt: Date.now(), finishedAt: Date.now(), error: String(err?.message || err).slice(0, 200) });
+        res.status(err?.conflict ? 409 : 500).json({ error: `No se pudo lanzar el escaneo: ${String(err?.message || err).slice(0, 200)}` });
       }
     });
     // Write-back: crear un BUG en Pad desde un hallazgo NUEVO confirmado (con OK

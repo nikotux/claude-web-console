@@ -191,6 +191,21 @@ export function readUserOauthToken(userId) {
   } catch { return null; }
 }
 
+// Runners admin que trabajan sobre el HOME/repo del host solo cambian la
+// credencial del SDK: cada usuario paga estas acciones con su propia cuenta.
+export function requesterSdkEnv(requester) {
+  if (!requester || requester === hostUser()) return process.env;
+  const token = readUserOauthToken(requester);
+  if (!token) {
+    const error = new Error('Necesitás conectar tu cuenta de Claude para usar esta acción.');
+    error.conflict = true;
+    throw error;
+  }
+  const env = { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token };
+  delete env.ANTHROPIC_API_KEY;
+  return env;
+}
+
 // BUG-2104: sin esta clave, el CLI interactivo del inquilino muestra el
 // onboarding/login aunque tenga CLAUDE_CODE_OAUTH_TOKEN. Es siempre un merge:
 // jamás reemplaza el resto del estado real guardado en .claude.json.

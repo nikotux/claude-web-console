@@ -106,6 +106,8 @@ pool max 3) lee CÓMO el proyecto usa el paquete + cruza los breaking changes �
 veredicto {level seguro|riesgoso|rompe, confidence alta|media|baja, why,
 breakingChanges, usedApis}. Persistido en ~/.cwc-data/updates-risk.json
 (heartbeat). POST /updates/analyze (spawn) · GET /updates/risk (0 tokens).
+Ese spawn IA usa `requesterSdkEnv` para consumir la cuenta de Claude del admin
+que pidió el análisis; el runner de `claude update` no usa el SDK y no cambia.
 (C · ORQUESTADOR CON VEREDICTO) buildPlan(census, scope, includeMajors,
 verdicts): un major NUNCA se auto-incluye por veredicto IA; `auto` queda
 siempre `false` y el salto mayor entra SOLO si Niko lo tilda en

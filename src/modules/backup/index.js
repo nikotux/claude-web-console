@@ -64,6 +64,8 @@ import { fileURLToPath } from 'node:url';
 import { writeFileAtomic } from '../../core/atomic-write.js';
 import { isAdmin } from '../../core/auth.js';
 import { PAD_DEFAULT_URL } from '../../core/pad-url.js';
+import { systemScopeFor } from '../../core/system-scope.js';
+import { requesterSdkEnv } from '../../core/user-space.js';
 import {
   commitMsgJobId, readCommitMsgJob, writeCommitMsgJob, spawnCommitMsgRunner,
   isFreshRunning, jobResult,
@@ -595,6 +597,9 @@ export default {
       if (tooManyUntracked(req.body?.includeUntracked)) {
         return res.status(400).json({ error: `includeUntracked admite como máximo ${MAX_UNTRACKED_SELECTION} elementos.` });
       }
+      const requester = systemScopeFor(req).user;
+      try { requesterSdkEnv(requester); }
+      catch (e) { return res.status(e?.conflict ? 409 : 500).json({ error: `No se pudo lanzar la generación: ${e?.message || e}` }); }
       busy = true;
       try {
         const g = await securityGuards();
@@ -704,7 +709,7 @@ export default {
               count: null,
               error: null,
             });
-            spawnNewsRunner(newsJobId);
+            spawnNewsRunner(newsJobId, { requester });
           }
         } catch (newsError) {
           console.error('[backup] no se pudo lanzar Novedades (el push sí salió):', newsError?.message || newsError);
@@ -740,6 +745,8 @@ export default {
         return res.status(400).json({ error: `includeUntracked admite como máximo ${MAX_UNTRACKED_SELECTION} elementos.` });
       }
       try {
+        const requester = systemScopeFor(req).user;
+        requesterSdkEnv(requester);
         const g = await repoSecretGuards('Commit');
         if (!g.ok) return res.status(403).json({ error: g.error });
 
@@ -768,10 +775,10 @@ export default {
           status: 'running', startedAt: Date.now(),
           files, untracked: includable, diff,
         });
-        spawnCommitMsgRunner(id);
+        spawnCommitMsgRunner(id, { requester });
         res.json({ ok: true, id });
       } catch (e) {
-        res.status(500).json({ error: `No se pudo lanzar la generación: ${e?.message || e}` });
+        res.status(e?.conflict ? 409 : 500).json({ error: `No se pudo lanzar la generación: ${e?.message || e}` });
       }
     });
 

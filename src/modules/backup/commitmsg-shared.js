@@ -14,12 +14,12 @@ import { writeJsonAtomic } from '../../core/atomic-write.js';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { requesterSdkEnv } from '../../core/user-space.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..'); // raíz del repo (cwd del SDK)
 
-// Excepción deliberada al estado per-user: backup y su generador son
-// admin/host-only, por eso los jobs y logs pertenecen al HOME del host.
+// Los jobs y logs pertenecen al HOME del host porque describen su repo.
 const DATA_DIR = path.join(os.homedir(), '.cwc-data', 'commitmsg');
 const LOG_FILE = path.join(os.homedir(), '.cwc-data', 'commitmsg.log');
 const RUNNER = path.join(ROOT, 'bin', 'cwc-commitmsg-runner.js');
@@ -83,7 +83,7 @@ export function jobResult(job) {
 }
 
 // Lanza el runner DETACHED (unref): un reinicio de la web NO lo mata.
-export function spawnCommitMsgRunner(id) {
+export function spawnCommitMsgRunner(id, { requester } = {}) {
   ensureDir();
   fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true, mode: 0o700 });
   let logFd = null;
@@ -99,12 +99,12 @@ export function spawnCommitMsgRunner(id) {
     }
   };
   try {
+    const env = requesterSdkEnv(requester);
     logFd = fs.openSync(LOG_FILE, 'a');
     const child = spawn(process.execPath, [RUNNER, id], {
       detached: true,
       stdio: ['ignore', logFd, logFd],
-      // Excepción host-only: el SDK usa deliberadamente la credencial/env del host.
-      env: process.env,
+      env,
     });
     child.on('error', (error) => {
       markSpawnError(error);
