@@ -236,10 +236,18 @@ const AUTOTITLE_MAX_LEN = 20;
 const AUTOTITLE_MIN_INTERVAL_MS = 20000; // máx. una extracción cada 20 s por chat
 const AUTOTITLE_TIMEOUT_MS = 30000;
 
+// El SDK entrega errores de cuenta/facturación como texto normal del asistente.
+export function isSdkErrorMessage(m) {
+  return !!(
+    (m?.type === 'assistant' && m.error)
+    || (m?.type === 'result' && (m.is_error === true || (m.subtype && m.subtype !== 'success')))
+  );
+}
+
 // Corrida IA mínima y READ-ONLY (doble capa, regla 6 del CLAUDE.md: hook
 // PreToolUse + canUseTool — acá directamente se deniega TODA herramienta:
 // el modelo solo resume texto). Haiku: el más barato, sobra para 20 chars.
-async function extractTitle({ cwd, current, text }) {
+async function extractTitle({ cwd, current, text, env }) {
   const q = query({
     prompt:
       `Resumí en un título de MÁXIMO ${AUTOTITLE_MAX_LEN} caracteres (español, sin comillas ni punto final) qué se está haciendo en esta sesión de trabajo.\n` +
@@ -249,6 +257,7 @@ async function extractTitle({ cwd, current, text }) {
       `Si el pedido no cambia de tema, respondé el título actual tal cual. Respondé SOLO el título, nada más.`,
     options: {
       cwd,
+      ...(env ? { env } : {}),
       model: 'haiku',
       effort: 'low', // F5(a) PEND-405: clasificadores/extracción Haiku a esfuerzo bajo — más baratos y rápidos, misma señal
       maxTurns: 1,
@@ -269,10 +278,16 @@ async function extractTitle({ cwd, current, text }) {
     },
   });
   let out = '';
+  let failed = false;
   let timer = null;
   const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), AUTOTITLE_TIMEOUT_MS); });
   const pump = (async () => {
     for await (const m of q) {
+      if (isSdkErrorMessage(m)) {
+        failed = true;
+        if (m.type === 'result') break;
+        continue;
+      }
       if (m.type === 'assistant') {
         for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text;
       } else if (m.type === 'result') break;
@@ -286,6 +301,7 @@ async function extractTitle({ cwd, current, text }) {
   } finally {
     clearTimeout(timer);
   }
+  if (failed) return '';
   // Saneo duro: una línea, sin comillas, tope de caracteres SIEMPRE.
   return out.replace(/["'«»`]/g, '').split('\n')[0].trim().slice(0, AUTOTITLE_MAX_LEN);
 }
@@ -314,7 +330,7 @@ const ROUTER_MOVE_BY_WORD = { sobrado: 'down', suficiente: null, insuficiente: '
 // Devuelve 'up' | 'down' | null (suficiente/timeout/error). NUNCA sugiere fable
 // (la escala del núcleo no lo incluye; un 'up' desde opus queda inerte en
 // decideBase). READ-ONLY doble capa (regla 6): sin herramientas, solo texto.
-async function classifyRelative({ cwd, currentModel, text }) {
+async function classifyRelative({ cwd, currentModel, text, env }) {
   const q = query({
     prompt:
       `El modelo actual de esta conversación es "${currentModel}" (escala barato→caro: haiku < sonnet < opus). ` +
@@ -324,6 +340,7 @@ async function classifyRelative({ cwd, currentModel, text }) {
       `Pedido: «${String(text || '').slice(0, 1000)}»`,
     options: {
       cwd,
+      ...(env ? { env } : {}),
       model: 'haiku',
       effort: 'low', // F5(a) PEND-405: clasificadores/extracción Haiku a esfuerzo bajo — más baratos y rápidos, misma señal
       maxTurns: 1,
@@ -344,10 +361,16 @@ async function classifyRelative({ cwd, currentModel, text }) {
     },
   });
   let out = '';
+  let failed = false;
   let timer = null;
   const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), ROUTER_CLASSIFY_TIMEOUT_MS); });
   const pump = (async () => {
     for await (const m of q) {
+      if (isSdkErrorMessage(m)) {
+        failed = true;
+        if (m.type === 'result') break;
+        continue;
+      }
       if (m.type === 'assistant') {
         for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text;
       } else if (m.type === 'result') break;
@@ -361,6 +384,7 @@ async function classifyRelative({ cwd, currentModel, text }) {
   } finally {
     clearTimeout(timer);
   }
+  if (failed) return null;
   const word = out.toLowerCase().replace(/[^a-záéíóúñ]/g, '').trim();
   return Object.prototype.hasOwnProperty.call(ROUTER_MOVE_BY_WORD, word) ? ROUTER_MOVE_BY_WORD[word] : null;
 }
@@ -373,7 +397,7 @@ async function classifyRelative({ cwd, currentModel, text }) {
 // solo alimenta un banner de CONSENTIMIENTO [Reintentar/Ignorar] en el chat —
 // el auto-redo automático se DESCARTÓ por diseño (0 disparos en simulacro).
 const JUDGE_TIMEOUT_MS = 20000;
-async function judgeAnswer({ cwd, currentModel, userText, answerText }) {
+async function judgeAnswer({ cwd, currentModel, userText, answerText, env }) {
   const q = query({
     prompt:
       `Sos un juez de calidad. El modelo "${currentModel}" (escala barato→caro: haiku < sonnet < opus) ` +
@@ -384,7 +408,7 @@ async function judgeAnswer({ cwd, currentModel, userText, answerText }) {
       `Pedido: «${String(userText || '').slice(0, 800)}»\n` +
       `Respuesta: «${String(answerText || '').slice(0, 2000)}»`,
     options: {
-      cwd, model: 'haiku', effort: 'low', maxTurns: 1, permissionMode: 'default', // F5(a): juez a esfuerzo bajo
+      cwd, ...(env ? { env } : {}), model: 'haiku', effort: 'low', maxTurns: 1, permissionMode: 'default', // F5(a): juez a esfuerzo bajo
       settingSources: [],
       hooks: {
         PreToolUse: [{
@@ -401,16 +425,23 @@ async function judgeAnswer({ cwd, currentModel, userText, answerText }) {
     },
   });
   let out = '';
+  let failed = false;
   let timer = null;
   const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), JUDGE_TIMEOUT_MS); });
   const pump = (async () => {
     for await (const m of q) {
+      if (isSdkErrorMessage(m)) {
+        failed = true;
+        if (m.type === 'result') break;
+        continue;
+      }
       if (m.type === 'assistant') {
         for (const b of m.message?.content || []) if (b.type === 'text' && b.text) out += b.text;
       } else if (m.type === 'result') break;
     }
   })();
   try { await Promise.race([pump, timeout]); } catch { try { q.interrupt?.(); } catch { /* noop */ } return null; } finally { clearTimeout(timer); }
+  if (failed) return null;
   const w = out.toLowerCase().replace(/[^a-z]/g, '').trim();
   if (w.includes('insuficiente')) return true;
   if (w.includes('ok')) return false;
@@ -2539,11 +2570,14 @@ class Chat {
     if (!substantial) return;
     if (this._judgeThrottle > 0) { this._judgeThrottle--; return; }
     if (this._judging) return;
+    let env;
+    try { env = ownerSdkEnv(this.owner || hostUser()); } catch { return; }
+    if (!env) return;
     this._judging = true;
     this._judgeThrottle = 2; // no re-juzgar los próximos 2 turnos
     const userText = this._lastUserText;
     const answerText = this._turnAnswerText;
-    judgeAnswer({ cwd: this.cwd, currentModel: this.model, userText, answerText })
+    judgeAnswer({ cwd: this.cwd, currentModel: this.model, userText, answerText, env })
       .then((insufficient) => {
         if (insufficient !== true || this.closed || this.modelChoice !== 'auto') return;
         const lvl = clampLevel(this.model, levels);
@@ -2578,9 +2612,12 @@ class Chat {
   // nada), mucho más estable. Fire-and-forget en segundo plano.
   _classifyRelative(text, _baseAtDispatch) {
     if (this._routerClassifying) return;
+    let env;
+    try { env = ownerSdkEnv(this.owner || hostUser()); } catch { return; }
+    if (!env) return;
     this._routerClassifying = true;
     this._routerClassifyThrottle = 2; // no reclasificar los próximos 2 turnos
-    classifyRelative({ cwd: this.cwd, currentModel: this.model, text })
+    classifyRelative({ cwd: this.cwd, currentModel: this.model, text, env })
       .then((move) => { // 'up' | 'down' | null (suficiente/timeout/error)
         if (!move || this.closed) return;
         const levels = this._routerLevels(); const ceiling = levels.length - 1; // PLAN-519 F1
@@ -2653,9 +2690,12 @@ class Chat {
     if (this.titleLocked) return; // nombre puesto a mano por la persona: no pisarlo
     if (this._titleBusy) return;
     if (Date.now() - (this._titleAt || 0) < AUTOTITLE_MIN_INTERVAL_MS) return;
+    let env;
+    try { env = ownerSdkEnv(this.owner || hostUser()); } catch { return; }
+    if (!env) return;
     this._titleBusy = true;
     this._titleAt = Date.now();
-    extractTitle({ cwd: this.cwd, current: this.title, text: t })
+    extractTitle({ cwd: this.cwd, current: this.title, text: t, env })
       .then((title) => {
         if (!title || this.closed || this.titleLocked || title === this.title) return;
         this.title = title;
@@ -4068,16 +4108,21 @@ setIndiceDataDirResolver((chatId) => {
 // Mismo blindaje anticonsumo que retro/shared.js: el host conserva su entorno;
 // un inquilino recibe env limpio + HOME/CWC_DATA_DIR propios y SOLO su token.
 // Sin credencial propia falla cerrado; jamás hereda la credencial del server.
-function indiceRunnerEnvFor(owner) {
+function ownerSdkEnv(owner) {
   const effectiveOwner = owner || hostUser();
   if (effectiveOwner === hostUser()) return process.env;
   const oauthToken = readUserOauthToken(effectiveOwner);
-  if (!oauthToken) {
+  return oauthToken ? userRunnerEnv(effectiveOwner, { oauthToken }) : null;
+}
+
+function indiceRunnerEnvFor(owner) {
+  const env = ownerSdkEnv(owner);
+  if (!env) {
     const error = new Error('Necesitás conectar tu cuenta de Claude para destilar el Índice.');
     error.conflict = true;
     throw error;
   }
-  return userRunnerEnv(effectiveOwner, { oauthToken });
+  return env;
 }
 
 function queueIndiceForChat(chat, { force = false } = {}) {

@@ -505,6 +505,10 @@ _autoTitle → extractTitle (query() del SDK con HAIKU, maxTurns 1,
 READ-ONLY doble capa regla 6 con TODA herramienta denegada) que
 resume en ≤20 chars qué se está haciendo y renombra chat.title EN
 PARALELO (jamás bloquea el turno; si falla queda el título viejo).
+El auto-título, el clasificador del router y el juez corren con las
+credenciales del dueño vía `ownerSdkEnv`; si un inquilino no tiene token se
+omiten. Los mensajes de error del SDK (`m.error`/`is_error`) se descartan y
+nunca se aceptan como texto válido.
 Guardas: throttle 20 s/chat + 1 en vuelo, mensajes <15 chars o
 /comandos no re-titulan, chats con ticket (bugfixes) NO se tocan
 (título curado "PR en progreso · TKT #n"). La UI lo levanta por
