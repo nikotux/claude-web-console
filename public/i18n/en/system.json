@@ -491,6 +491,7 @@
   "system.healthReview.analyzeChangesTitle": "Analyzes ONLY modules changed since the last review (unchanged ones are reused). Fast and cheap.",
   "system.healthReview.analyzeChanges": "Analyze changes",
   "system.healthReview.startDeepAnalysis": "Start deep analysis",
+  "system.healthReview.reviewLaunchError": "Could not launch the review.",
   "system.healthReview.fullAnalysisTitle": "Re-analyzes ALL modules from scratch, ignoring the cache (slower and more tokens)",
   "system.healthReview.full": "Full",
   "system.healthReview.resolveSafeTitle": "Resolves the {count} NON-critical findings in PARALLEL (isolated sandboxes) + serial integration with node --check. Does not restart. Critical items go through chat only.",

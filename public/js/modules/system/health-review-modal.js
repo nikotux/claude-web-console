@@ -300,9 +300,17 @@ export function mountHealthReview(host, ctx, { isAdmin, onClose } = {}) {
     if (!ok) return;
     let d = {};
     try {
-      d = await (await fetch(`${API}/review`, {
+      const res = await fetch(`${API}/review`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ full }),
-      })).json();
+      });
+      d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        await dialog.alertDialog({
+          title: full ? t('system.healthReview.fullAnalysis', 'Análisis completo') : t('system.healthReview.changeAnalysis', 'Análisis de cambios'),
+          message: d.error || t('system.healthReview.reviewLaunchError', 'No se pudo lanzar la revisión.'),
+        });
+        return;
+      }
     } catch { /* el poll averigua */ }
     render({ ...d, running: true });
     poll();
