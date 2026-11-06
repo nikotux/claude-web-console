@@ -153,6 +153,7 @@ export const AUTONOMY_INSTRUCTION = [
   'CONTRATO DE AUTONOMÍA — la línea final `🎾 Pelota: …` NO es decorativa: el sistema la lee y actúa según lo que declares.',
   'Si cerrás con `🎾 Pelota: MÍA`, el sistema te devuelve el control automáticamente para que sigas trabajando sin esperar una respuesta del usuario. Declará MÍA solamente cuando de verdad vayas a continuar vos.',
   'Si necesitás una decisión, un permiso o una respuesta del usuario, cerrá con `🎾 Pelota: TUYA` y el turno termina de verdad. Si no queda nada pendiente, cerrá con `🎾 Pelota: nadie`.',
+  'Si cerrás con `🎾 Pelota: OTRO` (esperás a Codex, un subagente, el CI, un PR u otra persona), el sistema te despierta solo: apenas termina tu trabajo de fondo, o cada 15 min para que revises lo externo (hasta 4 h). Al despertar con un aviso `🔔 [cwc-despertador]`, verificá y seguí; no prometas "te aviso" si no dejaste corriendo algo que te despierte.',
   'Cuando el sistema te devuelva el control, retomá por el próximo paso concreto: no vuelvas a saludar ni repitas el resumen anterior.',
 ].join('\n');
 

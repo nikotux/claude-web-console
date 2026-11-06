@@ -115,7 +115,7 @@ export default function retroHelp() {
         blocks: [
           {
             type: 'note',
-            text: t('retro.pool.help.what', 'El pozo común vive en el workspace comunidad y reúne lecciones de proceso que otras personas compartieron. Publicar es automático únicamente para lecciones de Tolkien, salvo que apagues el interruptor.'),
+            text: t('retro.pool.help.what', 'El pozo común vive en el workspace comunidad y reúne lecciones de proceso que otras personas compartieron. La publicación es automática para todas las lecciones, salvo las descartadas, las retiradas o cuando el interruptor está apagado.'),
           },
           {
             type: 'kv',
@@ -126,7 +126,7 @@ export default function retroHelp() {
               },
               {
                 k: t('retro.pool.help.adoptAll.k', '👍 Adoptar todas (N)'),
-                v: t('retro.pool.help.adoptAll.v', 'Trae como propuestas solo las lecciones que no son tuyas ni tenés ya. Adoptar no es aplicar: cada lección queda en tu lista y vos decidís después su destino.'),
+                v: t('retro.pool.help.adoptAll.v', 'Trae como propuestas solo las lecciones que no son tuyas ni tenés ya; para inquilinos deja fuera las internas de Consola. Adoptar no es aplicar: cada lección queda en tu lista y vos decidís después su destino.'),
               },
               {
                 k: t('retro.pool.help.recurrence.k', 'le pasó a N'),

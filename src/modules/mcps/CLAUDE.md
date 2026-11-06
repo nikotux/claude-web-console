@@ -54,9 +54,9 @@ systemd y ZeroTier son estado de la instalación y no entran en su llavero.
 `probeCodexCli` ya no hardcodea esa ventana: importa `CODEX_TOKEN_TTL_MS` de
 `core/user-space.js`, la MISMA constante que usa `connections` para decidir si
 la credencial de Codex sigue viva.
-SALUD FAIL-CLOSED (2026-10-28, `console:PLAN-3493`): para inquilinos cada sonda
-verifica la identidad propia contra la del host (Infisical, gh, Codex y Pad
-local); una identidad igual o ilegible queda en `danger`. La aceptación de
+SALUD FAIL-CLOSED (2026-10-28, `console:PLAN-3493`): para inquilinos las sondas verifican la identidad propia contra el host (Infisical, gh y Pad local).
+Codex es la excepción compartida (`console:BUG-3500`): la misma cuenta es válida; solo un `auth.json` copiado del host (mismo token) queda en `danger`.
+La aceptación de
 Infisical también falla cerrada si no puede leer cualquiera de las cuentas, y
 `runnerScopeFor()` deriva `isHost` del `HOME` real. Los jobs de login pasan a
 `error` si `spawn` falla en vez de quedar en `starting`; `classifyStatus()` usa

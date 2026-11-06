@@ -212,8 +212,10 @@ token-flow.js (visualización "Manguera de tokens" del caudal de tokens:
 DIRECTOR DOM con un solo rAF que anima todas las celdas .cwc-flow-cell
 del documento leyendo el store compartido; suavizado por data-flow-key,
 robusto al re-render. El store ref-counted pollea GET /api/tokens/flow
-cada ~400 ms y el backend devuelve claude/codex globales + bySession/byCwd
-con acumuladores. Helper flowBarHtml({engine,session?,cwd?,total?,compact?,dot?})
+con cadencia adaptativa y el backend devuelve claude/codex globales + bySession/byCwd
+con acumuladores.
+Cadencia adaptativa (2026-10-28, console:BUG-3510): 700 ms activo · 2,5 s tras 10 s en cero; al detectar caudal o volver a visible retoma 700 ms.
+Helper flowBarHtml({engine,session?,cwd?,total?,compact?,dot?})
 genera una celda autocontenida con punto de identidad
 Claude=--cwc-accent / Codex=--cwc-accent-cool, barra de 3px con la misma
 técnica de gradiente fijo revelado que límites del plan y número t/s. Las

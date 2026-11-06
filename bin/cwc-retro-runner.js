@@ -48,7 +48,8 @@ async function distill(job, ctx, sharedCtx) {
     if (!Array.isArray(lessons)) throw new Error(r?.error || 'El pozo común devolvió una respuesta inválida.');
     poolExisting = [...lessons]
       .sort((a, b) => (
-        Number(b.recurrence || 0) - Number(a.recurrence || 0)
+        Number(b.project === job.meta?.project) - Number(a.project === job.meta?.project)
+        || Number(b.recurrence || 0) - Number(a.recurrence || 0)
         || Number(b.updatedAt || 0) - Number(a.updatedAt || 0)
       ))
       .map((l) => ({ category: l.category, title: l.title, recurrence: l.recurrence }));

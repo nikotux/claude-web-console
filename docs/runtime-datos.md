@@ -57,6 +57,11 @@
   — lo escribe el módulo tokens (writePersistedCodex) desde el endpoint interno
   `chatgpt.com/backend-api/wham/usage`, leyendo la credencial local
   `~/.codex/auth.json`; fallback `stale` best-effort (PEND-499, ver módulo tokens),
+  `codex-jobs/<id>.json` por dueño: estado durable de cada delegación Tándem
+  (`id`, `chatId`, `label`, `status`, tiempos y `progress`). `progress` contiene
+  `{updatedAt,steps,lastMessage,now,counts,recent}` y se actualiza como máximo
+  cada 2 s mientras corre; el watcher web lo relee para reconstruir las tarjetas
+  en vivo después de una recarga o reinicio,
   `usage-history.json` HISTÓRICO PERSISTENTE de consumo por día(LOCAL Medellín)×
   PROYECTO×modelo (days[fecha][consola|tolkien|otros][modelKey]={tokens,cost}; lo
   escribe el módulo tokens vía history-store.js: buildSummary calcula el desglose y
@@ -140,8 +145,12 @@
   poda >30 días) + `retro.log` de su runner + `retro-activity.json` log local
   append-only del registro de lecciones + `retro-curation.json` job de la
   curaduría IA (Fase 5) + `retro-curate.log` (las lecciones EN SÍ viven en Pad
-  local, colección `mejora-continua`, no en archivo), `session-bus/` del INTERFONO entre
-  sesiones — `messages/<id>.json` bandeja de mensajes · `claims/<hash>.json`
+  local, colección `mejora-continua`, no en archivo), `retro-pool-backfill/`
+  progreso y reporte de `bin/cwc-pool-backfill.js` + `retro-pool-organize/`
+  progreso, reporte y mapa de `bin/cwc-pool-organize.js` + `retro-pool-citations/`
+  progreso y reporte reversible de `bin/cwc-pool-unlink-citations.js`,
+  `session-bus/` del INTERFONO entre sesiones — `messages/<id>.json` bandeja de
+  mensajes · `claims/<hash>.json`
   reservas de archivo (1 por archivo, clave = hash de la ruta) ·
   `tombstones/<id>.json` avisos de claim robado; lo escriben los hooks vía
   `bin/cwc-bus.js`, el módulo `interfono` solo lo lee), `ticket-meta.json`

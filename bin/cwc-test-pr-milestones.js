@@ -4,7 +4,8 @@ import {
   acknowledgeMilestones, applyPrObservation, applyPrTransitions, buildPrGraphqlQuery,
   extractTolkienPrLink, isDeployedCompareStatus, isTolkienPrCommand,
   normalizeCodexPrLinks, normalizePrLinks, parseKamalProductionTitle,
-  prLinkFromCodexEvent, prLinkFromCommand, validMilestoneKeys,
+  prCiBadge, prLinkFromCodexEvent, prLinkFromCommand, sameCi, summarizePrCi,
+  validMilestoneKeys,
 } from '../src/modules/chat/pr-milestones.js';
 import { milestoneGlyph } from '../public/js/ui/pr-milestone.js';
 
@@ -36,6 +37,27 @@ const base = () => ({
   pending: [],
 });
 const sha = '0123456789abcdef0123456789abcdef01234567';
+const ciObserved = (nodes, extra = {}) => ({
+  number: 1934,
+  title: 'CI en vivo',
+  url: 'https://github.com/Mordor-Staffing/tolkien/pull/1934',
+  state: 'OPEN',
+  headRefOid: sha.toUpperCase(),
+  commits: { nodes: [{ commit: { oid: sha.toUpperCase(), statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } } } }] },
+  ...extra,
+});
+const checkRun = (name, conclusion, extra = {}) => ({
+  __typename: 'CheckRun',
+  name,
+  status: 'COMPLETED',
+  conclusion,
+  startedAt: '2026-11-06T10:00:00.000Z',
+  completedAt: '2026-11-06T10:01:00.000Z',
+  ...extra,
+});
+const statusContext = (context, state, createdAt = '2026-11-06T10:00:00.000Z') => ({
+  __typename: 'StatusContext', context, state, createdAt,
+});
 
 test('reconoce Bash gh pr create', () => {
   assert.equal(isTolkienPrCommand('Bash', { command: 'gh pr create --fill' }), true);
@@ -206,6 +228,20 @@ test('un merge anterior al enlace se registra sin pendiente', () => {
   assert.deepEqual(out.milestones, []);
   assert.deepEqual(out.link.pending, []);
 });
+test('los campos extra de CI no alteran la observación de hitos', () => {
+  const observed = {
+    state: 'OPEN', reviewDecision: null, title: 'Sin cambios',
+    url: 'https://github.com/Mordor-Staffing/tolkien/pull/1934',
+  };
+  const options = { now: '2026-10-30T11:05:00.000Z' };
+  const plain = applyPrObservation(base(), observed, null, options);
+  const withCi = applyPrObservation(base(), {
+    ...observed,
+    headRefOid: sha,
+    commits: { nodes: [{ commit: { oid: sha, statusCheckRollup: { contexts: { nodes: [] } } } }] },
+  }, null, options);
+  assert.deepEqual(withCi, plain);
+});
 
 test('acepta solo el título exacto de deploy a producción', () => {
   assert.equal(parseKamalProductionTitle(`Deploy Kamal deploy production sha-${sha}`), sha);
@@ -240,6 +276,120 @@ test('GraphQL deduplica y usa aliases seguros', () => {
   assert.match(query, /p1934: pullRequest\(number:1934\)/);
   assert.match(query, /p8: pullRequest\(number:8\)/);
   assert.equal((query.match(/p1934:/g) || []).length, 1);
+  assert.match(query, /number title url state reviewDecision mergedAt mergeCommit\{oid\}/);
+  assert.match(query, /headRefOid commits\(last:1\)/);
+  assert.match(query, /statusCheckRollup/);
+  assert.match(query, /contexts\(first:60\)\{totalCount nodes/);
+});
+test('GraphQL conserva el límite de 50 PR', () => {
+  const query = buildPrGraphqlQuery(Array.from({ length: 60 }, (_, i) => i + 1));
+  assert.equal((query.match(/: pullRequest/g) || []).length, 50);
+  assert.doesNotMatch(query, /p51:/);
+});
+
+test('resume CI con todas las revisiones aprobadas', () => {
+  const ci = summarizePrCi(ciObserved([
+    checkRun('lint', 'SUCCESS'),
+    checkRun('docs', 'NEUTRAL', { startedAt: '2026-11-06T09:58:00.000Z' }),
+  ]));
+  assert.deepEqual(ci, {
+    number: 1934,
+    title: 'CI en vivo',
+    url: 'https://github.com/Mordor-Staffing/tolkien/pull/1934',
+    sha,
+    state: 'passed',
+    total: 2,
+    done: 2,
+    failed: 0,
+    running: [],
+    failedNames: [],
+    startedAt: Date.parse('2026-11-06T09:58:00.000Z'),
+    finishedAt: Date.parse('2026-11-06T10:01:00.000Z'),
+  });
+});
+test('una revisión corriendo domina aunque otra haya fallado', () => {
+  const ci = summarizePrCi(ciObserved([
+    checkRun('tests', 'FAILURE'),
+    checkRun('deploy', null, { status: 'IN_PROGRESS', completedAt: null }),
+  ]));
+  assert.equal(ci.state, 'running');
+  assert.equal(ci.done, 1);
+  assert.equal(ci.failed, 1);
+  assert.deepEqual(ci.running, ['deploy']);
+  assert.deepEqual(ci.failedNames, ['tests']);
+  assert.equal(ci.finishedAt, null);
+});
+test('todas terminadas con falla producen estado failed y nombres acotados', () => {
+  const nodes = Array.from({ length: 10 }, (_, i) => checkRun(` falla ${i} `.padEnd(100, 'x'), 'FAILURE'));
+  const ci = summarizePrCi(ciObserved(nodes));
+  assert.equal(ci.state, 'failed');
+  assert.equal(ci.failed, 10);
+  assert.equal(ci.failedNames.length, 8);
+  assert.ok(ci.failedNames.every((name) => name.length <= 80 && name === name.trim()));
+});
+test('skipped, neutral y stale cuentan como revisiones listas sin falla', () => {
+  const ci = summarizePrCi(ciObserved([
+    checkRun('skip', 'SKIPPED'), checkRun('neutral', 'NEUTRAL'), checkRun('old', 'STALE'),
+  ]));
+  assert.equal(ci.state, 'passed');
+  assert.equal(ci.done, 3);
+  assert.equal(ci.failed, 0);
+});
+test('mezcla estados clásicos de StatusContext', () => {
+  const ci = summarizePrCi(ciObserved([
+    statusContext('legacy-ok', 'SUCCESS', '2026-11-06T09:55:00.000Z'),
+    statusContext('legacy-bad', 'ERROR'),
+    statusContext('legacy-wait', 'EXPECTED'),
+  ]));
+  assert.equal(ci.state, 'running');
+  assert.equal(ci.done, 2);
+  assert.equal(ci.failed, 1);
+  assert.deepEqual(ci.running, ['legacy-wait']);
+  assert.deepEqual(ci.failedNames, ['legacy-bad']);
+  assert.equal(ci.startedAt, Date.parse('2026-11-06T09:55:00.000Z'));
+});
+test('un re-run con el mismo nombre conserva solo la ejecución más nueva', () => {
+  const ci = summarizePrCi(ciObserved([
+    checkRun('tests', 'FAILURE', { startedAt: '2026-11-06T09:00:00.000Z' }),
+    checkRun('tests', 'SUCCESS', { startedAt: '2026-11-06T10:00:00.000Z' }),
+  ]));
+  assert.equal(ci.total, 1);
+  assert.equal(ci.state, 'passed');
+  assert.equal(ci.failed, 0);
+});
+test('PR merged o cerrada no tiene resumen de CI', () => {
+  const observed = ciObserved([checkRun('tests', 'SUCCESS')]);
+  assert.equal(summarizePrCi({ ...observed, state: 'MERGED' }), null);
+  assert.equal(summarizePrCi({ ...observed, state: 'CLOSED' }), null);
+});
+test('PR sin revisiones no tiene resumen de CI', () => {
+  assert.equal(summarizePrCi(ciObserved([])), null);
+  assert.equal(summarizePrCi(ciObserved([], { commits: { nodes: [] } })), null);
+});
+test('entrada basura nunca produce un resumen ni lanza', () => {
+  assert.equal(summarizePrCi(null), null);
+  assert.equal(summarizePrCi({ state: 'OPEN', commits: { nodes: 'no' } }), null);
+  assert.equal(summarizePrCi({ get state() { throw new Error('basura'); } }), null);
+  assert.equal(summarizePrCi(ciObserved([]), null), null);
+});
+test('prCiBadge prioriza running, luego failed y el passed más reciente', () => {
+  const passedOld = summarizePrCi(ciObserved([checkRun('old', 'SUCCESS')], { number: 1 }));
+  const passedNew = { ...passedOld, number: 2, finishedAt: passedOld.finishedAt + 1_000 };
+  const failed = { ...passedOld, number: 3, state: 'failed', failed: 1, failedNames: ['tests'] };
+  const running = { ...passedOld, number: 4, state: 'running', done: 0, running: ['tests'], finishedAt: null };
+  assert.deepEqual(prCiBadge([passedNew, failed, running]), { number: 4, state: 'running', done: 0, total: 1, failed: 0 });
+  assert.deepEqual(prCiBadge([passedNew, failed]), { number: 3, state: 'failed', done: 1, total: 1, failed: 1 });
+  assert.deepEqual(prCiBadge([passedOld, passedNew]), { number: 2, state: 'passed', done: 1, total: 1, failed: 0 });
+  assert.equal(prCiBadge('basura'), null);
+});
+test('sameCi detecta solo cambios visibles de CI', () => {
+  const ci = summarizePrCi(ciObserved([checkRun('tests', 'SUCCESS')]));
+  assert.equal(sameCi(ci, { ...ci, title: 'otro', url: 'https://example.com' }), true);
+  assert.equal(sameCi(ci, { ...ci, state: 'failed', failed: 1, failedNames: ['tests'] }), false);
+  assert.equal(sameCi(ci, { ...ci, sha: 'f'.repeat(40) }), false);
+  assert.equal(sameCi({ ...ci, running: ['b', 'a'] }, { ...ci, running: ['a', 'b'] }), true);
+  assert.equal(sameCi(null, null), true);
+  assert.equal(sameCi(ci, null), false);
 });
 test('glifos coinciden con el Ojo, el anillo con gema y la torre aprobados', () => {
   assert.match(milestoneGlyph('approved'), /M1 6s1\.8-3 5-3/);

@@ -18,6 +18,7 @@ import { encodeCwd } from '../../core/claude-model.js';
 import {
   retroClaudeDirFor, retroDataDirFor, retroHostUser, retroRunnerEnvFor,
 } from './owner-dirs.js';
+import { normalizePoolTopic, POOL_TOPICS } from './pool-topics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..', '..', '..');
@@ -280,6 +281,8 @@ Sé CONSERVADOR: solo lecciones REALES, accionables y generalizables a futuras s
 Para cada lección devolvé:
 - title: imperativa y corta (≤80 chars).
 - category: uno de regla | convencion | metodologia | procedimiento | herramienta | nota.
+- topic: el tema principal, uno de:
+${POOL_TOPICS.map(({ slug, hint }) => `  - ${slug}: ${hint}`).join('\n')}
 - observation: qué pasó en ESTA sesión que la disparó (1-2 frases).
 - lesson: qué hacer distinto de ahora en más (accionable, concreto).
 - destination: dónde debería vivir para cambiar el comportamiento futuro — uno de memoria | claude-md | contexto | convencion | registro.
@@ -288,7 +291,7 @@ Para cada lección devolvé:
 
 Respondé ÚNICAMENTE con un bloque \`\`\`json con esta forma EXACTA, sin texto fuera del bloque:
 \`\`\`json
-{ "lessons": [ { "title": "...", "category": "metodologia", "observation": "...", "lesson": "...", "destination": "memoria", "project": "console", "confidence": "media" } ] }
+{ "lessons": [ { "title": "...", "category": "metodologia", "topic": "verificar-evidencia", "observation": "...", "lesson": "...", "destination": "memoria", "project": "console", "confidence": "media" } ] }
 \`\`\`
 
 === TRANSCRIPCIÓN CONDENSADA ===
@@ -311,6 +314,7 @@ export function parseRetro(text) {
   const lessons = Array.isArray(o?.lessons) ? o.lessons.slice(0, 12).map((l) => ({
     title: clamp(l?.title, 200).trim(),
     category: pick(l?.category, CATS, 'nota'),
+    topic: normalizePoolTopic(l?.topic),
     observation: clamp(l?.observation, 2000),
     lesson: clamp(l?.lesson, 2000),
     destination: pick(l?.destination, DESTS, 'registro'),

@@ -61,7 +61,10 @@ eq('3. pruneSalas() no se invoca en chat/index.js', indexSource.includes('pruneS
 eq('4. salaKeepIdsForPrune no existe en ningún archivo JavaScript de src/', allSrcJs.includes('salaKeepIdsForPrune'), false);
 ok(
   '5. siguen las ramas legítimas de sleep y descarte de cerradas',
-  indexSource.includes("if (c.viewMode === 'chat' && c.alive && !(c._bgTasks?.length) && now - c.lastActivity > SLEEP_MS) c.sleep();")
+  reaperSource.includes('c.sleep()')
+    && reaperSource.includes('sleepThresholdMs(c.lastPelota)')
+    && reaperSource.includes('holdsForOtro(')
+    && reaperSource.includes('!(c._bgTasks?.length)')
     && indexSource.includes('if (c.closed && now - c.lastActivity > SLEEP_MS * 2) { this.chats.delete(id); dirty = true; }'),
 );
 

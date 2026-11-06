@@ -22,18 +22,72 @@ import {
   snapshotTree,
   writeCodexJob,
 } from '../src/modules/chat/codex-shared.js';
+import {
+  applyCodexEvent,
+  createCodexProgress,
+  serializeCodexProgress,
+} from '../src/modules/chat/codex-progress.js';
 import { normalizeCodexPrLinks } from '../src/modules/chat/pr-milestones.js';
 
 const log = (...args) => console.log(`[${new Date().toISOString()}]`, ...args);
 const usage = () => console.error(`[${new Date().toISOString()}] Uso: node bin/cwc-codex-runner.js --job <id>`);
 let activeJobId = null;
 let heartbeat = null;
+let activeProgress = null;
 let handlingSignal = false;
+
+function createProgressPersistence(id, state, lastWriteAt = 0) {
+  let trailing = null;
+  let pending = false;
+  let loggedFailure = false;
+
+  const persist = (force = false) => {
+    if (trailing) clearTimeout(trailing);
+    trailing = null;
+    if (!pending && !force) return;
+    pending = false;
+    lastWriteAt = Date.now();
+    try {
+      writeCodexJob(id, { progress: serializeCodexProgress(state) });
+    } catch (err) {
+      if (!loggedFailure) {
+        loggedFailure = true;
+        log(`No se pudo persistir el progreso del job ${id}:`, err?.message || err);
+      }
+    }
+  };
+
+  return {
+    onEvent(ev) {
+      let changed = false;
+      try { changed = applyCodexEvent(state, ev); } catch { return; }
+      if (!changed) return;
+      pending = true;
+      const wait = Math.max(0, 2000 - (Date.now() - lastWriteAt));
+      if (wait === 0) persist();
+      else if (!trailing) {
+        trailing = setTimeout(() => persist(), wait);
+        trailing.unref();
+      }
+    },
+    flush() { persist(true); },
+    clear() {
+      if (trailing) clearTimeout(trailing);
+      trailing = null;
+      pending = false;
+    },
+  };
+}
 
 function handleSignal(signal, exitCode) {
   if (handlingSignal) return;
   handlingSignal = true;
   if (heartbeat) clearInterval(heartbeat);
+  if (activeProgress) {
+    activeProgress.flush();
+    activeProgress.clear();
+    activeProgress = null;
+  }
   if (activeJobId) {
     try {
       writeCodexJob(activeJobId, {
@@ -76,11 +130,15 @@ async function runJob(id) {
 
   const startedAt = Date.now();
   activeJobId = id;
+  const progressState = createCodexProgress();
+  const progressPersistence = createProgressPersistence(id, progressState, startedAt);
+  activeProgress = progressPersistence;
   writeCodexJob(id, {
     status: 'running',
     startedAt,
     heartbeatAt: startedAt,
     pid: process.pid,
+    progress: serializeCodexProgress(progressState),
   });
   heartbeat = setInterval(() => {
     try { writeCodexJob(id, { heartbeatAt: Date.now() }); }
@@ -115,6 +173,7 @@ async function runJob(id) {
             false,
             Array.isArray(job.writableRoots) ? job.writableRoots : [],
             (threadId) => { try { writeCodexJob(id, { threadId }); } catch { /* noop */ } },
+            progressPersistence.onEvent,
           );
           const applied = await applyDeclaredBack(worktreePath, job.cwd, declared);
           if (applied.conflict === true) {
@@ -127,6 +186,7 @@ async function runJob(id) {
               'El cambio de Codex NO se aplicó al proyecto real.',
               `El trabajo quedó preservado en el worktree: ${worktreePath}`,
             ].join('\n\n');
+            progressPersistence.flush();
             writeCodexJob(id, {
               status: 'done',
               report,
@@ -170,6 +230,7 @@ async function runJob(id) {
               attributed: true,
             }));
           }
+          progressPersistence.flush();
           writeCodexJob(id, {
             status: 'done',
             report: text,
@@ -195,6 +256,7 @@ async function runJob(id) {
         'No se ejecutó Codex ni se aplicó ningún cambio, para no arriesgar el trabajo de otras sesiones.',
         'Podés reintentar cuando el árbol esté más quieto, o repetir la delegación SIN `files` si aceptás ejecutarla sin aislamiento.',
       ].join('\n\n');
+      progressPersistence.flush();
       writeCodexJob(id, {
         status: 'done',
         report,
@@ -214,6 +276,7 @@ async function runJob(id) {
       job.fullAccess === true,
       Array.isArray(job.writableRoots) ? job.writableRoots : [],
       (threadId) => { try { writeCodexJob(id, { threadId }); } catch { /* noop */ } },
+      progressPersistence.onEvent,
     );
     const after = await snapshotTree(job.cwd);
     const changes = diffSnapshots(before, after, job.cwd, startedAt);
@@ -228,6 +291,7 @@ async function runJob(id) {
     const isolationNote = declared && job.fullAccess === true
       ? 'NOTA DE AISLAMIENTO: se declararon archivos, pero la delegación usó full_access y por diseño se ejecutó sobre el árbol real.'
       : '';
+    progressPersistence.flush();
     writeCodexJob(id, {
       status: 'done',
       report: isolationNote ? `${text}\n\n${isolationNote}` : text,
@@ -241,6 +305,9 @@ async function runJob(id) {
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = null;
+    if (activeJobId === id) progressPersistence.flush();
+    progressPersistence.clear();
+    if (activeProgress === progressPersistence) activeProgress = null;
   }
 }
 
@@ -253,6 +320,7 @@ if (!validJobId) {
   } catch (err) {
     const message = String(err?.message || err);
     try {
+      if (activeProgress) activeProgress.flush();
       writeCodexJob(jobId, {
         status: 'error',
         error: message,

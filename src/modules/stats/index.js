@@ -14,6 +14,7 @@
 import express from 'express';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { config } from '../../core/config.js';
 import fss from 'node:fs';
 import path from 'node:path';
@@ -24,6 +25,31 @@ import { hostUser, userDataDir, userClaudeDir } from '../../core/user-space.js';
 let prevCpu = null; // { idle, total }
 let prevCpuAt = 0;
 let lastCpuPct = 0;
+const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+eventLoopDelay.enable();
+
+// Una sola ventana compartida: cada lectura consume el lag desde la anterior.
+export function serverProcessStats() {
+  const mem = process.memoryUsage();
+  const mb = (bytes) => Number((bytes / 1024 ** 2).toFixed(1));
+  const ms = (ns) => Number.isFinite(ns) ? Number((ns / 1e6).toFixed(1)) : 0;
+  const eventLoopLagMs = {
+    mean: ms(eventLoopDelay.mean),
+    max: ms(eventLoopDelay.max),
+    p99: ms(eventLoopDelay.percentile(99)),
+  };
+  eventLoopDelay.reset();
+  return {
+    pid: process.pid,
+    uptime: process.uptime(),
+    rssMb: mb(mem.rss),
+    heapUsedMb: mb(mem.heapUsed),
+    heapTotalMb: mb(mem.heapTotal),
+    externalMb: mb(mem.external),
+    eventLoopLagMs,
+    handles: process.getActiveResourcesInfo().length,
+  };
+}
 
 function cpuSnapshot() {
   let idle = 0;
@@ -259,7 +285,7 @@ export default {
     r.get('/', async (req, res) => {
       try {
         const snap = await systemSnapshot();
-        res.json({ ...snap, server: { uptime: process.uptime(), pid: process.pid } });
+        res.json({ ...snap, server: serverProcessStats() });
       } catch (err) {
         res.status(500).json({ error: err.message });
       }

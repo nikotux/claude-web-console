@@ -372,6 +372,14 @@ public/js/rawview/raw.js (ver raw.html en el mapa).
   Medir el delta de `rchar` en `/proc/<MainPID>/io`; `ls -l /proc/<pid>/fd` permite
   detectar rollouts viejos abiertos durante el escaneo repetido.
 
+- MEMO DE `/flow` (2026-10-28, console:PLAN-3508 / BUG-3510): TTL compartido de
+  600 ms por owner y promesa en vuelo compartida; evita multiplicar pestañas ×
+  28 ms de CPU por escaneo cuando cada cliente pollea cada 700 ms.
+
+- PARSEO POR LÍNEAS (2026-10-28, console:PLAN-3508 / BUG-3510): Claude y Codex
+  usan streams + readline para evitar el pico de heap de 433 MB de readFile +
+  split; conservan los buckets y la LRU de 20000 entradas.
+
 - DRIFT SILENCIOSO DE FORMATOS EXTERNOS — el parser de rollouts Codex ya quedó
   completamente mudo tras un cambio del CLI de terceros: no lanzó excepción,
   simplemente `codexText()` devolvía `null` para todos los eventos. Si una

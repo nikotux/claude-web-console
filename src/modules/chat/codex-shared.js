@@ -30,6 +30,7 @@ export const TANDEM_CODEX_PREAMBLE = [
   '- Evitá heredocs frágiles y comillas/backticks anidados sin cerrar; preferí comandos de una línea simples.',
   '- Si la tarea necesita escribir en `.git` (git add/commit/rebase/etc.), avisá que hace falta `full_access: true`; sin eso `.git` es read-only.',
   '- La generación PURA de documentos (redactar/traducir texto que no es código) es razonamiento y conviene que la resuelva Claude directo, no esta delegación.',
+  '- Si la tarea tiene más de un paso, tu PRIMER mensaje de avance debe incluir tu plan así, en líneas propias: `PLAN:` y debajo `1. …`, `2. …` (3 a 8 pasos cortos en español simple, sin jerga, por ejemplo «Escribir el código nuevo», «Correr las pruebas»). Después, cada vez que empieces un paso, empezá tu mensaje de avance con `Paso N:` seguido de lo que vas a hacer. Si es una tarea trivial de un solo paso, omitilo.',
   '- En tu mensaje final resumí en pocas líneas QUÉ cambiaste y en qué archivo.',
   '- Si la delegación declaró archivos, limitate a ellos: solo esos cambios se aplican de vuelta al proyecto real.',
   '',
@@ -373,7 +374,7 @@ export function diffSnapshots(before, after, cwd, startedAt) {
 // {code|error, msgs[], threadId, usage, stderr, prLinks[]}. Kill por tope de seguridad.
 // PLAN-519 F2: modelo+esfuerzo configurables (default gama alta). `fullAccess`
 // desactiva el sandbox, necesario para escribir en `.git`.
-export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_EFFORT, fullAccess = false, writableRoots = [], onThread = null) {
+export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_CODEX_EFFORT, fullAccess = false, writableRoots = [], onThread = null, onEvent = null) {
   return new Promise((resolve) => {
     // Este código corre dentro del runner: os.homedir() ya resuelve al HOME aislado
     // del dueño, inyectado por userRunnerEnv; no corresponde importar user-space.
@@ -424,6 +425,9 @@ export function runCodex(cwd, task, model = TANDEM_CODEX_MODEL, effort = TANDEM_
         const line = buf.slice(0, i); buf = buf.slice(i + 1);
         if (!line.trim()) continue;
         let ev; try { ev = JSON.parse(line); } catch { continue; }
+        if (typeof onEvent === 'function') {
+          try { onEvent(ev); } catch { /* noop */ }
+        }
         if (ev.type === 'thread.started') {
           threadId = ev.thread_id || threadId;
           if (!threadNotified && threadId && typeof onThread === 'function') {

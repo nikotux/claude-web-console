@@ -364,5 +364,9 @@
   "sessions.help.tmux.rehydrate": "After the console server restarts, your own tmux sessions that are still alive are rehydrated and reappear with their saved folder, owner, and name. External tmux sessions stay separate under “Other tmux sessions.”",
   "sessions.help.package.title": "The session package",
   "sessions.help.package.text": "Each conversation has a session package with a stable PKG-N reference: it brings together its identity, history, context, and working-files folder. “Open chat folder” shows that workspace; when the conversation moves to another world or to Aduana, the package travels with it.",
-  "sessions.help.package.warning": "Closing keeps the package in the Trash for 30 days. “Delete now” permanently deletes its history and files; killing a tmux session also interrupts everything running inside and may affect external work."
+  "sessions.help.package.warning": "Closing keeps the package in the Trash for 30 days. “Delete now” permanently deletes its history and files; killing a tmux session also interrupts everything running inside and may affect external work.",
+  "sessions.live.codexStep": "⚙️ Codex · step {step} of {total}",
+  "sessions.live.codexWorking": "⚙️ Codex working",
+  "sessions.live.ciFailed": "🧪 CI failed",
+  "sessions.live.ciRunning": "🧪 CI {done}/{total}"
 }

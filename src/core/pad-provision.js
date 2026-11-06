@@ -21,8 +21,8 @@ import {
 
 const PAD_URL = PAD_DEFAULT_URL;
 // Pozo COMÚN de Mejora Continua (console:PLAN-2222): workspace neutral donde
-// las lecciones de `project: tolkien` de TODOS los usuarios se agregan y suman
-// recurrencia entre personas. No es de nadie: ni `console` ni un `tenant-*`.
+// las lecciones de cualquier project de TODOS los usuarios se agregan, conservan
+// su etiqueta real y suman recurrencia. No es de nadie: ni `console` ni tenant-*.
 export const SHARED_WORKSPACE = process.env.CWC_PAD_SHARED_WORKSPACE || 'comunidad';
 const SHARED_COLLECTION = 'mejora-continua';
 const SLEEP_MS = 400; // espaciar llamadas (rate-limit del Pad)

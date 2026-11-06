@@ -513,6 +513,75 @@ function checkServer() {
   return { id: 'server', label: 'Proceso del server', status: 'ok', detail: `node ${process.version} · pid ${process.pid} · up ${h}h ${m}m · ${mem} MB RSS` };
 }
 
+// Lector sin estado; permite probar el parseo sin cargar las dependencias de Salud.
+export async function readCgroupMemory(readFile = fss.promises.readFile) {
+  try {
+    const membership = await readFile('/proc/self/cgroup', 'utf8');
+    const cgroupPath = membership.match(/^0::(\/[^\r\n]*)\r?$/m)?.[1];
+    if (!cgroupPath) return null;
+    const dir = `/sys/fs/cgroup${cgroupPath}`;
+    const [currentText, highText, eventsText, cpuText, pressureText] = await Promise.all(
+      ['memory.current', 'memory.high', 'memory.events', 'cpu.stat', 'memory.pressure']
+        .map(async (name) => {
+          try {
+            return await readFile(`${dir}/${name}`, 'utf8');
+          } catch (err) {
+            if (name === 'memory.pressure') return null;
+            throw err;
+          }
+        }),
+    );
+    const numeric = (text) => {
+      if (!/^\d+$/.test(text?.trim() || '')) throw new Error('contador de cgroup inválido');
+      const value = Number(text.trim());
+      if (!Number.isFinite(value)) throw new Error('contador de cgroup fuera de rango');
+      return value;
+    };
+    const pressureAvg60 = (kind) => {
+      const value = pressureText?.match(new RegExp(`^${kind}[^\\r\\n]*\\bavg60=(\\d+(?:\\.\\d+)?)(?=\\s|$)`, 'm'))?.[1];
+      return value !== undefined && Number.isFinite(Number(value)) ? Number(value) : null;
+    };
+    return {
+      current: numeric(currentText),
+      high: highText.trim() === 'max' ? null : numeric(highText),
+      highEvents: numeric(eventsText.match(/^high\s+(\d+)\s*$/m)?.[1]),
+      nrThrottled: numeric(cpuText.match(/^nr_throttled\s+(\d+)\s*$/m)?.[1]),
+      pressureFullAvg60: pressureAvg60('full'),
+      pressureSomeAvg60: pressureAvg60('some'),
+    };
+  } catch {
+    return null;
+  }
+}
+
+let previousRecursos = null; // { highEvents, nrThrottled, at }, solo lecturas válidas.
+
+async function checkRecursos() {
+  const id = 'recursos';
+  const label = 'Recursos (cgroup + heap)';
+  const cgroup = await readCgroupMemory();
+  if (!cgroup) return { id, label, status: 'ok', detail: 'cgroup no legible' };
+  const { current, high, highEvents, nrThrottled, pressureFullAvg60, pressureSomeAvg60 } = cgroup;
+  // La primera lectura establece la base; un contador reiniciado no da delta negativo.
+  const highDelta = previousRecursos ? Math.max(0, highEvents - previousRecursos.highEvents) : 0;
+  const throttledDelta = previousRecursos ? Math.max(0, nrThrottled - previousRecursos.nrThrottled) : 0;
+  previousRecursos = { highEvents, nrThrottled, at: Date.now() };
+  const { rss, heapUsed } = process.memoryUsage();
+  const warn = (pressureFullAvg60 !== null && pressureFullAvg60 >= 1.0)
+    || (high !== null && current > 0.97 * high && pressureSomeAvg60 >= 5.0)
+    || throttledDelta > 0 || heapUsed > 1024 ** 3;
+  const gb = (bytes) => (bytes / 1024 ** 3).toLocaleString('es-AR', {
+    minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false,
+  });
+  const ceiling = high === null ? 'sin límite' : `${gb(high)} GB`;
+  const pressure = pressureFullAvg60 === null ? 'presión n/d'
+    : `presión mem ${pressureFullAvg60.toLocaleString('es-AR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}% (full 60 s)`;
+  const detail = `cgroup ${gb(current)} GB / techo ${ceiling} · ${pressure} · high +${highDelta} (total ${highEvents})`
+    + ` · heap ${Math.round(heapUsed / 1024 ** 2)} MB · rss ${Math.round(rss / 1024 ** 2)} MB`
+    + (throttledDelta > 0 ? ` · CPU throttled +${throttledDelta}` : '');
+  return { id, label, status: warn ? 'warn' : 'ok', detail };
+}
+
 async function checkUnifiBridge() {
   const id = 'unifi-bridge';
   const label = 'Puente UniFi';
@@ -1133,6 +1202,81 @@ async function checkPadGrafo() {
   }
 }
 
+// console:PLAN-3595: auditoría read-only del árbol temático del pozo común.
+// Lee SQLite directamente para no depender de tokens ni gastar IA.
+async function checkPoolGrafo() {
+  const id = 'pozo-grafo';
+  const label = 'Grafo del pozo común';
+  const dbPath = path.join(os.homedir(), '.pad', 'pad.db');
+  const detailFor = (total, sinPadre, sinClasificar, suffix = '') => (
+    `total: ${total} · sin padre: ${sinPadre} · sin clasificar: ${sinClasificar}${suffix}`
+  );
+  if (!fss.existsSync(dbPath)) {
+    return { id, label, status: 'warn', detail: detailFor(0, 0, 0, ' · pad.db no encontrado') };
+  }
+
+  let db;
+  try {
+    const { DatabaseSync } = await import('node:sqlite');
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const workspace = db.prepare("SELECT id FROM workspaces WHERE slug = 'comunidad' AND deleted_at IS NULL").get();
+    if (!workspace?.id) {
+      return { id, label, status: 'warn', detail: detailFor(0, 0, 0, ' · workspace comunidad no encontrado') };
+    }
+    const collection = db.prepare(`
+      SELECT id FROM collections
+      WHERE workspace_id = ? AND slug = 'mejora-continua' AND deleted_at IS NULL
+    `).get(workspace.id);
+    if (!collection?.id) {
+      return { id, label, status: 'warn', detail: detailFor(0, 0, 0, ' · colección mejora-continua no encontrada') };
+    }
+
+    const counts = db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN NOT EXISTS (
+          SELECT 1
+          FROM item_links l
+          JOIN items destino ON destino.id = l.target_id
+          WHERE l.source_id = leccion.id
+            AND l.link_type = 'parent'
+            AND destino.deleted_at IS NULL
+        ) THEN 1 ELSE 0 END) AS sin_padre,
+        SUM(CASE WHEN EXISTS (
+          SELECT 1
+          FROM item_links l
+          JOIN items destino ON destino.id = l.target_id
+          WHERE l.source_id = leccion.id
+            AND l.link_type = 'parent'
+            AND destino.deleted_at IS NULL
+            AND json_extract(destino.fields, '$.slug') = 'sin-clasificar'
+        ) THEN 1 ELSE 0 END) AS sin_clasificar
+      FROM items leccion
+      WHERE leccion.workspace_id = ?
+        AND leccion.collection_id = ?
+        AND leccion.deleted_at IS NULL
+    `).get(workspace.id, collection.id);
+    const total = Number(counts?.total) || 0;
+    const sinPadre = Number(counts?.sin_padre) || 0;
+    const sinClasificar = Number(counts?.sin_clasificar) || 0;
+    return {
+      id,
+      label,
+      status: sinPadre > 0 ? 'warn' : 'ok',
+      detail: detailFor(total, sinPadre, sinClasificar),
+    };
+  } catch (err) {
+    return {
+      id,
+      label,
+      status: 'warn',
+      detail: detailFor(0, 0, 0, ` · no se pudo verificar pad.db (${String(err?.message || err).slice(0, 180)})`),
+    };
+  } finally {
+    try { db?.close(); } catch { /* best-effort: Salud nunca tira por Pad */ }
+  }
+}
+
 // Verifica que el índice enrutador respete su techo y que todos sus destinos
 // bloqueantes existan y tengan cuerpo. Read-only, HTTP plano y 0 tokens.
 async function checkPadIndex() {
@@ -1418,6 +1562,7 @@ async function padBackboneStats() {
 async function runChecks() {
   const checks = await Promise.all([
     Promise.resolve(checkServer()),
+    checkRecursos(),
     checkSystemd(),
     checkTmux(),
     checkTmuxOwner(),
@@ -1443,6 +1588,7 @@ async function runChecks() {
     Promise.resolve(checkDockerHygiene()),
     checkPadBackbone(),
     checkPadGrafo(),
+    checkPoolGrafo(),
     checkPadIndex(),
     checkPadBootstrap(),
     checkAncla(),

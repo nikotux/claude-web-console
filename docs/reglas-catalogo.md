@@ -17,7 +17,9 @@ a propósito: el harness NO lo auto-carga, así que no pesa en cada sesión.
    `sala-op`/`sala-op-result`; topes de 12 hijas y 20 despertares/h;
    `console:PLAN-3368`): no es una corrida headless nueva ni una excepción de
    escritura, y no cambia la Regla 6. Delegaciones Tándem a Codex → runner desacoplado
-   (`bin/cwc-codex-runner.js`); triage de bugs → runner desacoplado
+   (`bin/cwc-codex-runner.js`) con estado y progreso incremental en
+   `codex-jobs/<id>.json`; la UI reconstruye su vista en vivo leyendo esos
+   archivos por dueño, nunca siguiendo el proceso web; triage de bugs → runner desacoplado
    (`bin/cwc-triage-runner.js`); revisión exhaustiva de salud → runner
    desacoplado (`bin/cwc-health-runner.js`); auto-fix de un hallazgo →
    runner desacoplado (`bin/cwc-healthfix-runner.js`); batch de resolución en
@@ -59,6 +61,11 @@ a propósito: el harness NO lo auto-carga, así que no pesa en cada sesión.
    AUTOMÁTICOS los generan los hooks vía `bin/cwc-bus.js`, no este módulo). La unidad systemd usa
    `KillMode=process` — no lo quites: con el default (control-group) un crash
    del Node mataría el tmux y los runners.
+   Recursos (2026-10-28, `console:PLAN-3508`): ese cgroup incluye a TODOS los
+   motores de chat; `MemoryHigh=12G`, server con `--max-old-space-size=1536`
+   y `UV_THREADPOOL_SIZE=8`. La unidad en `systemd/` y su copia instalada deben
+   quedar IDÉNTICAS: si cambiás una, copiá la otra y hacé daemon-reload.
+   El check de Salud `recursos` vigila el cgroup y el heap.
    REGLA DE ORO (pedido explícito del usuario 2026-07-04): **TODA
    implementación nueva debe SOBREVIVIR a un reinicio de la interfaz web**
    (deploys/`systemctl restart` pasan seguido). Si algo corre en el tiempo

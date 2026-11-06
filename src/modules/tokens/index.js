@@ -38,6 +38,8 @@
 //   con historial persistente no hace falta "poner en cero".
 import express from 'express';
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import readline from 'node:readline';
 import path from 'node:path';
 import { principalOf } from '../../core/auth.js';
 import {
@@ -157,33 +159,41 @@ function addInto(dst, src) {
 //                en un chat que corre en Sonnet).
 //   entrypoint-> 'cli' | 'sdk-ts' | '' (clasifica CLI interactivo vs headless).
 async function parseFile(file) {
-  const txt = await fs.readFile(file, 'utf8');
   const seen = new Set();
   const rows = {};
   const modelTs = {};
   let entrypoint = '';
-  for (const line of txt.split('\n')) {
-    if (!line) continue;
-    let obj;
-    try { obj = JSON.parse(line); } catch { continue; }
-    if (!entrypoint && obj.entrypoint) entrypoint = obj.entrypoint;
-    const msg = obj.message;
-    if (!msg || !msg.usage || !msg.id) continue;
-    if (seen.has(msg.id)) continue;
-    seen.add(msg.id);
-    const u = msg.usage;
-    const model = msg.model || 'unknown';
-    const ts = Date.parse(obj.timestamp || '') || 0;
-    if (ts && ts > (modelTs[model] || 0)) modelTs[model] = ts;
-    // Bucket por HORA local (fecha derivable con slice(0,10)).
-    const hourKey = ts ? localHourKey(ts) : 'unknown';
-    const key = `${hourKey}\t${model}`;
-    const b = (rows[key] ||= emptyBucket());
-    b.input += u.input_tokens || 0;
-    b.output += u.output_tokens || 0;
-    b.cw1h += u.cache_creation?.ephemeral_1h_input_tokens || 0;
-    b.cw5m += u.cache_creation?.ephemeral_5m_input_tokens || 0;
-    b.cr += u.cache_read_input_tokens || 0;
+  const input = createReadStream(file, { encoding: 'utf8' });
+  const lines = readline.createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (!line) continue;
+      let obj;
+      try { obj = JSON.parse(line); } catch { continue; }
+      if (!entrypoint && obj.entrypoint) entrypoint = obj.entrypoint;
+      const msg = obj.message;
+      if (!msg || !msg.usage || !msg.id) continue;
+      if (seen.has(msg.id)) continue;
+      seen.add(msg.id);
+      const u = msg.usage;
+      const model = msg.model || 'unknown';
+      const ts = Date.parse(obj.timestamp || '') || 0;
+      if (ts && ts > (modelTs[model] || 0)) modelTs[model] = ts;
+      // Bucket por HORA local (fecha derivable con slice(0,10)).
+      const hourKey = ts ? localHourKey(ts) : 'unknown';
+      const key = `${hourKey}\t${model}`;
+      const b = (rows[key] ||= emptyBucket());
+      b.input += u.input_tokens || 0;
+      b.output += u.output_tokens || 0;
+      b.cw1h += u.cache_creation?.ephemeral_1h_input_tokens || 0;
+      b.cw5m += u.cache_creation?.ephemeral_5m_input_tokens || 0;
+      b.cr += u.cache_read_input_tokens || 0;
+    }
+  } catch {
+    // Si el archivo desaparece o falla la lectura, conservar lo ya parseado.
+  } finally {
+    lines.close();
+    input.destroy();
   }
   return { rows, modelTs, entrypoint };
 }

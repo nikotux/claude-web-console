@@ -69,6 +69,23 @@
 - **Checks rápidos** (`GET /api/health/checks`, gratis): systemd activo +
   KillMode=process, tmux del socket cwc, runners de chat, observador instalado,
   cert/TLS, git limpio, sintaxis de todo `src/` y `bin/`, disco, datos runtime,
+  **`recursos`** (2026-10-28, `console:PLAN-3508`, T7, 0 tokens):
+  «Recursos (cgroup + heap)» descubre el cgroup v2 propio desde `/proc/self/cgroup`
+  y lee `memory.current`, `memory.high`, `memory.events`, `memory.pressure` y `cpu.stat`.
+  Devuelve `warn` si (a) PSI de memoria `full avg60` es ≥ 1,0% (todos los procesos
+  bloqueados por memoria durante al menos el 1% del último minuto),
+  (b) el uso supera el 97% de `memory.high` numérico y `some avg60` es ≥ 5,0%,
+  (c) creció `nr_throttled` o
+  (d) el heap del servidor supera 1024 MB (base 1024). La primera lectura
+  establece la base de los deltas; las siguientes comparan con la última válida,
+  guardando contadores y fecha en memoria hasta reiniciar el proceso.
+  `memory.high=max` significa sin techo; un cgroup ilegible o inválido devuelve
+  `ok` con «cgroup no legible». Si falta `memory.pressure`, sus promedios son `null`
+  y el detalle muestra «presión n/d». El detalle muestra uso/techo, presión de
+  memoria (`full avg60` en porcentaje), delta y total de
+  eventos `high`, heap y RSS; si creció el throttling, también muestra su delta.
+  El contador `high` crece normalmente con trabajo pesado dentro del cgroup (tests, builds de inquilinos); el warn sale por PSI, no por el contador.
+  `readCgroupMemory()` se exporta como lector sin estado para validar el parseo.
   **`claude-cred`** (`console:BUG-2438`, 0 tokens): vigila que la credencial
   OAuth del host conserve un accessToken o refreshToken utilizable; existe porque
   el 2026-07-31 apareció vaciada y ningún check lo detectaba hasta que ningún chat abría.
@@ -154,6 +171,11 @@
   `ARQUI-1258` y planes activos sin parent/implements ni tag `isla`—. Abre
   `~/.pad/pad.db` read-only, consume 0 tokens, NUNCA usa MCP y ante cualquier
   incompatibilidad o ausencia de la DB degrada best-effort a `warn`, nunca tira.
+  Y **`pozo-grafo`** (`console:PLAN-3595`): abre la misma SQLite read-only y sin
+  tokens para contar en `comunidad/mejora-continua` el total vivo, las lecciones
+  sin link `parent` hacia un destino vivo y las que cuelgan de
+  `fields.slug=sin-clasificar`. Advierte si hay huérfanas o si falta el
+  workspace/colección; una excepción también degrada a `warn`, nunca `fail`.
   Y **`cross-world`** (2026-07-14, F7 de PLAN-373/PEND-466): AUDIT determinístico
   (0 tokens, read-only) de los CRUCES ENTRE MUNDOS. `checkCrossWorld` en
   `health/index.js` escanea `src/`+`bin/` buscando referencias al mundo externo

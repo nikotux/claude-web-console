@@ -583,6 +583,21 @@ secretos del host después de que config los capturó. REGLA: debe ser el PRIMER
 import de cualquier runner que use `userRunnerEnv` y cuya cadena de imports
 arrastre `core/config.js`.
 ### bin/cwc-chat-runner.js      motor de UNA conversación (proceso propio, socket Unix).
+SUEÑO POR PELOTA (2026-10-28, `console:PLAN-3508`, C3): acumula en
+`turnText` los últimos 8000 caracteres de los bloques de texto del asistente
+del turno. Al recibir `result` calcula `lastPelota = parsePelota(turnText)`
+y emite `result.pelota` (`nadie|tuya|otro|mia|null`). El server conserva el
+campo `lastPelota` en la persistencia del chat, lo rehidrata y lo expone en
+`info()`. `parsePelota()` y `sleepThresholdMs()` viven en chat/shared.js:
+última línea con marcador, emoji opcional, negritas y MÍA/MIA tolerados;
+`nadie` => 5 min de inactividad, `TUYA`/`OTRO`/`MÍA`/desconocida => 45 min.
+Auto-siesta y reaper del server comprueban cada 60 s; en `working` no aplican
+los umbrales normales de inactividad.
+Válvula anti-colgado: un motor en `working` sin actividad por más de BG_MAX_HOLD_MS (4 h) se duerme igual.
+GOTCHA: al iniciar un turno se limpian `turnText`
+y `lastPelota`; el umbral vuelve a 45 min hasta el resultado nuevo.
+Las guardas `bgHolds()` y los sweeps de fondo siguen vigentes; el log de
+auto-sueño incluye la pelota y el umbral aplicado en minutos.
 En salas de Aduana registra además el MCP in-process `sala` (PLAN-3368): sus
 cuatro tools coordinan madre e hijas y delegan toda autoridad al server mediante
 eventos `sala-op`; el server responde al runner con `sala-op-result` por reqId.
@@ -659,6 +674,10 @@ se pisa: el job termina `done` con `isError:true`, el reporte nombra el conflict
 y el worktree se CONSERVA porque es la única copia del trabajo. Si el worktree
 no se pudo crear o sembrar, degrada al camino histórico y lo explicita en el
 reporte. Sin `files`, el comportamiento es idéntico al histórico.
+El job actualiza además `progress` como máximo cada 2 s mientras corre; la UI
+lo observa desde el archivo durable, nunca desde el proceso hijo. La proyección
+pura de visibilidad, tiempos típicos y badge se cubre con
+`node bin/cwc-test-live-status.js`.
 ### bin/cwc-pageout.c + bin/cwc-pageout-build.sh    helper nativo de la CAPA 5
 de swap. `cwc-pageout <pid> [--cold]` selecciona únicamente mapeos privados
 anónimos y `[heap]` del proceso, valida antes que el PID pertenezca al UID
@@ -900,6 +919,48 @@ seen"). Interfaz por archivos: ~/.cwc-data/retro/<id>.json (id sha1
 del sessionId; lo encola el server en Chat.close). Lógica compartida
 en src/modules/retro/shared.js (+ store en src/modules/retro/store.js,
 router de promoción en src/modules/retro/promote-shared.js)
+### bin/cwc-pool-backfill.js    backfill determinístico y reanudable del pozo COMÚN
+de Mejora Continua (`console:PLAN-3595`), sin LLM ni tokens. Enumera el host
+real y los usuarios de `users.json`, lee cada registro con su propio contexto
+Pad y falla cerrado para inquilinos sin token: jamás usa el token del host en
+nombre de otro. El modo default `--dry-run` no escribe en Pad; genera
+`~/.cwc-data/retro-pool-backfill/report.json` con candidatas, flags de posible
+contenido sensible, fusiones y cambios de etiqueta, más `lista-marcadas.md` con
+el resumen por dueño/proyecto y tablas sin cuerpos. Sólo crea huellas ausentes
+del pozo al comenzar el censo: si una huella ya existe, excluye la copia
+adoptada para que republicarla no infle artificialmente la recurrencia; una
+segunda aparición genuina dentro del mismo censo sí suma al pozo recién creado.
+Para lecciones antiguas sin huella la calcula en memoria desde categoría+título,
+sin modificar el registro del dueño. `--apply` vuelve a censar al arrancar y
+publica en serie cada 400 ms; `--only <usuario>` acota el dueño y
+`--skip-refs host:MC-n,...` omite esas refs y, sólo al aplicar, veta sus huellas
+en el registro privado del dueño. No copia `sourceChats`. El progreso atómico
+incremental vive en `progress.json`; `pool-backfill.lock` lleva pid+heartbeat,
+rechaza otra corrida viva y permite retomar tras una muerta. Un fallo por
+lección queda registrado y no frena las siguientes: reanudar es correr de nuevo.
+### bin/cwc-pool-organize.js    reconciliador determinístico del grafo temático
+del pozo común (`console:PLAN-3595`), sin IA. Dry-run por defecto; `--apply`
+escribe en serie con pausa de 250 ms y `--reparent` autoriza reemplazar padres
+no fallback. Lee el mapa `~/.cwc-data/retro-pool-organize/temas.json` (o
+`--map`), valida todos sus slugs y exige que los 16 nodos —15 temas más
+`sin-clasificar`— existan antes de escribir. Cada lección de
+`comunidad/mejora-continua` queda con parent principal, tags acumulativos e
+`implements` idempotentes hacia `otros`; para reparentar borra primero el
+`parent_link_id` por `console:BUG-2053`. Nunca manda title/content/fields y
+verifica con sha256 que título+cuerpo sigan intactos después de cada mutación.
+Estado, reporte y lock pid-aware viven en `~/.cwc-data/retro-pool-organize/`;
+recalcula Pad en cada corrida, registra errores por lección y sigue, salvo una
+diferencia de integridad, que detiene todo con código de salida distinto.
+### bin/cwc-pool-unlink-citations.js    neutralizador determinístico de citas
+publicadas en el pozo común (`console:BUG-3631`), sin IA. Dry-run por defecto;
+recorre `comunidad/mejora-continua` y quita sólo los corchetes de `[[X]]` o
+conserva el alias de `[[X|Y]]`, sin tocar código inline ni cercado. `--apply`
+escribe únicamente `content`, en serie cada 250 ms y con concurrencia optimista;
+antes y después verifica que title, fields, tags y parent no cambien. El guard
+independiente detiene toda la corrida ante una diferencia ajena a esas citas.
+Estado, reporte reversible (`contentBefore` en apply) y lock pid-aware viven en
+`~/.cwc-data/retro-pool-citations/`; los errores normales quedan por lección y
+una nueva corrida recalcula Pad, por lo que es reanudable e idempotente.
 ### bin/cwc-retro-curate-runner.js CURADURÍA IA del registro de MEJORA CONTINUA (ROAD-256,
 Fase 5), DESACOPLADO (regla de oro; sonnet, 1 turno, TEXTO PURO — doble
 capa regla 6 deniega TODO; el server junta lessons+reglas duras en el

@@ -11,7 +11,13 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 WorkingDirectory=%h/claude-web-console
-ExecStart=/usr/bin/node src/server.js
+# V8 sin tope puede dejar crecer el heap a ~4 GB antes de compactar en serio;
+# Node no devuelve memoria al SO por sí solo. Con 1536 MB el GC compacta antes
+# y el RSS del server vuelve tras el escaneo de arranque: medido 843–895 MB
+# de pico y 470–510 MB estable. 1536 MB es 3× el uso real observado.
+# Si el server llegara al tope, moriría con OOM de V8 y systemd lo relanzaría
+# (Restart=on-failure); por eso NO se pone más bajo.
+ExecStart=/usr/bin/node --max-old-space-size=1536 src/server.js
 Restart=on-failure
 RestartSec=5
 
@@ -24,6 +30,32 @@ RestartSec=5
 KillMode=process
 TimeoutStopSec=10
 
+# --- Freno suave de memoria (no mata, solo hace reclamar) ---
+# MemoryHigh es un techo BLANDO: cuando el cgroup lo supera, el kernel reclama
+# páginas agresivamente (incluido el page cache) para aliviar la presión antes
+# de que el OOM killer del kernel tenga que elegir una víctima.
+# NO se pone MemoryMax (techo duro que SÍ mata) ni MemorySwapMax (anularía el
+# swap) ni memory.oom.group (mataría el cgroup entero, contradiciendo el
+# KillMode=process de arriba y la regla 2 de resiliencia).
+# 2026-10-28 (console:BUG-3509): con 10 motores de chat vivos el cgroup
+# (server + runners, por KillMode=process) está en 10,1 GB y chocó el techo
+# 1768 veces en 45 min, releyendo 1,7 GB de transcripts del page cache y
+# empujando motores ociosos a swap; la máquina tiene 15,2 GB y el resto
+# (system.slice: docker/postgres de Tolkien) usa ~1,7 GB, así que 12G deja
+# ~1,5 GB de margen y deja de pelear por RAM que ya está libre.
+MemoryHigh=12G
+
+# libuv usa 4 hilos por defecto para fs.stat/readFile; el escáner de tokens
+# hace miles por llamada en una máquina de 12 cores. Con 8 hilos se evita
+# que se encolen sin saturar la máquina.
+Environment=UV_THREADPOOL_SIZE=8
+
+# --- PATH: CLIs instalados con npm en el prefijo del usuario ---
+# systemd --user NO hereda el PATH del shell interactivo, así que sin esta línea
+# el server no encuentra `claude` (~/.npm-global/bin) y falla todo lo que lo
+# spawnea: el censo de Actualizaciones lo reporta como "no determinado" y el
+# panel de MCPs muere con "spawn claude ENOENT".
+#
 # ~/.npm-global/bin va PRIMERO: @openai/codex también está instalado por root en
 # /usr/lib, pero no se puede actualizar sin sudo (esta cuenta no está en sudoers);
 # así la consola y el Modo Tándem usan la versión del usuario, no la vieja de root.

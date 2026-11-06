@@ -336,6 +336,7 @@ export default {
             <summary>
               <span class="mc-cat" title="${esc(l.category)}">${CAT_ICON[l.category] || '📝'}</span>
               <span class="mc-title">${esc(l.title)}</span>
+              <span class="bb-chip bb-chip--info">${esc(PROJ_LABEL[l.project] || PROJ_LABEL.otros)}</span>
               <span class="bb-chip bb-chip--muted">${esc(l.category || t('retro.pool.noCategory', 'sin categoría'))}</span>
               ${l.recurrence > 1 ? `<span class="bb-chip bb-chip--warn mc-pool-recurrence" title="${esc(t('retro.pool.recurrenceTitle', 'Esta experiencia fue compartida por {n} personas o veces', { n: l.recurrence }))}">${t('retro.pool.recurrence', 'le pasó a {n}', { n: l.recurrence })}</span>` : ''}
               ${refsChips}
@@ -358,13 +359,13 @@ export default {
               <span class="mc-pool-title">${t('retro.pool.title', '🌍 De la comunidad')}</span>
               <span class="bb-chip bb-chip--muted">${adoptable}</span>
               ${!pool.unavailable && adoptable > 0 ? `<button class="btn btn--sm mc-pool-adopt-all" data-act="pool-adopt-all">${t('retro.pool.adoptAll', '👍 Adoptar todas ({n})', { n: adoptable })}</button>` : ''}
-              <label class="mc-pool-toggle" title="${t('retro.pool.toggleTitle', 'Controla la publicación automática de tus lecciones de Tolkien')}">
+              <label class="mc-pool-toggle" title="${t('retro.pool.toggleTitle', 'Controla la publicación automática de tus lecciones')}">
                 <input type="checkbox" data-role="pool-optout" ${poolOptOut === false ? 'checked' : ''} ${optOutUnavailable ? 'disabled' : ''}>
-                <span>${t('retro.pool.toggle', 'Publicar mis lecciones de Tolkien')}</span>
+                <span>${t('retro.pool.toggle', 'Publicar mis lecciones')}</span>
               </label>
             </summary>
             <div class="mc-group-body">
-              <div class="mc-pool-help bf-sub">${t('retro.pool.toggleHelp', 'Si lo apagás, tus lecciones futuras de Tolkien no se publican; las que retires no vuelven a publicarse solas.')}</div>
+              <div class="mc-pool-help bf-sub">${t('retro.pool.toggleHelp', 'Si lo apagás, tus lecciones futuras no se publican; las que retires no vuelven a publicarse solas.')}</div>
               ${pool.unavailable ? `<div class="mc-pool-unavailable bf-sub">${t('retro.pool.unavailable', 'El pozo comunitario no está disponible por ahora.')}</div>` : (lessons.length ? lessons.map(poolLessonCard).join('') : `<div class="bf-sub">${t('retro.pool.empty', 'No hay lecciones comunitarias para mostrar todavía.')}</div>`)}
             </div>
           </details>`;

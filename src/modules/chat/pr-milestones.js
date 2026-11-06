@@ -93,9 +93,146 @@ export function buildPrGraphqlQuery(numbers) {
     .map(Number)
     .filter((number) => Number.isSafeInteger(number) && number > 0))].slice(0, 50);
   const pulls = unique.map((number) => (
-    `p${number}: pullRequest(number:${number}){ number title url state reviewDecision mergedAt mergeCommit{oid} }`
+    `p${number}: pullRequest(number:${number}){ number title url state reviewDecision mergedAt mergeCommit{oid} headRefOid commits(last:1){nodes{commit{oid statusCheckRollup{state contexts(first:60){totalCount nodes{__typename ... on CheckRun{name status conclusion startedAt completedAt detailsUrl} ... on StatusContext{context state createdAt targetUrl}}}}}}} }`
   )).join('\n');
   return `query { repository(owner:"Mordor-Staffing",name:"tolkien"){\n${pulls}\n} }`;
+}
+
+export function summarizePrCi(observed, options = {}) {
+  try {
+    if (!observed || typeof observed !== 'object' || observed.state !== 'OPEN') return null;
+    const number = Number(observed.number);
+    if (!Number.isSafeInteger(number) || number <= 0
+      || typeof observed.title !== 'string' || typeof observed.url !== 'string') return null;
+    const { now = Date.now() } = options && typeof options === 'object' ? options : {};
+    // `now` queda en el contrato para que el caller pueda fijar el reloj sin
+    // convertir timestamps ausentes en datos inventados.
+    void now;
+    const commit = observed.commits?.nodes?.[0]?.commit;
+    const nodes = commit?.statusCheckRollup?.contexts?.nodes;
+    if (!Array.isArray(nodes)) return null;
+
+    const newestByName = new Map();
+    for (const node of nodes) {
+      const check = normalizeCiCheck(node);
+      if (!check) continue;
+      const previous = newestByName.get(check.name);
+      if (!previous || check.freshAt >= previous.freshAt) newestByName.set(check.name, check);
+    }
+    const checks = [...newestByName.values()];
+    if (!checks.length) return null;
+
+    const runningChecks = checks.filter((check) => check.result === 'running');
+    const failedChecks = checks.filter((check) => check.result === 'failed');
+    const state = runningChecks.length ? 'running' : failedChecks.length ? 'failed' : 'passed';
+    const startedTimes = checks.map((check) => check.startedAt).filter(Number.isFinite);
+    const completedTimes = checks.map((check) => check.completedAt).filter(Number.isFinite);
+    return {
+      number,
+      title: observed.title.slice(0, 160),
+      url: observed.url,
+      sha: validSha(commit?.oid) || validSha(observed.headRefOid),
+      state,
+      total: checks.length,
+      done: checks.length - runningChecks.length,
+      failed: failedChecks.length,
+      running: runningChecks.slice(0, 8).map((check) => check.name),
+      failedNames: failedChecks.slice(0, 8).map((check) => check.name),
+      startedAt: startedTimes.length ? Math.min(...startedTimes) : null,
+      finishedAt: state !== 'running' && completedTimes.length ? Math.max(...completedTimes) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function prCiBadge(ciList) {
+  if (!Array.isArray(ciList)) return null;
+  const valid = ciList.filter(validCiSummary);
+  const selected = newestCi(valid, 'running')
+    || newestCi(valid, 'failed')
+    || newestCi(valid, 'passed');
+  return selected ? {
+    number: selected.number,
+    state: selected.state,
+    done: selected.done,
+    total: selected.total,
+    failed: selected.failed,
+  } : null;
+}
+
+export function sameCi(a, b) {
+  return ciKey(a) === ciKey(b);
+}
+
+function ciKey(summary) {
+  if (!validCiSummary(summary)) return null;
+  return JSON.stringify({
+    state: summary.state,
+    done: summary.done,
+    total: summary.total,
+    failed: summary.failed,
+    running: normalizedNames(summary.running),
+    failedNames: normalizedNames(summary.failedNames),
+    sha: validSha(summary.sha),
+  });
+}
+
+function normalizeCiCheck(node) {
+  if (!node || typeof node !== 'object') return null;
+  const isRun = node.__typename === 'CheckRun';
+  const isStatus = node.__typename === 'StatusContext';
+  if (!isRun && !isStatus) return null;
+  const name = ciName(isRun ? node.name : node.context);
+  if (!name) return null;
+  const startedAt = ciTime(isRun ? node.startedAt : node.createdAt);
+  let result = null;
+  if (isRun && node.status !== 'COMPLETED') result = 'running';
+  else if (isRun && ['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(node.conclusion)) result = 'failed';
+  else if (isRun && ['SUCCESS', 'NEUTRAL', 'SKIPPED', 'STALE'].includes(node.conclusion)) result = 'ok';
+  else if (isStatus && ['PENDING', 'EXPECTED'].includes(node.state)) result = 'running';
+  else if (isStatus && ['FAILURE', 'ERROR'].includes(node.state)) result = 'failed';
+  else if (isStatus && node.state === 'SUCCESS') result = 'ok';
+  if (!result) return null;
+  return {
+    name,
+    result,
+    startedAt,
+    completedAt: isRun ? ciTime(node.completedAt) : null,
+    freshAt: startedAt ?? Number.NEGATIVE_INFINITY,
+  };
+}
+
+function ciName(value) {
+  return typeof value === 'string' ? value.trim().slice(0, 80).trim() : '';
+}
+
+function ciTime(value) {
+  if (typeof value !== 'string') return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function validCiSummary(value) {
+  return value && typeof value === 'object'
+    && Number.isSafeInteger(value.number) && value.number > 0
+    && ['running', 'failed', 'passed'].includes(value.state)
+    && [value.done, value.total, value.failed].every((count) => Number.isSafeInteger(count) && count >= 0);
+}
+
+function ciRecency(summary) {
+  return Number.isFinite(summary.finishedAt) ? summary.finishedAt
+    : Number.isFinite(summary.startedAt) ? summary.startedAt : Number.NEGATIVE_INFINITY;
+}
+
+function newestCi(ciList, state) {
+  return ciList.filter((ci) => ci.state === state).sort((a, b) => ciRecency(b) - ciRecency(a))[0];
+}
+
+function normalizedNames(value) {
+  return Array.isArray(value)
+    ? value.filter((name) => typeof name === 'string').map((name) => name.trim()).sort()
+    : [];
 }
 
 export function applyPrTransitions(current, observed, { now = new Date().toISOString(), firstObservation = false } = {}) {

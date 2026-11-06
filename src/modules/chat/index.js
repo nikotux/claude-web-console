@@ -91,8 +91,8 @@ import { sessionManager, tmuxArgs, bareTmuxAlive, listBareTmuxIds, killBareTmux 
 import { ENVS_DIR, envIdForChat, dbNameFor, allocatePort, atCap, saveEnv, patchEnv, getEnv, getEnvByChat, heartbeat, isEnvAlive } from '../tolkien/env-store.js';
 import { createWorktree, spawnEnvProvision, reattachEnvs, reapEnvs, reconcileEnvLiveness } from '../tolkien/env-shared.js';
 import {
-  UUID_RE, PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, HISTORY_MAX, CHATS_DIR,
-  trim, toolSummary, toolDetail, resultText,
+  UUID_RE, PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, BG_MAX_HOLD_MS, HISTORY_MAX, CHATS_DIR,
+  trim, toolSummary, toolDetail, resultText, parsePelota, sleepThresholdMs, holdsForOtro,
 } from './shared.js';
 import { spawnRunner, connectRunner, tryConnectRunner, releaseSpawnLock } from './runner-link.js';
 import { nextPackageRef, upsertPackage, searchPackages, getPackage } from './packages.js';
@@ -109,8 +109,9 @@ import {
   acknowledgeMilestones, applyPrObservation, buildPrGraphqlQuery,
   extractTolkienPrLink, isDeployedCompareStatus, isTolkienPrCommand,
   newestPrBadge, normalizeCodexPrLinks, normalizePrLinks, parseKamalProductionTitle, pendingMilestones,
-  validMilestoneKeys,
+  prCiBadge, sameCi, summarizePrCi, validMilestoneKeys,
 } from './pr-milestones.js';
+import { codexBadge, codexLiveForChat, codexTypical, liveKey } from './live-status.js';
 import {
   appendSay, appendReact, appendCut, appendOrquestado, appendSubsala, appendEco, appendOrigin,
   readSala, readReads, writeRead, reactionsFromRecords, sayId, ensureSala, safeSalaId,
@@ -991,6 +992,8 @@ class Chat {
     this.terminalId = null;   // id de la sesión TUI (tmux oculta) cuando viewMode==='tui'
     this.status = 'waiting'; // waiting | working
     this.lastActivity = Date.now();
+    this.lastPelota = null;
+    this.otroSince = 0;
     this.history = [];       // eventos de UI para replay al re-adjuntar
     this.slashCommands = []; // comandos slash del init del SDK (depende del cwd)
     this.prLinks = [];       // hasta 10 PR de Tolkien enlazadas a esta conversación
@@ -1583,6 +1586,12 @@ class Chat {
       case 'status':
         this._setStatus(e.state);
         return;
+      case 'user':
+        // Solo llega en vivo para avisos sintéticos del runner; los mensajes
+        // humanos ya se pintaron en sendUser y el runner no los rebroadcastéa.
+        this._setStatus('working');
+        this._push(e);
+        return;
       case 'mode':
         this.permissionMode = e.mode;
         this._push(e);
@@ -1603,6 +1612,8 @@ class Chat {
         return;
       }
       case 'result': {
+        this.lastPelota = e.pelota ?? parsePelota(this._turnAnswerText || '') ?? null;
+        this.otroSince = e.otroSince ?? 0;
         const hadSession = !!this.sessionId;
         this.sessionId = e.sessionId || this.sessionId;
         if (!hadSession && this.sessionId) this.onUpdate?.();
@@ -1610,6 +1621,7 @@ class Chat {
         this._maybeJudge();       // juez AutoMix (D1): ANTES de _setStatus (usa _turnTool* / _turnAnswerText)
         this._setStatus('waiting');
         this._push(e);
+        this.onUpdate?.(); // Persistir la pelota al cerrar cada turno (console:PLAN-3508).
         // El resultado es el único punto donde sabemos que la respuesta del
         // agente ya quedó completa y registrada. El handoff es síncrono y
         // mínimo (snapshot + spawn detached); la query vive en otro proceso y
@@ -2392,6 +2404,8 @@ class Chat {
     const isForeignAuthor = author !== owner;
     const idleMs = Date.now() - (this.lastActivity || Date.now()); // ANTES de pisarlo: AutoTux usa el idle para decaer
     this.lastActivity = Date.now();
+    this.lastPelota = null; // El turno nuevo vuelve al umbral de 45 min (console:PLAN-3508).
+    this.otroSince = 0;
     // Juez post-turno AutoMix (PEND-391 #1 / D1): guardamos el pedido y
     // arrancamos en cero la acumulación de la respuesta del turno, para poder
     // evaluar al cerrar si el modelo se quedó corto (banner de consentimiento).
@@ -3188,6 +3202,8 @@ class Chat {
       tolkienEnv: this.tolkienEnv || null,
       pendingPrompt: this.pendingPrompt,
       prMilestones: pendingMilestones(this.prLinks),
+      codexLive: { jobs: this._codexLive || [], typical: this._codexTypical || null },
+      prCi: this._prCi || [],
       ...extra,
     };
   }
@@ -3241,6 +3257,8 @@ class Chat {
       delegatingCount: this._delegatingIds.size,
       delegatingSince: this._delegatingSince,
       lastActivity: this.lastActivity, // la lista de la Cabina ordena y fecha las salas con esto
+      lastPelota: this.lastPelota || null,
+      otroSince: this.otroSince || 0,
       // Subagentes en vuelo CON nombre (radar de la tarjeta de Sesiones, PLAN-892).
       delegatingList: [...this._delegatingIds.entries()].map(([id, v]) => ({ id, label: v.label, since: v.since })),
       // Trabajo en SEGUNDO PLANO vivo (Workflow/Task en background) reportado por
@@ -3258,6 +3276,8 @@ class Chat {
       pendingInterfono: this.pendingInterfono(),
       // Único crecimiento de /api/chat/list: un badge compacto, nunca prLinks.
       prBadge: newestPrBadge(this.prLinks),
+      codexBadge: codexBadge(this._codexLive),
+      ciBadge: prCiBadge(this._prCi),
     };
   }
 }
@@ -3271,15 +3291,20 @@ class ChatManager {
     this._prProductionCache = null;
     this._prCompareCache = new Map();
     this._prBackfillTimer = null;
+    this._codexTypicalCache = new Map();
     setInterval(() => {
       const now = Date.now();
       let dirty = false;
       for (const [id, c] of this.chats) {
-        // Inactiva => DORMIR el motor (el runner también se auto-duerme solo;
-        // esto lo apura si el server sí está). Este sleep NO es forzado: es el
+        // Sueño por pelota (console:PLAN-3508): nadie => 5 min; resto => 45 min;
+        // OTRO retiene hasta 4 h mientras la espera siga activa.
+        // Válvula anti-colgado: un motor en working se duerme tras 4 h sin actividad.
+        // Este sleep NO es forzado: es el
         // reaper por inactividad, no una acción explícita ni traspaso a TUI, y
         // el runner lo rechaza si hay trabajo de fondo vivo (PLAN-892).
-        if (c.viewMode === 'chat' && c.alive && !(c._bgTasks?.length) && now - c.lastActivity > SLEEP_MS) c.sleep();
+        const idleMs = now - c.lastActivity;
+        const stuck = c.status === 'working' && idleMs > BG_MAX_HOLD_MS;
+        if (c.viewMode === 'chat' && c.alive && !(c._bgTasks?.length) && !(!stuck && holdsForOtro(c.lastPelota, c.otroSince, now)) && ((c.status !== 'working' && idleMs > sleepThresholdMs(c.lastPelota)) || stuck)) c.sleep();
         // Cerradas explícitamente: se descartan a los 90 min.
         if (c.closed && now - c.lastActivity > SLEEP_MS * 2) { this.chats.delete(id); dirty = true; }
         // [2026-08-03] NO hay olvido automático por inactividad. Criterio
@@ -3301,6 +3326,64 @@ class ChatManager {
     // Un solo watcher global: el guard descarta el tick si la vuelta anterior
     // sigue viva. Sin PR activas, _watchPrMilestones retorna antes de tocar red.
     setInterval(() => { void this._watchPrMilestones(); }, PR_WATCH_MS).unref();
+
+    // Proyección descartable del estado durable de Codex: una lectura por dueño
+    // y tick; al reiniciar el server se reconstruye desde codex-jobs.
+    this._watchCodexLive();
+    setInterval(() => { this._watchCodexLive(); }, 2_000).unref();
+  }
+
+  _watchCodexLive() {
+    try {
+      const now = Date.now();
+      const byOwner = new Map();
+      for (const chat of this.chats.values()) {
+        const owner = chat.owner || hostUser();
+        if (!byOwner.has(owner)) byOwner.set(owner, []);
+        byOwner.get(owner).push(chat);
+      }
+      for (const [owner, chats] of byOwner) {
+        const dir = path.join(userDataDir(owner), 'codex-jobs');
+        let names;
+        try { names = fss.readdirSync(dir).filter((name) => name.endsWith('.json')); }
+        catch { names = []; }
+        const files = [];
+        for (const name of names) {
+          const file = path.join(dir, name);
+          try { files.push({ file, recent: now - fss.statSync(file).mtimeMs <= 10 * 60_000 }); }
+          catch { /* archivo rotado entre readdir/stat */ }
+        }
+        const recentFiles = files.filter((entry) => entry.recent);
+        const cached = this._codexTypicalCache.get(owner);
+        const refreshTypical = recentFiles.length > 0 && (!cached || now - cached.at >= 10 * 60_000);
+        const parsed = new Map();
+        const read = (file) => {
+          if (parsed.has(file)) return parsed.get(file);
+          try { parsed.set(file, JSON.parse(fss.readFileSync(file, 'utf8'))); }
+          catch { parsed.set(file, null); }
+          return parsed.get(file);
+        };
+        const recentJobs = recentFiles.map(({ file }) => read(file)).filter(Boolean);
+        let typical = cached?.value || null;
+        if (refreshTypical) {
+          typical = codexTypical(files.map(({ file }) => read(file)).filter(Boolean));
+          this._codexTypicalCache.set(owner, { at: now, value: typical });
+        }
+        for (const chat of chats) {
+          const jobs = codexLiveForChat(recentJobs, chat.id, now);
+          const nextKey = liveKey({ jobs, typical });
+          if (chat._codexLiveKey === nextKey) continue;
+          const beforeBadge = liveKey(codexBadge(chat._codexLive));
+          chat._codexLive = jobs;
+          chat._codexTypical = typical;
+          chat._codexLiveKey = nextKey;
+          chat._broadcast({ type: 'codex-live', jobs, typical });
+          if (beforeBadge !== liveKey(codexBadge(jobs))) chat.onUpdate?.();
+        }
+      }
+    } catch {
+      // El próximo tick reconstruye todo; el intervalo nunca propaga errores.
+    }
   }
 
   _gh(args) {
@@ -3369,6 +3452,19 @@ class ChatManager {
   async _watchPrMilestones() {
     if (this._prWatchRunning) return;
     const tracked = this._trackedPrLinks();
+    const trackedByChat = new Map();
+    for (const { chat, link } of tracked) {
+      if (!trackedByChat.has(chat)) trackedByChat.set(chat, new Set());
+      trackedByChat.get(chat).add(link.number);
+    }
+    for (const chat of this.chats.values()) {
+      const keep = trackedByChat.get(chat) || new Set();
+      const ci = (chat._prCi || []).filter((item) => keep.has(item.number));
+      if (liveKey(ci) === liveKey(chat._prCi || [])) continue;
+      chat._prCi = ci;
+      chat._broadcast({ type: 'pr-ci', ci });
+      chat.onUpdate?.();
+    }
     if (!tracked.length) return;
     this._prWatchRunning = true;
     try {
@@ -3416,6 +3512,7 @@ class ChatManager {
       // Desde acá no hay awaits: cada transición se aplica al enlace ACTUAL.
       // Un ACK o un prepend ocurrido durante la red queda así incorporado.
       const changedChats = new Set();
+      const ciChangedChats = new Set();
       for (const row of tracked) {
         const number = row.link.number;
         if (!selected.has(number)) continue;
@@ -3424,6 +3521,11 @@ class ChatManager {
         const index = row.chat.prLinks.findIndex((link) => link.number === number);
         if (index < 0) continue;
         const current = row.chat.prLinks[index];
+        const ci = summarizePrCi(observed);
+        const previousCi = (row.chat._prCi || []).find((item) => item.number === number) || null;
+        if (!sameCi(previousCi, ci)) ciChangedChats.add(row.chat);
+        const keptCi = (row.chat._prCi || []).filter((item) => item.number !== number);
+        row.chat._prCi = ci ? [...keptCi, ci] : keptCi;
         const transition = applyPrObservation(current, observed, deployments.get(number), { now });
         if (JSON.stringify(current) === JSON.stringify(transition.link)) continue;
         row.chat.prLinks[index] = transition.link;
@@ -3433,6 +3535,12 @@ class ChatManager {
           const milestone = milestones.find((entry) => entry.kind === kind);
           if (milestone) row.chat._broadcast({ type: 'pr-milestone', milestone });
         }
+      }
+      for (const chat of ciChangedChats) {
+        const linked = new Set(chat.prLinks.map((link) => link.number));
+        chat._prCi = (chat._prCi || []).filter((ci) => linked.has(ci.number));
+        chat._broadcast({ type: 'pr-ci', ci: chat._prCi });
+        chat.onUpdate?.();
       }
       for (const chat of changedChats) chat.onUpdate?.();
     } catch (error) {
@@ -3795,6 +3903,8 @@ class ChatManager {
       .map((c) => ({
         id: c.id, cwd: c.cwd, model: c.model, permissionMode: c.permissionMode,
         sessionId: c.sessionId, title: c.title, titleLocked: !!c.titleLocked, lastActivity: c.lastActivity,
+        lastPelota: c.lastPelota || null,
+        otroSince: c.otroSince || 0,
         archived: !!c.archived, // F3: se rehidrata dormida y revivible
         packageRef: c.packageRef || null, // F2(b): ref estable del paquete-sesión
         salaPadRef: c.salaPadRef || null,
@@ -3866,6 +3976,8 @@ class ChatManager {
       if (/^TDA-\d+$/.test(String(s.learningId || ''))) chat.learningId = String(s.learningId);
       chat.pendingPrompt = typeof s.pendingPrompt === 'string' && s.pendingPrompt ? s.pendingPrompt : null;
       chat.lastActivity = s.lastActivity || Date.now();
+      chat.lastPelota = s.lastPelota || null;
+      chat.otroSince = s.otroSince || 0;
       chat.archived = !!s.archived; // F3: vuelve dormida y revivible (no spawnea motor)
       if (s.packageRef) chat.packageRef = s.packageRef; // F2(b): ref estable del paquete
       if (s.salaPadRef) chat.salaPadRef = s.salaPadRef;
@@ -3921,6 +4033,7 @@ class ChatManager {
             adoptedRunnerTandem = true;
           }
           chat._bgTasks = Array.isArray(hello.bgTasks) ? hello.bgTasks : [];
+          chat.otroSince = hello.otroSince || 0;
           const base = loadTranscriptEvents(chat.cwd, chat.sessionId, hello.startedAt || null, chat.owner);
           const events = [...base, ...(hello.events || [])];
           chat.history = (chat._salaLogSource() ? chat._rebuildSalaHistory(events) : events).slice(-HISTORY_MAX);

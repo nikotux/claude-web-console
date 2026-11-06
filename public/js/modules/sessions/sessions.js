@@ -617,6 +617,36 @@ export default {
       if (row2) row2.insertBefore(chip, toggle || null);
     }
 
+    function syncLiveBadges(cardEl, c) {
+      const codex = c.codexBadge?.running ? c.codexBadge : null;
+      const ci = c.ciBadge && c.ciBadge.state !== 'passed' ? c.ciBadge : null;
+      const key = JSON.stringify({ codex, ci });
+      if (cardEl.dataset.liveBadgeKey === key) return;
+      cardEl.dataset.liveBadgeKey = key;
+      cardEl.querySelectorAll('.sess-live-chip').forEach((el) => el.remove());
+      const row = cardEl.querySelector('.sess-row2');
+      if (!row) return;
+      const toggle = row.querySelector('.sess-kids-toggle');
+      if (codex) {
+        const chip = document.createElement('span');
+        chip.className = 'sess-live-chip sess-live-chip--codex';
+        const total = Math.max(0, Number(codex.total) || 0);
+        const done = Math.max(0, Number(codex.done) || 0);
+        chip.textContent = total
+          ? t('sessions.live.codexStep', '⚙️ Codex · paso {step} de {total}', { step: Math.min(total, done + 1), total })
+          : t('sessions.live.codexWorking', '⚙️ Codex trabajando');
+        row.insertBefore(chip, toggle || null);
+      }
+      if (ci) {
+        const chip = document.createElement('span');
+        chip.className = `sess-live-chip sess-live-chip--ci${ci.state === 'failed' ? ' is-failed' : ''}`;
+        chip.textContent = ci.state === 'failed'
+          ? t('sessions.live.ciFailed', '🧪 CI falló')
+          : t('sessions.live.ciRunning', '🧪 CI {done}/{total}', { done: Number(ci.done) || 0, total: Number(ci.total) || 0 });
+        row.insertBefore(chip, toggle || null);
+      }
+    }
+
     function syncKids(cardEl, c) {
       const key = `chat:${c.id}`;
       cardEl._cwcKidsChat = c;
@@ -661,6 +691,7 @@ export default {
         toggle.innerHTML = `${icon(open ? 'chevronDown' : 'chevronRight', { size: 12 })}<span class="sess-kids-n">${kids.length}</span>`;
       }
       syncPrBadge(cardEl, c, kids.length);
+      syncLiveBadges(cardEl, c);
       box.hidden = !open;
       box.innerHTML = kids.length
         ? kids.map(kidRowHtml).join('')

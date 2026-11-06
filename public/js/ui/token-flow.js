@@ -11,6 +11,11 @@ import { t } from './i18n.js';
 // zona media visible (32-55%). El caudal por sesión individual usa el mismo techo.
 export const MAX_TPS = 10000;
 export const POLL_MS = 700; // (PEND-622) 400→700: corta ~40% de requests; el lerp 0.15 tolera el intervalo mayor sin que la animación lo note
+// Tras 10 s seguidos sin tokens instantáneos de Claude ni Codex, baja a 2,5 s;
+// una respuesta con caudal > 0 vuelve de inmediato a 700 ms. Decide el cliente:
+// el servidor ya memoiza 600 ms (console:BUG-3510).
+const IDLE_POLL_MS = 2500;
+const IDLE_AFTER_MS = 10000;
 
 export let latest = {
   claude: { tps: 0, tokens60: 0, lastTs: null },
@@ -22,7 +27,9 @@ export let latest = {
 
 let subscribers = 0;
 let pollTimer = null;
+let pollerStarted = false;
 let polling = false;
+let zeroSince = null;
 let visibilityBound = false;
 let directorStarted = false;
 let adminAccess = null;
@@ -39,26 +46,58 @@ export function pressureFromTps(tps) {
 
 export async function pollFlow() {
   if (!subscribers || document.hidden || polling) return;
+  clearTimeout(pollTimer);
+  pollTimer = null;
   polling = true;
+  let nextDelay = POLL_MS;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), POLL_MS * 4);
   try {
     const res = await fetch('/api/tokens/flow', { signal: ac.signal });
-    if (res.ok) latest = await res.json();
+    if (res.ok) {
+      latest = await res.json();
+      // summarize() publica instantTokens / ventana como tps, también por
+      // sesión/cwd. tokens60 y total incluyen pasado y no indican actividad.
+      const isZero = latest.claude?.tps === 0 && latest.codex?.tps === 0
+        && !Object.values(latest.bySession || {}).some((s) => s.tps > 0)
+        && !Object.values(latest.byCwd || {}).some((s) => s.tps > 0);
+      if (isZero) {
+        const now = Date.now();
+        if (zeroSince === null) zeroSince = now;
+        if (now - zeroSince >= IDLE_AFTER_MS) nextDelay = IDLE_POLL_MS;
+      } else {
+        zeroSince = null;
+      }
+    } else {
+      zeroSince = null;
+    }
   } catch {
     // Error transitorio (o timeout/abort): mantenemos el último snapshot bueno.
+    zeroSince = null;
   } finally {
     clearTimeout(timer);
     polling = false;
+    scheduleNext(nextDelay);
   }
+}
+
+function scheduleNext(delay) {
+  clearTimeout(pollTimer);
+  pollTimer = null;
+  if (!pollerStarted || !subscribers || document.hidden) return;
+  pollTimer = setTimeout(() => {
+    pollTimer = null;
+    pollFlow();
+  }, delay);
 }
 
 function ensureVisibilityListener() {
   if (visibilityBound) return;
   visibilityBound = true;
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && subscribers) {
-      pollFlow();
+    if (document.hidden) {
+      stopPoller();
+    } else if (subscribers) {
       startPoller();
     }
   });
@@ -66,20 +105,16 @@ function ensureVisibilityListener() {
 
 export function startPoller() {
   ensureVisibilityListener();
-  if (pollTimer || document.hidden) return;
+  if (pollerStarted || !subscribers || document.hidden) return;
+  pollerStarted = true;
+  zeroSince = null;
   pollFlow();
-  pollTimer = setInterval(() => {
-    if (document.hidden) {
-      stopPoller();
-      return;
-    }
-    pollFlow();
-  }, POLL_MS);
 }
 
 export function stopPoller() {
-  if (!pollTimer) return;
-  clearInterval(pollTimer);
+  pollerStarted = false;
+  zeroSince = null;
+  clearTimeout(pollTimer);
   pollTimer = null;
 }
 

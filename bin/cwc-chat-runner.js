@@ -27,8 +27,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
-  PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, BG_MAX_HOLD_MS, HISTORY_MAX,
-  trim, toolSummary, toolDetail, resultText, makeInput,
+  PERMISSION_MODES, PERMISSION_TIMEOUT_MS, BG_MAX_HOLD_MS, HISTORY_MAX,
+  trim, toolSummary, toolDetail, resultText, makeInput, parsePelota, sleepThresholdMs,
+  holdsForOtro, wakeDecision, buildWakeText,
 } from '../src/modules/chat/shared.js';
 import {
   chatQueryOptions, autoApprovesAll, tandemPreToolUseHook, tolkienEnvPreToolUseHook,
@@ -194,7 +195,11 @@ let sessionId = RESUME || SESSION_ID; // BUG-496: nace conocido (forzado o retom
 let slashCommands = []; // lista del system/init (depende del cwd; Fase 8)
 let status = 'waiting';
 let lastActivity = Date.now();
+let turnText = ''; // Cola del texto del turno: la pelota cierra la respuesta.
+let lastPelota = null;
+let otroSince = 0;
 const bgWork = new Map(); // taskId -> { id, kind, label, startedAt }
+const pendingWake = new Map(); // id -> { kind, label, outcome }
 const recentToolUse = new Map(); // toolUseId -> { name, summary, desc }
 let lastBgLaunch = 0;
 let lastBgHoldLog = 0;
@@ -370,7 +375,11 @@ function sweepBgFromTranscript() {
       const id = firstTagText(note[0], 'task-id');
       const statusText = firstTagText(note[0], 'status');
       if (!id || !statusText || !bgWork.has(id)) continue;
-      if (bgDone(id)) removed += 1;
+      const work = bgWork.get(id);
+      if (bgDone(id)) {
+        pendingWake.set(id, { kind: work.kind, label: work.label, outcome: 'terminado' });
+        removed += 1;
+      }
     }
     if (removed > 0) log(`barrido de transcript: ${removed} trabajo(s) de fondo cerrado(s)`);
   } catch {
@@ -392,9 +401,11 @@ function sweepCodexBg() {
       const job = readCodexJob(id);
       if (!job || !CODEX_JOB_TERMINAL_STATUSES.includes(job.status)) continue;
       if (work.ready && work.outcome === job.status) continue;
+      const firstReady = !work.ready;
       work.ready = true;
       work.readyAt ||= Date.now();
       work.outcome = job.status;
+      if (firstReady) pendingWake.set(id, { kind: 'Codex', label: work.label, outcome: job.status });
       changed += 1;
     }
     if (changed > 0) emitBg();
@@ -435,6 +446,53 @@ let q = null;
 let sawInit = false;
 let lastUserPush = null;
 
+// despertador (fin de trabajo de fondo / espera activa con pelota OTRO)
+function pushUserTurn(text, { atts = null, synthetic = false } = {}) {
+  lastActivity = Date.now();
+  turnText = '';
+  lastPelota = null;
+  if (!synthetic) otroSince = 0;
+  autonomyTurns = 0;
+  setStatus('working');
+  emit({
+    type: 'user', text,
+    ...(atts && atts.length ? { attachments: atts } : {}),
+    ...(synthetic ? { synthetic: true } : {}),
+  }, { broadcast: synthetic });
+  const userPush = {
+    type: 'user',
+    message: { role: 'user', content: buildUserContent(ID, text, atts) },
+    parent_tool_use_id: null,
+    session_id: sessionId || '',
+  };
+  lastUserPush = userPush;
+  input.push(userPush);
+}
+
+function maybeWake() {
+  if (exiting || closedByUser || q === null) return;
+  const now = Date.now();
+  const kind = wakeDecision({
+    status,
+    pelota: lastPelota,
+    idleMs: now - lastActivity,
+    otroSince,
+    now,
+    pendingCount: pendingWake.size,
+    liveBgCount: bgLiveCount(),
+  });
+  if (kind === 'bg-done') {
+    const items = [...pendingWake.values()];
+    pendingWake.clear();
+    log(`despertador: ${items.length} trabajo(s) de fondo terminado(s)`);
+    pushUserTurn(buildWakeText('bg-done', { items }), { synthetic: true });
+  } else if (kind === 'otro-checkin') {
+    const min = Math.round((now - otroSince) / 60000);
+    log(`despertador: revisión con pelota OTRO (${min} min de espera)`);
+    pushUserTurn(buildWakeText('otro-checkin', { otroElapsedMs: now - otroSince }), { synthetic: true });
+  }
+}
+
 // El HOME de ESTE proceso es el del DUEÑO (multi-tenant), así que es la única
 // autoridad sobre dónde vive el transcript; el server puede haber elegido mal
 // --session-id vs --resume porque resuelve la ruta contra su propio HOME.
@@ -474,7 +532,10 @@ function startEngine() {
         }
         : undefined,
       onBgStart: ({ id, kind, label }) => bgAdd({ id, kind, label }),
-      onBgEnd: (id) => bgDone(id),
+      onBgEnd: (id) => {
+        pendingWake.delete(id);
+        bgDone(id);
+      },
       onPrLinks: (links) => {
         for (const link of links) {
           emit({ type: 'pr-link', number: link.number, url: link.url, at: link.at }, { record: false });
@@ -588,7 +649,10 @@ function onMessage(m) {
   if (m.type === 'assistant') {
     const blocks = m.message?.content || [];
     for (const b of blocks) {
-      if (b.type === 'text' && b.text) emit({ type: 'assistant', text: b.text });
+      if (b.type === 'text' && b.text) {
+        turnText = (turnText + '\n' + b.text).slice(-8000);
+        emit({ type: 'assistant', text: b.text });
+      }
       if (b.type === 'tool_use') {
         const summary = toolSummary(b.name, b.input);
         recentToolUse.set(b.id, {
@@ -639,7 +703,9 @@ function onMessage(m) {
       for (const note of blocks.matchAll(TASK_NOTIFICATION_RE)) {
         const id = firstTagText(note[0], 'task-id');
         const statusText = firstTagText(note[0], 'status');
-        if (!id || !statusText || !bgWork.has(id)) continue;
+        if (!id || !statusText) continue;
+        pendingWake.delete(id); // El modelo ya vio este cierre en el stream.
+        if (!bgWork.has(id)) continue;
         bgDone(id);
       }
     }
@@ -647,10 +713,15 @@ function onMessage(m) {
   }
   if (m.type === 'result') {
     sessionId = m.session_id || sessionId;
+    lastPelota = parsePelota(turnText);
+    if (lastPelota === 'otro' && !otroSince) otroSince = Date.now();
+    else if (lastPelota !== 'otro') otroSince = 0;
     setStatus('waiting');
     emit({
       type: 'result',
       sessionId,
+      pelota: lastPelota,
+      otroSince,
       subtype: m.subtype,
       costUsd: m.total_cost_usd ?? null,
       // Instrumentación de caché de prompt (PEND-391 / auditoría #2): propagamos
@@ -668,6 +739,7 @@ function onMessage(m) {
       } : null,
       ms: m.duration_ms ?? null,
     });
+    setTimeout(maybeWake, 1500);
   }
 }
 
@@ -775,7 +847,7 @@ function shutdown(code) {
 function handleCommand(c, msg) {
   if (msg.t === 'hello') {
     // El runner es la fuente de verdad de su propio flag de spawn.
-    writeTo(c, { t: 'hello', id: ID, sessionId, model: currentModel, mode, status, startedAt, slashCommands, tandem: TANDEM, bgTasks: bgList(), events: history });
+    writeTo(c, { t: 'hello', id: ID, sessionId, model: currentModel, mode, status, startedAt, slashCommands, tandem: TANDEM, otroSince, bgTasks: bgList(), events: history });
     return;
   }
   if (msg.t === 'sala-op-result' && typeof msg.reqId === 'string') {
@@ -792,26 +864,15 @@ function handleCommand(c, msg) {
   }
   if (msg.t === 'user' && typeof msg.text === 'string'
       && (msg.text.trim() || (Array.isArray(msg.attachments) && msg.attachments.length))) {
-    lastActivity = Date.now();
-    autonomyTurns = 0;
-    setStatus('working');
     // Va al historial (para el replay de una reconexión) pero NO en vivo: el
     // server que lo mandó ya lo pintó localmente. Los adjuntos viajan como
     // REFERENCIA {name,type,mime} (no base64): la burbuja de replay pinta la
     // miniatura pidiéndola por nombre a GET /api/chat/attachment.
     const atts = Array.isArray(msg.attachments) ? msg.attachments : null;
-    emit({ type: 'user', text: msg.text, ...(atts && atts.length ? { attachments: atts } : {}) }, { broadcast: false });
     // content = string sin adjuntos (camino histórico) o array de bloques
     // image/document/text según el tipo de cada archivo (attachments.js LEE el
     // disco y arma los bloques de visión / inline / referencia).
-    const userPush = {
-      type: 'user',
-      message: { role: 'user', content: buildUserContent(ID, msg.text, atts) },
-      parent_tool_use_id: null,
-      session_id: sessionId || '',
-    };
-    lastUserPush = userPush;
-    input.push(userPush);
+    pushUserTurn(msg.text, { atts });
     return;
   }
   if (msg.t === 'perm') {
@@ -934,18 +995,32 @@ function rehydrateCodexBg() {
   }
 }
 
-// La auto-siesta: sin actividad por SLEEP_MS, el motor se cierra solo (aunque
-// el server no exista para pedírselo). El pump termina y el proceso sale.
+// Sueño por pelota (console:PLAN-3508): nadie => 5 min; el resto => 45 min.
+// Válvula anti-colgado: dormir en working tras 4 h sin actividad, aun sin server.
 setInterval(() => {
-  if (Date.now() - lastActivity > SLEEP_MS) {
+  const thresholdMs = sleepThresholdMs(lastPelota);
+  const idleMs = Date.now() - lastActivity;
+  const stuck = status === 'working' && idleMs > BG_MAX_HOLD_MS;
+  if ((status !== 'working' && idleMs > thresholdMs) || stuck) {
     sweepBgFromTranscript();
     sweepCodexBg();
+    maybeWake();
+    if (status === 'working') return;
+    if (holdsForOtro(lastPelota, otroSince) && !stuck) {
+      logBgHold('siesta pospuesta: pelota OTRO en espera activa');
+      return;
+    }
     if (bgHolds()) {
       logBgHold(`siesta pospuesta: ${bgLiveCount()} trabajo(s) de fondo vivo(s)`);
       return;
     }
     if (bgWork.size > 0) warnBgKilled();
-    log('auto-sueño por inactividad');
+    if (stuck) {
+      const h = (idleMs / (60 * 60 * 1000)).toFixed(1);
+      log(`motor en working sin actividad por ${h} h: se duerme igual (colgado)`);
+    }
+    const min = thresholdMs / (60 * 1000);
+    log(`auto-sueño por inactividad (pelota: ${lastPelota ?? 'desconocida'}, umbral ${min} min)`);
     input.end();
     Promise.resolve(q?.close?.()).catch(() => {});
   }
@@ -954,6 +1029,7 @@ setInterval(() => {
 setInterval(() => {
   sweepBgFromTranscript();
   sweepCodexBg();
+  maybeWake();
 }, 20 * 1000).unref();
 
 process.on('SIGTERM', () => { input.end(); Promise.resolve(q?.close?.()).catch(() => {}); });

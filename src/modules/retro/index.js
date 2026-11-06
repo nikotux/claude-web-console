@@ -109,9 +109,10 @@ async function poolLessonsForOwner(pooledLessons, ctx) {
   }));
 }
 
-function isPoolLessonAdoptable(lesson) {
+function isPoolLessonAdoptable(lesson, userId) {
   // Un único criterio alimenta tanto el contador visible como la adopción real:
   // así el lote nunca promete una selección distinta de la que luego trae.
+  if (lesson.project === 'console' && userId !== 'host') return false;
   return !lesson.mine && !lesson.adopted;
 }
 
@@ -122,7 +123,9 @@ function adoptionInputFromPoolLesson(poolLesson) {
     category: poolLesson.category,
     observation: parts.observation,
     lesson: parts.lesson,
-    project: 'tolkien',
+    // Forzar Tolkien volvería una lección de Consola promovible hacia el mundo
+    // externo, en contra de la Regla 12: la etiqueta real cruza intacta.
+    project: poolLesson.project,
     destination: poolLesson.destination,
     confidence: poolLesson.confidence,
     sourceRefs: poolLesson.sourceRefs,
@@ -261,7 +264,9 @@ export default {
           counts: {
             total: lessons.length,
             mine: lessons.filter((lesson) => lesson.mine).length,
-            adoptable: lessons.filter(isPoolLessonAdoptable).length,
+            adoptable: lessons.filter((lesson) => (
+              isPoolLessonAdoptable(lesson, sharedByForContext(ctx))
+            )).length,
           },
         });
       } catch (e) { return sendErr(res, e); }
@@ -280,9 +285,12 @@ export default {
         }
 
         const lessons = await poolLessonsForOwner(pooled.lessons, ctx);
-        const adoptable = lessons.filter(isPoolLessonAdoptable);
+        const userId = sharedByForContext(ctx);
+        const adoptable = lessons.filter((lesson) => isPoolLessonAdoptable(lesson, userId));
         let adopted = 0;
-        let alreadyHad = lessons.length - adoptable.length;
+        // Las internas excluidas para inquilinos siguen visibles, pero no cuentan
+        // como si ya estuvieran en su registro.
+        let alreadyHad = lessons.filter((lesson) => lesson.mine || lesson.adopted).length;
         const errors = [];
 
         // Secuencial a propósito: cada upsert toma un lock de archivo y Pad

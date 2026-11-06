@@ -216,7 +216,7 @@ El tier **PATROCINADO** (`tier: 'sponsored'` + `sponsor` explícitos en `users.j
 
 **No-cruce por usuario × mundo.** La vieja "confianza plena entre autenticados" del WS queda DEROGADA para todos salvo quien tenga `oversight`, capacidad de ver contenido ajeno cuyo default es `true` solo para el host y el principal por token. `oversight` y `admin` se resuelven en vivo por request con `oversightFor()` / `adminFor()`: cada principal sin esa capacidad ve/adjunta SOLO lo suyo (`list(principal)`, `ownedChat`), y el cwd se clampa con `safeCwd(cwd, owner)` a `userFileRoot(owner)`, JAMÁS al home global. Todo estado user-scoped resuelve su dir con `resolveDataDir()` — PROHIBIDO hardcodear `~/.cwc-data` del host. Una operación de Pad de un inquilino usa SU token y SU workspace (`tenant-<id>`), nunca la credencial del host ni el workspace `console`.
 
-Pad tiene un tercer destino: `comunidad`, pozo común de Mejora Continua (`console:PLAN-2222`), donde se agregan las lecciones de Tolkien de todos los usuarios y la recurrencia se cuenta ENTRE PERSONAS. Cada uno escribe con su token; nada ajeno se auto-aplica.
+Pad tiene un tercer destino: `comunidad`, pozo común de Mejora Continua (`console:PLAN-2222`), donde se agregan todas las lecciones de los usuarios y la recurrencia se cuenta ENTRE PERSONAS. Cada uno escribe con su token; nada ajeno se auto-aplica. Sus lecciones cuelgan de nodos reales de la colección `temas` (`console:PLAN-3595`).
 
 Las 4 familias están blindadas como invariantes en `src/modules/health/invariants.js` (Blindaje anticonsumo, incluida la excepción nominal de patrocinio · Ownership por usuario · Dato user-scoped nunca global · Pad per-usuario): el auditor de Salud las inyecta a las unidades que matchean y las verifica sí o sí, así un refactor futuro no puede reintroducir el fallback a la cuenta del server. El PTY de `terminal/sessions.js` ya es owner-scoped y fail-closed (BUG-2104).
 
@@ -304,15 +304,15 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 
 | Módulo | Qué es | Lo que más duele |
 |---|---|---|
-| `chat/` | conversaciones del SDK; el motor real es `bin/cwc-chat-runner.js` | En **Tándem**, Codex corre desacoplado y admite delegaciones en paralelo sobre archivos disjuntos. `🎾 Pelota: MÍA` hace que el chat siga solo, sin tope. Un runner vivo no toma cambios hasta "Reabrir para cambios". Una sala 🛃 Aduana usa el canal `say` (0 tokens): la IA solo habla cuando alguien aprieta el botón de corte. Cucho abre sub-salas que arrancan solas y se despiertan entre sí con presupuesto (Ley 3 quater). |
+| `chat/` | conversaciones del SDK; el motor real es `bin/cwc-chat-runner.js` | En **Tándem**, Codex corre desacoplado y admite delegaciones en paralelo sobre archivos disjuntos. `🎾 Pelota: MÍA` hace que el chat siga solo, sin tope. Un runner vivo no toma cambios hasta "Reabrir para cambios". Una sala 🛃 Aduana usa el canal `say` (0 tokens): la IA solo habla cuando alguien aprieta el botón de corte. Cucho abre sub-salas que arrancan solas y se despiertan entre sí con presupuesto (Ley 3 quater). Un chat cuya última respuesta cierra con `🎾 Pelota: nadie` duerme su motor a los 5 min (los demás a los 45). |
 | `folders/` | carpetas manuales con las que cada usuario organiza su barra de Sesiones | Es estado privado por usuario: la ruta se resuelve por operación, nunca en una constante de módulo. Borrar una carpeta jamás borra un chat. |
 | `forja/` | progresión personal y arena mensual derivadas de PRs mergeados en Tolkien | Participa por opt-in con `identity.github`; el detalle de PRs es privado por dueño y la arena expone solo métricas públicas. El frontend monta la ficha en el sidebar y abre «Mi salón»/«Arena»; GitHub se lee exclusivamente por `comms/pr-read-shared.js`. |
 | `terminal/` | sesiones tmux (`cwc-`) + TUI ocultas (`cwct-`) + rehidratación | La propiedad de adjuntado es `attachSpec`, NO `attach` (colisiona con el método). La rama `attach` es owner-scoped con candado estricto y comparte el guard con `tmux` desde `terminal/sessions.js`. |
-| `tokens/` | uso local (parsea transcripts jsonl) + límites del plan + Codex CLI | El COSTO es equivalente a precios de API, no gasto real. Todo en hora local de Medellín (`tokens/time.js`). El cache read pesa ×0.1: nunca compares tokens crudos. |
+| `tokens/` | uso local (parsea transcripts jsonl) + límites del plan + Codex CLI | El COSTO es equivalente a precios de API, no gasto real. Todo en hora local de Medellín (`tokens/time.js`). El cache read pesa ×0.1: nunca compares tokens crudos. `/flow` memoiza 600 ms por owner y parsea los jsonl por líneas: no vuelvas a leer transcripts enteros a string. |
 | `retro/` | Mejora Continua: destila lecciones de proceso al cerrar chats | Lecciones en Pad (`mejora-continua`), consultadas por tarea desde el índice enrutador; el pozo `comunidad` suma recurrencia entre personas sin auto-aplicar aportes ajenos. Incluye "💬 Feedback de Chris". |
 | `interfono/` | panel + canal humano del bus entre sesiones | **Solo LEE** el bus; la mensajería automática la escriben los hooks vía `bin/cwc-bus.js`. |
 | `news/` | 🆕 Novedades: changelog alegre para los usuarios, que se monta solo en cada push | El redactor es la ÚNICA corrida read-only que LEE código para escribir texto de usuario (Read/Grep/Glob). Publica sin revisión previa: lo que redacte lo ven todos los usuarios. |
-| `health/` | chequeos rápidos + revisión IA + auto-fix | Su detalle vive en la sección "Verificación de salud" de este archivo. El auto-fix es la ÚNICA corrida que escribe código sin supervisión. |
+| `health/` | chequeos rápidos + revisión IA + auto-fix | Su detalle vive en la sección "Verificación de salud" de este archivo. El auto-fix es la ÚNICA corrida que escribe código sin supervisión. El check `recursos` lee el cgroup (memory.high/events) y el heap: si da warn, algo volvió a chocar el techo. |
 | `tolkien/` | git del repo trackeado + entornos efímeros por sesión | "Actualizar" adelanta tu `main` LOCAL aunque estés en una rama feature. Los entornos son worktrees + DB clonada + dev-server systemd. |
 | `visado/` | canal de petición-con-visado desde una sala 🛃 Aduana | El catálogo es un enum CERRADO en código: el invitado ELIGE de listas del servidor, nunca escribe. El `gate` de cada op es la referencia importada del endpoint real, no una copia. |
 | `projects/` | edita el CLAUDE.md y las memorias REALES de cada proyecto | Excepción deliberada a la regla 4: lo que guardás acá cambia el comportamiento de la próxima sesión. Edición por SECCIONES con guard de hash. También sirve los contextos work/pr heredados de Tickets (`/work-context`), que se espejan a `CLAUDE.local.md` de Tolkien. |
@@ -509,6 +509,13 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
   el server consume un core entero (`console:BUG-3481`, 2026-10-28).
   Medir con `rchar` en `/proc/<MainPID>/io`.
 
+- **Recursos (2026-10-28, `console:PLAN-3508`):** el cgroup del servicio incluye a TODOS los motores de chat (`KillMode=process`).
+  Con `MemoryHigh=10G` el techo se chocaba miles de veces por hora (page cache de transcripts evictado y releído, motores ociosos a swap): ahora es `12G`,
+  el server corre con `--max-old-space-size=1536` y `UV_THREADPOOL_SIZE=8` (unidad en `systemd/` y copia instalada IDÉNTICAS: si cambiás una, copiá la otra y daemon-reload).
+  El check de Salud `recursos` avisa si vuelve a chocar. Los motores duermen por pelota: `nadie` ⇒ 5 min, resto 45 min, `working` nunca salvo 4 h colgado.
+  `/api/tokens/flow` memoiza 600 ms y el cliente baja a 2,5 s tras 10 s sin caudal.
+  `/api/chat/list` leía el bus del interfono una vez POR CHAT (~21 ms CPU con 100 chats, polleado cada 5–8 s por pestaña): `core/bus.js` memoiza `messages/` 1 s (`console:BUG-3517`).
+
 ## Proceso de cambio (seguirlo SIEMPRE)
 
 1. Editar el código respetando esta guía.
@@ -533,7 +540,7 @@ docs/                       estandar-documental.md · frontend-modules.md · INS
 
 Detalle completo: `src/modules/health/CLAUDE.md` (se carga solo al tocar el módulo).
 
-- **Chequeos rápidos** (`GET /api/health/checks`, 0 tokens): systemd + `KillMode=process`, tmux del socket `cwc`, runners de chat, observador, credencial OAuth del host (`claude-cred`), TLS, git, sintaxis de todo `src/` y `bin/`, disco, datos de runtime, espejo de contexto a Tolkien, backbone de Pad, facetas (una unidad sin clase declarada o código de `src/` fuera del radar salta acá), cruces entre mundos (`cross-world`) y leyes del grafo de Pad (`pad-grafo`).
+- **Chequeos rápidos** (`GET /api/health/checks`, 0 tokens): systemd + `KillMode=process`, recursos (cgroup + heap), tmux del socket `cwc`, runners de chat, observador, credencial OAuth del host (`claude-cred`), TLS, git, sintaxis de todo `src/` y `bin/`, disco, datos de runtime, espejo de contexto a Tolkien, backbone de Pad, facetas (una unidad sin clase declarada o código de `src/` fuera del radar salta acá), cruces entre mundos (`cross-world`), leyes del grafo de Pad (`pad-grafo`) y grafo del pozo común (`pozo-grafo`).
 - **Escaneo de Salud unificado** (UN botón, CONSUME TOKENS): corre Revisión + Optimización + Coherencia bajo un pool adaptativo compartido, en el orquestador desacoplado `bin/cwc-health-scan-runner.js`. Incremental por fingerprint de contenido; el modo `full` ignora las cachés. Cruza cada hallazgo contra los BUGs de Pad (🆕 nuevo · 🔗 rastreado · ⚠️ regresión).
 - **Auto-fix** (`bin/cwc-healthfix-runner.js`): la ÚNICA corrida que escribe código sin supervisión — excepción documentada de la regla 6. Allowlist `fixToolAllowed` (Read/Grep/Glob/Edit/Write + Bash SOLO `node --check`); NUNCA reinicia el servicio. Los hallazgos CRÍTICOS (server/bind, auth, config, TLS, registry, blindaje read-only headless, runners) NO se auto-resuelven: el gate los rechaza en el BACKEND, no solo en la UI.
 - Nada se auto-aplica: propuestas de Optimización/Coherencia e invariantes aprendidos requieren aprobación humana explícita.

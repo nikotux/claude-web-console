@@ -43,6 +43,8 @@ function readPackages() {
 // ===== Rutas y constantes =====
 const ROOT = path.join(config.home, '.cwc-data', 'session-bus');
 const MSG_DIR = path.join(ROOT, 'messages');
+const MSG_LIST_TTL_MS = 1000;
+let _msgCache = { at: 0, items: null };
 const CLAIM_DIR = path.join(ROOT, 'claims');
 const TOMB_DIR = path.join(ROOT, 'tombstones');
 const STATE_DIR = path.join(config.home, '.cwc-state'); // observador (cwc-observe.js)
@@ -77,6 +79,22 @@ function listJson(dir) {
     if (j) out.push({ _file: path.join(dir, n), ...j });
   }
   return out;
+}
+
+// Otros procesos (hooks vía bin/cwc-bus.js) también escriben messages/: el TTL
+// de 1 s acota el desfase, invisible para consumidores que pollean cada 5–12 s.
+function listMessagesCached() {
+  const now = Date.now();
+  if (_msgCache.items !== null && now - _msgCache.at < MSG_LIST_TTL_MS) {
+    return _msgCache.items.slice();
+  }
+  const items = listJson(MSG_DIR);
+  _msgCache = { at: now, items };
+  return items.slice();
+}
+
+function invalidateMessages() {
+  _msgCache = { at: 0, items: null };
 }
 
 // Id sin depender de Math.random (vetado en algunos contextos del proyecto):
@@ -275,6 +293,7 @@ export function sendMessage({ from, fromName, to, toName, text, kind = 'note', l
     kind, level: level || levelForKind(kind), hops, ts: Date.now(), deliveredTo: {}, ackBy: {},
   };
   writeJson(path.join(MSG_DIR, `${id}.json`), msg);
+  invalidateMessages();
   return msg;
 }
 
@@ -283,7 +302,7 @@ export function sendMessage({ from, fromName, to, toName, text, kind = 'note', l
 export function pendingFor(handles) {
   const set = new Set(handles || []);
   const now = Date.now();
-  return listJson(MSG_DIR).filter((m) => {
+  return listMessagesCached().filter((m) => {
     if (now - (m.ts || 0) > MSG_TTL_MS) return false;
     if (set.has(m.from)) return false; // no me muestro mis propios mensajes
     const forMe = m.to === 'all' || set.has(m.to);
@@ -302,6 +321,7 @@ export function markDelivered(messages, handles) {
     const deliveredTo = { ...(current.deliveredTo || {}) };
     for (const h of handles) deliveredTo[h] = now;
     writeJson(file, { ...current, deliveredTo });
+    invalidateMessages();
   }
 }
 function stripMeta(o) { const { _file, ...rest } = o; return rest; }
@@ -314,7 +334,7 @@ export function allMessages(directory = null) {
   const now = Date.now();
   const entries = directory || buildDirectory();
   const liveHandles = new Set(entries.map((entry) => entry.handle));
-  return listJson(MSG_DIR)
+  return listMessagesCached()
     .filter((m) => now - (m.ts || 0) <= MSG_TTL_MS)
     .map((m) => ({ ...stripMeta(m), undeliverable: !liveHandles.has(m.to) }))
     .sort((a, b) => b.ts - a.ts);
@@ -443,7 +463,9 @@ export function stealable(state) { return state === 'zombie' || state === 'stale
 export function gc() {
   const now = Date.now();
   for (const m of listJson(MSG_DIR)) {
-    if (now - (m.ts || 0) > MSG_TTL_MS) { try { fs.unlinkSync(m._file); } catch { /* noop */ } }
+    if (now - (m.ts || 0) > MSG_TTL_MS) {
+      try { fs.unlinkSync(m._file); invalidateMessages(); } catch { /* noop */ }
+    }
   }
   for (const t of listJson(TOMB_DIR)) {
     if (now - (t.ts || 0) > TOMB_TTL_MS) { try { fs.unlinkSync(t._file); } catch { /* noop */ } }

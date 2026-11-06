@@ -687,3 +687,13 @@ El cierre del rediseño, en la misma jornada, unificó cada turno de la IA en UN
   `resetGenerateButton()`, que es el ÚNICO lugar que escribe la etiqueta: si
   alguien vuelve a asignar `textContent` a mano en otro punto, el contador
   desaparece en silencio tras la primera generación.
+
+- Estado en vivo del chat: `chat/live-cards.js` es un renderer puro e importable
+  en Node que escapa todos los datos y pinta tarjetas de Codex/CI. `ChatTab`
+  recibe el snapshot por `history` y luego `codex-live`/`pr-ci`, conserva el
+  plegado por job, descarta errores en `sessionStorage` por chat y sólo mantiene
+  un ticker de 1 s mientras hay una tarjeta activa visible. Los éxitos de Codex
+  duran 60 s, los de CI 2 min desde que se ven; errores quedan hasta cerrarlos.
+  Sesiones consume únicamente `codexBadge`/`ciBadge` y actualiza chips en lugar
+  con `dataset.liveBadgeKey` durante el poll existente.
+- `chat/wake-notice.js` resume los turnos sintéticos del despertador en una línea y conserva el texto completo desplegable.

@@ -10,6 +10,8 @@
 // otro camino (ver getCodexBlock en index.js). Todo es best-effort: un rollout
 // corrupto, ausente o todavía escribiéndose no debe romper el resumen de Claude.
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import readline from 'node:readline';
 import path from 'node:path';
 import { hostUser, userSpace } from '../../core/user-space.js';
 import { localHourKey } from './time.js';
@@ -59,49 +61,57 @@ async function collectRollouts(dir, out) {
 }
 
 async function parseFile(file) {
-  const txt = await fs.readFile(file, 'utf8');
   const rows = {};
   let cwd = '';
   let model = 'gpt-5';
   let lastTotalUsage = null;
 
-  for (const line of txt.split('\n')) {
-    if (!line) continue;
-    if (!line.includes('"token_count"') && !line.includes('"turn_context"') && !line.includes('"session_meta"')) continue;
-    let obj;
-    try { obj = JSON.parse(line); } catch { continue; }
+  const input = createReadStream(file, { encoding: 'utf8' });
+  const lines = readline.createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (!line) continue;
+      if (!line.includes('"token_count"') && !line.includes('"turn_context"') && !line.includes('"session_meta"')) continue;
+      let obj;
+      try { obj = JSON.parse(line); } catch { continue; }
 
-    if (obj.type === 'session_meta') {
-      if (typeof obj.payload?.cwd === 'string') cwd = obj.payload.cwd;
-      continue;
-    }
-    if (obj.type === 'turn_context') {
-      if (typeof obj.payload?.model === 'string' && obj.payload.model) model = obj.payload.model;
-      continue;
-    }
-    if (obj.type !== 'event_msg' || obj.payload?.type !== 'token_count') continue;
+      if (obj.type === 'session_meta') {
+        if (typeof obj.payload?.cwd === 'string') cwd = obj.payload.cwd;
+        continue;
+      }
+      if (obj.type === 'turn_context') {
+        if (typeof obj.payload?.model === 'string' && obj.payload.model) model = obj.payload.model;
+        continue;
+      }
+      if (obj.type !== 'event_msg' || obj.payload?.type !== 'token_count') continue;
 
-    const info = obj.payload?.info;
-    const usage = info?.last_token_usage;
-    if (!usage) continue;
-    const totalUsage = info.total_token_usage?.total_tokens;
-    if (Number.isFinite(totalUsage)) {
-      if (totalUsage === lastTotalUsage) continue;
-      lastTotalUsage = totalUsage;
+      const info = obj.payload?.info;
+      const usage = info?.last_token_usage;
+      if (!usage) continue;
+      const totalUsage = info.total_token_usage?.total_tokens;
+      if (Number.isFinite(totalUsage)) {
+        if (totalUsage === lastTotalUsage) continue;
+        lastTotalUsage = totalUsage;
+      }
+      const ts = Date.parse(obj.timestamp || '') || 0;
+      const hourKey = ts ? localHourKey(ts) : 'unknown';
+      const key = `${hourKey}\t${model}`;
+      const b = (rows[key] ||= emptyBucket());
+      const cachedInput = usage.cached_input_tokens || 0;
+      // GOTCHA verificado en flow.js / rollouts: input_tokens YA INCLUYE
+      // cached_input_tokens, y total_tokens = input_tokens + output_tokens. Para
+      // que input+output+cachedInput no cuente el cache dos veces, lo descontamos
+      // del input "nuevo" y lo mandamos aparte como cache read.
+      b.cachedInput += cachedInput;
+      b.input += Math.max(0, (usage.input_tokens || 0) - cachedInput);
+      b.output += usage.output_tokens || 0;
+      b.ts = Math.max(b.ts, ts);
     }
-    const ts = Date.parse(obj.timestamp || '') || 0;
-    const hourKey = ts ? localHourKey(ts) : 'unknown';
-    const key = `${hourKey}\t${model}`;
-    const b = (rows[key] ||= emptyBucket());
-    const cachedInput = usage.cached_input_tokens || 0;
-    // GOTCHA verificado en flow.js / rollouts: input_tokens YA INCLUYE
-    // cached_input_tokens, y total_tokens = input_tokens + output_tokens. Para
-    // que input+output+cachedInput no cuente el cache dos veces, lo descontamos
-    // del input "nuevo" y lo mandamos aparte como cache read.
-    b.cachedInput += cachedInput;
-    b.input += Math.max(0, (usage.input_tokens || 0) - cachedInput);
-    b.output += usage.output_tokens || 0;
-    b.ts = Math.max(b.ts, ts);
+  } catch {
+    // Si el archivo desaparece o falla la lectura, conservar lo ya parseado.
+  } finally {
+    lines.close();
+    input.destroy();
   }
 
   const proj = projectOfPath(cwd);

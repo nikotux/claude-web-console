@@ -15,6 +15,8 @@ import { modelColor, modelName, tierName, CHAT_MODEL_OPTIONS, ROUTER_MANAGED_MOD
 import { PLACES, placeFor, resolvePlace } from '../../ui/places.js';
 import { flowBarHtml, ensureFlowDirector } from '../../ui/token-flow.js';
 import { t } from '../../ui/i18n.js';
+import { formatLiveDuration, renderCiCard, renderCodexCard } from './live-cards.js';
+import { isWakeText, wakeSummary } from './wake-notice.js';
 import { helpBtn } from '../../ui/help.js';
 import { avatarFor, avatarNodeFrom } from '../../ui/avatars.js';
 import { milestoneGlyph, milestoneToastTitle, milestoneTrackHtml } from '../../ui/pr-milestone.js';
@@ -335,6 +337,14 @@ export class ChatTab {
     this._prToastRemainingMs = 0;
     this._prToastStartedAt = 0;
     this._prToastPauseReasons = new Set();
+    this._codexLive = [];
+    this._codexTypical = null;
+    this._prCi = [];
+    this._liveExpanded = new Set();
+    this._ciPassedSeen = new Map();
+    this._liveDismissed = new Set();
+    this._liveTimer = null;
+    this._liveExpiryTimer = null;
     this._active = false;
     this._salaSayCount = 0;
     this._salaAskCount = 0;
@@ -416,6 +426,7 @@ export class ChatTab {
             <div class="chat-raw-body"></div>
           </aside>
         </div>
+        <div class="chat-live" hidden></div>
         <div class="chat-atttray" hidden></div>
         <div class="chat-pending-prompt" hidden>
           <span>${t('chat.orchestrate.pendingNotice', 'Este texto llegó de una sala de Aduana y se envía cuando vos quieras.')}</span>
@@ -444,7 +455,7 @@ export class ChatTab {
     this.titleEl.title = this.title;
     this.worldEl = container.querySelector('.chat-world');
     this.prToastHost = container.querySelector('.hito-toast-host');
-    this._onPrVisibility = () => this._drainPrMilestones();
+    this._onPrVisibility = () => { this._drainPrMilestones(); this._syncLiveTicker(); };
     document.addEventListener('visibilitychange', this._onPrVisibility);
     this.peersEl = container.querySelector('.chat-peers');
     this.visadoBtn = container.querySelector('.chat-visado-btn');
@@ -530,6 +541,27 @@ export class ChatTab {
     this.pkgRefBtn = container.querySelector('.chat-pkgref');
     this.pkgRefBtn?.addEventListener('click', () => this._openPackagePicker());
     this.fileInput = container.querySelector('.chat-file-input');
+    this.liveEl = container.querySelector('.chat-live');
+    this._liveDismissKey = `cwc:chat-live-dismissed:${this.id}`;
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(this._liveDismissKey) || '[]');
+      if (Array.isArray(stored)) this._liveDismissed = new Set(stored.map(String));
+    } catch { /* sessionStorage bloqueado o dato viejo inválido */ }
+    this.liveEl.addEventListener('click', (event) => {
+      const toggle = event.target.closest('[data-live-toggle]');
+      if (toggle) {
+        const id = toggle.dataset.liveToggle;
+        if (this._liveExpanded.has(id)) this._liveExpanded.delete(id); else this._liveExpanded.add(id);
+        this._renderLive();
+        return;
+      }
+      const dismiss = event.target.closest('[data-live-dismiss]');
+      if (dismiss) {
+        this._liveDismissed.add(dismiss.dataset.liveDismiss);
+        try { sessionStorage.setItem(this._liveDismissKey, JSON.stringify([...this._liveDismissed])); } catch { /* noop */ }
+        this._renderLive();
+      }
+    });
     this.trayEl = container.querySelector('.chat-atttray');
     this.pendingPromptEl = container.querySelector('.chat-pending-prompt');
     this.pendingPromptEl.querySelector('.chat-pending-prompt-dismiss').addEventListener('click', () => {
@@ -1218,10 +1250,23 @@ export class ChatTab {
         this._effortPinned = !!m.effortPinned;
         this._applyModel(m.model); // sin auto: solo poblar el badge al abrir/reconectar
         this._enqueuePrMilestones(m.prMilestones);
+        this._acceptCodexLive(m.codexLive?.jobs);
+        this._codexTypical = m.codexLive?.typical || null;
+        this._acceptPrCi(m.prCi);
+        this._renderLive();
         this._sendInitialPrompt();
         // Historial renderizado: destraba al splash de arranque (ver arriba).
         this._readyResolve?.();
         this._readyResolve = null;
+        break;
+      case 'codex-live':
+        this._acceptCodexLive(m.jobs);
+        this._codexTypical = m.typical || null;
+        this._renderLive();
+        break;
+      case 'pr-ci':
+        this._acceptPrCi(m.ci);
+        this._renderLive();
         break;
       case 'meta':
         this.slashCommands = Array.isArray(m.slashCommands) ? m.slashCommands : [];
@@ -2074,6 +2119,7 @@ export class ChatTab {
 
   _bubble(kind, text, attachments = null, by = null, ts = null) {
     this._maybeDaySep(ts);
+    if (kind === 'user' && isWakeText(text)) return this._wakeNotice(text, ts);
     const el = document.createElement('div');
     el.className = `chat-msg chat-${kind}`;
     if (by) {
@@ -2100,6 +2146,48 @@ export class ChatTab {
     if (timeTag) el.appendChild(timeTag);
     const host = String(kind).includes('assistant') ? this._aiHost() : this.msgsEl;
     host.appendChild(el);
+    this._scroll();
+    return el;
+  }
+
+  _wakeNotice(text, ts = null) {
+    const summary = wakeSummary(text);
+    const el = document.createElement('div');
+    el.className = `chat-wake-notice chat-wake-notice--${summary.kind}`;
+
+    const line = document.createElement('div');
+    line.className = 'chat-wake-line';
+    const copy = document.createElement('span');
+    copy.className = 'chat-wake-summary';
+    copy.textContent = `🔔 ${summary.text}`;
+    line.appendChild(copy);
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'chat-wake-toggle';
+    toggle.textContent = t('chat.wake.showDetail', 'ver detalle ▾');
+    toggle.setAttribute('aria-expanded', 'false');
+    line.appendChild(toggle);
+
+    const timeTag = this._timeTag(ts);
+    if (timeTag) line.appendChild(timeTag);
+    el.appendChild(line);
+
+    const detail = document.createElement('div');
+    detail.className = 'chat-wake-detail';
+    detail.textContent = String(text);
+    detail.hidden = true;
+    el.appendChild(detail);
+
+    toggle.addEventListener('click', () => {
+      detail.hidden = !detail.hidden;
+      toggle.setAttribute('aria-expanded', String(!detail.hidden));
+      toggle.textContent = detail.hidden
+        ? t('chat.wake.showDetail', 'ver detalle ▾')
+        : t('chat.wake.hideDetail', 'ocultar ▴');
+    });
+
+    this.msgsEl.appendChild(el);
     this._scroll();
     return el;
   }
@@ -3007,6 +3095,84 @@ export class ChatTab {
     });
   }
 
+  _renderLive() {
+    if (!this.liveEl) return;
+    const clock = Date.now();
+    const wasBottom = this._isNearMessagesBottom();
+    let nextExpiry = Infinity;
+    const codex = this._codexLive.filter((job) => {
+      const key = `codex:${job?.id || ''}`;
+      if (this._liveDismissed.has(key)) return false;
+      const running = job?.status === 'pending' || job?.status === 'running';
+      const problem = job?.isError === true || ['error', 'killed', 'orphaned'].includes(job?.status);
+      if (!running && !problem) {
+        const expires = Date.parse(job?.finishedAt || 0) + 60_000;
+        nextExpiry = Math.min(nextExpiry, expires);
+        return expires > clock;
+      }
+      return true;
+    }).map((job) => renderCodexCard(job, {
+      now: clock, typical: this._codexTypical, expanded: this._liveExpanded.has(String(job.id || '')),
+    }));
+    const ci = this._prCi.filter((item) => {
+      const key = `ci:${item?.number || 0}:${item?.sha || ''}`;
+      if (this._liveDismissed.has(key)) return false;
+      if (item?.state !== 'passed') return true;
+      if (!this._ciPassedSeen.has(key)) this._ciPassedSeen.set(key, clock);
+      const expires = this._ciPassedSeen.get(key) + 120_000;
+      nextExpiry = Math.min(nextExpiry, expires);
+      return expires > clock;
+    }).map((item) => renderCiCard(item, { now: clock }));
+    this.liveEl.innerHTML = [...codex, ...ci].join('');
+    this.liveEl.hidden = this.liveEl.childElementCount === 0;
+    clearTimeout(this._liveExpiryTimer);
+    this._liveExpiryTimer = Number.isFinite(nextExpiry)
+      ? setTimeout(() => this._renderLive(), Math.max(0, nextExpiry - clock + 20)) : null;
+    this._syncLiveTicker();
+    if (wasBottom) this._scroll();
+  }
+
+  _syncLiveTicker() {
+    const hasRunning = this._active && document.visibilityState === 'visible'
+      && !!this.liveEl?.querySelector('.live-card--running');
+    if (hasRunning && !this._liveTimer) this._liveTimer = setInterval(() => this._updateLiveElapsed(), 1_000);
+    if (!hasRunning && this._liveTimer) { clearInterval(this._liveTimer); this._liveTimer = null; }
+  }
+
+  _acceptCodexLive(value) {
+    const incoming = Array.isArray(value) ? value : [];
+    const ids = new Set(incoming.map((job) => String(job?.id || '')));
+    const stickyErrors = this._codexLive.filter((job) => (
+      (job?.isError === true || ['error', 'killed', 'orphaned'].includes(job?.status))
+      && !ids.has(String(job?.id || ''))
+    ));
+    this._codexLive = [...incoming, ...stickyErrors];
+  }
+
+  _acceptPrCi(value) {
+    const incoming = Array.isArray(value) ? value : [];
+    const numbers = new Set(incoming.map((ci) => Number(ci?.number) || 0));
+    const stickyFinals = this._prCi.filter((ci) => ['failed', 'passed'].includes(ci?.state)
+      && !numbers.has(Number(ci?.number) || 0));
+    this._prCi = [...incoming, ...stickyFinals];
+  }
+
+  _updateLiveElapsed() {
+    const clock = Date.now();
+    for (const el of this.liveEl?.querySelectorAll('[data-live-elapsed]') || []) {
+      const start = Number(el.dataset.start) || 0;
+      if (!start) continue;
+      const duration = formatLiveDuration(clock - start);
+      if (el.dataset.liveElapsed === 'codex') {
+        const median = Number(el.dataset.typical) || 0;
+        const suffix = median ? t('chat.live.codex.typical', ' · la mayoría de los encargos termina en unos {time}', { time: formatLiveDuration(median) }) : '';
+        el.textContent = t('chat.live.codex.elapsed', '⏱ Lleva {time}', { time: duration }) + suffix;
+      } else {
+        el.textContent = t('chat.live.ci.elapsed', '⏱ Lleva {time}', { time: duration });
+      }
+    }
+  }
+
   _enqueuePrMilestones(items) {
     for (const milestone of Array.isArray(items) ? items : []) {
       if (!milestone?.key || this._prKeys.has(milestone.key)) continue;
@@ -3108,6 +3274,7 @@ export class ChatTab {
   setActive(active) {
     this._active = !!active;
     if (this._active) this._drainPrMilestones();
+    this._syncLiveTicker();
   }
 
   // Recalcula el alto del textarea según su contenido. NO fija 0px cuando el
@@ -3145,6 +3312,8 @@ export class ChatTab {
     window.removeEventListener(DOC_MODE_EVENT, this._onDocMode);
     document.removeEventListener('visibilitychange', this._onPrVisibility);
     clearTimeout(this._prToastTimer);
+    clearInterval(this._liveTimer);
+    clearTimeout(this._liveExpiryTimer);
     this._slashClose();
     this._clearTyping();
     this._stopPreviewPolling();

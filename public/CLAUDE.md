@@ -665,3 +665,9 @@ clon del workspace; si alguno falla, el título se degrada a
   sirven frescos del disco. Verificar un cambio de index.html sin reiniciar da
   un falso negativo: el navegador recibe el HTML viejo aunque el archivo en
   disco ya esté bien.
+
+- `.chat-live` vive inmediatamente arriba del composer y contiene tarjetas
+  compactas `.live-card` para Codex y revisiones automáticas. Usa exclusivamente
+  tokens de `tokens.css`, barra fría, estados verde/rojo, pulso e indeterminado;
+  `prefers-reduced-motion` apaga todas sus animaciones. En móvil limita su alto
+  y scrollea internamente para no expulsar el hilo ni el composer.

@@ -14,6 +14,60 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 export { PERMISSION_MODES } from '../../core/tool-policy.js';
 export const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000; // sin respuesta => denegar
 export const SLEEP_MS = 45 * 60 * 1000; // inactiva => el runner se auto-duerme
+export const SLEEP_DONE_MS = 5 * 60 * 1000; // pelota nadie (console:PLAN-3508)
+export const OTRO_CHECKIN_MS = 15 * 60 * 1000;
+export const OTRO_HOLD_MS = 4 * 60 * 60 * 1000;
+export const WAKE_PREFIX = '🔔 [cwc-despertador]';
+
+// Sueño por pelota (console:PLAN-3508): manda la última línea con marcador,
+// con emoji opcional, negritas y mayúsculas/acentos tolerados.
+export function parsePelota(text) {
+  if (typeof text !== 'string') return null;
+  const lines = text.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const match = lines[i].match(/(?:🎾\s*)?\*{0,2}\bPelota\*{0,2}\s*:\s*\*{0,2}\s*([A-Za-zÁÉÍÓÚáéíóú]+)/i);
+    if (!match) continue;
+    const pelota = match[1].normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    return ['nadie', 'tuya', 'otro', 'mia'].includes(pelota) ? pelota : null;
+  }
+  return null;
+}
+
+// Solo «nadie» acorta la espera; los demás casos conservan 45 min.
+// Los consumidores deben impedir el sueño mientras el motor esté working;
+// con OTRO, runner y server además retienen mediante holdsForOtro.
+export function sleepThresholdMs(pelota) {
+  return pelota === 'nadie' ? SLEEP_DONE_MS : SLEEP_MS;
+}
+
+// despertador (fin de trabajo de fondo / espera activa con pelota OTRO)
+export function holdsForOtro(pelota, otroSince, now = Date.now()) {
+  return pelota === 'otro' && otroSince > 0 && now - otroSince < OTRO_HOLD_MS;
+}
+
+export function wakeDecision({ status, pelota, idleMs, otroSince, now, pendingCount, liveBgCount }) {
+  if (status !== 'waiting') return null;
+  if (pendingCount > 0) return 'bg-done';
+  if (liveBgCount === 0 && holdsForOtro(pelota, otroSince, now) && idleMs >= OTRO_CHECKIN_MS) {
+    return 'otro-checkin';
+  }
+  return null;
+}
+
+export function buildWakeText(kind, { items = [], otroElapsedMs = 0 } = {}) {
+  if (kind === 'bg-done') {
+    const lines = items.map((item) => (item.kind === 'Codex'
+      ? `• Codex «${item.label}» → ${item.outcome}`
+      : `• Subagente «${item.label}» → terminado`));
+    return `${WAKE_PREFIX} Terminó trabajo de fondo que dejaste corriendo:\n${lines.join('\n')}\nRecogé el resultado (collect_codex para las delegaciones a Codex), verificalo y seguí con el próximo paso de tu plan sin esperar al usuario. Cerrá con la 🎾 Pelota que corresponda.`;
+  }
+  if (kind === 'otro-checkin') {
+    const min = Math.round(otroElapsedMs / 60000);
+    return `${WAKE_PREFIX} Pasaron ${min} min con 🎾 Pelota: OTRO. Revisá si ya llegó lo que esperabas (CI, revisión de un PR, otra sesión, una respuesta). Si llegó, seguí con el próximo paso. Si sigue pendiente, contestá en UNA línea corta qué falta y volvé a cerrar con 🎾 Pelota: OTRO: te vuelvo a despertar en 15 min, hasta 4 h desde que empezó la espera.`;
+  }
+  return '';
+}
+
 // Tope de retención del motor con trabajo de fondo vivo (PLAN-892): pasado
 // esto duerme igual, avisando en el chat qué se cortó (no runner inmortal).
 export const BG_MAX_HOLD_MS = 4 * 60 * 60 * 1000;

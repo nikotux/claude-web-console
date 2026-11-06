@@ -23,6 +23,8 @@ import {
   isShareOptedOut, isUnsharedFingerprint, shareLessonToPool,
 } from './pool.js';
 
+export { retroDataDirFor };
+
 const COLLECTION = 'mejora-continua';
 // Sol de cada lección según su categoría: los 7 buckets `MC · *` de la
 // colección `arquitectura` (ver CONVE-1257 / regla dura 11 del CLAUDE.md).
@@ -128,12 +130,12 @@ async function linkLessonToSun(ref, category, ctx) {
   }
 }
 
-// Publicación automática al pozo COMÚN (console:PLAN-2222, C3). Best-effort y
-// aislada: el pozo es accesorio y JAMÁS puede romper la destilación — mismo
-// criterio que linkLessonToSun.
-async function shareTolkienLesson(lesson, ctx, sharedCtx) {
+// Publicación automática al pozo COMÚN (console:PLAN-3595): publica cualquier
+// project, nunca lecciones descartadas. Es best-effort y queda aislada porque
+// el pozo JAMÁS puede romper la destilación — mismo criterio que linkLessonToSun.
+async function publishLessonToPool(lesson, ctx, sharedCtx) {
   try {
-    if (lesson?.project !== 'tolkien' || !sharedCtx) return;
+    if (!sharedCtx || lesson?.status === 'descartada') return;
     const dataDir = retroDataDirFor(ownerFor(ctx));
     if (isShareOptedOut(dataDir) || isUnsharedFingerprint(lesson.fingerprint, dataDir)) return;
     // El workspace Pad conserva la identidad cuando el caller no pasa owner:
@@ -156,7 +158,7 @@ async function shareTolkienLesson(lesson, ctx, sharedCtx) {
 const UPSERT_LOCK_STALE_MS = 30_000;
 const FILE_LOCK_DEADLINE_MS = 15_000;
 
-function ownerFor(ctx = null, owner = null) {
+export function ownerFor(ctx = null, owner = null) {
   if (owner) return owner;
   const tenant = String(ctx?.workspace || '').match(/^tenant-(.+)$/);
   return tenant ? tenant[1] : retroHostUser();
@@ -405,7 +407,7 @@ export async function upsertLesson(input = {}, ctx = null, sharedCtx = null) {
         fresh.ok ? fresh.data : { ...existing, fields: updatedFields },
         readVerifyState(ownerFor(ctx)),
       );
-      await shareTolkienLesson(lesson, ctx, sharedCtx);
+      await publishLessonToPool({ ...lesson, topic: input.topic }, ctx, sharedCtx);
       return { created: false, lesson };
     }
 
@@ -436,7 +438,7 @@ export async function upsertLesson(input = {}, ctx = null, sharedCtx = null) {
       },
       readVerifyState(ownerFor(ctx)),
     );
-    await shareTolkienLesson(lesson, ctx, sharedCtx);
+    await publishLessonToPool({ ...lesson, topic: input.topic }, ctx, sharedCtx);
     return { created: true, lesson };
   }, ctx);
 }

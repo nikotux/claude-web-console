@@ -1142,6 +1142,23 @@ una sesión futura; la pelota es la única válvula de escape. Cada
 continuación emite un evento efímero `{type:'autonomy', turn:N}` y un log;
 cada mensaje humano nuevo reinicia el contador, para distinguir autonomía
 de un turno pedido por el usuario.
+SUEÑO POR PELOTA (2026-10-28, `console:PLAN-3508`, C3): el reaper del
+server y la auto-siesta del runner comparten `sleepThresholdMs()` de
+`shared.js`: `nadie` => 5 min (`SLEEP_DONE_MS`); `TUYA`, `OTRO`, `MÍA` o
+desconocida => 45 min (`SLEEP_MS`) de inactividad. En `working` no aplican
+los umbrales normales de inactividad; las guardas de trabajo de fondo siguen vigentes.
+Válvula anti-colgado: un motor en `working` sin actividad por más de BG_MAX_HOLD_MS (4 h) se duerme igual.
+`parsePelota()` toma la última línea con marcador,
+tolera emoji opcional, negritas, mayúsculas/minúsculas y MÍA/MIA; devuelve
+`nadie|tuya|otro|mia|null`. El runner conserva los últimos 8000 caracteres
+del texto del asistente del turno y emite `result.pelota` al terminar.
+El server fija `lastPelota` ANTES de `_setStatus('waiting')`, con fallback
+al texto del turno para runners viejos; lo persiste junto a `lastActivity`,
+lo rehidrata (ausente => null) y lo expone en `info()` para la UI.
+GOTCHA: al iniciar un turno de usuario se limpia `lastPelota` en ambos
+lados (y `turnText` en el runner): el umbral vuelve a 45 min hasta conocer
+la pelota del resultado nuevo. Las cerradas explícitamente conservan su
+poda a los 90 min. Los chequeos de sueño siguen corriendo cada 60 s.
 TRABAJO EN SEGUNDO PLANO — no matarlo y poder verlo (2026-07-22,
 PLAN-892, reporte de Niko: «me confío que está trabajando pero no»).
 BUG RAÍZ: una sesión que lanza trabajo en BACKGROUND (tool `Workflow`
@@ -2144,6 +2161,22 @@ mostrarlo; `focus()`/`setActive()` reutilizan el hook de activación existente y
 poll existente reemplaza el contador idle de trabajos en la tarjeta de
 Sesiones, marca el punto del rail y deja un glifo mínimo en Cabina. La paleta
 semántica vive en `tokens.css` y todo el bloque compartido usa prefijo `hito-`.
+
+## Estado en vivo de Codex y CI
+
+`live-status.js` proyecta sin I/O los jobs persistidos: trabajos activos o
+terminados hace menos de 90 s, tiempos típicos sobre al menos 10 éxitos y el
+badge compacto. `ChatManager` agrupa chats por dueño y cada 2 s hace un solo
+`readdir` de `codex-jobs`; primero mira `mtime`, parsea únicamente los últimos
+10 min y recalcula el histórico completo como máximo cada 10 min. El snapshot
+viaja en `_historyPayload()` y los cambios por `codex-live`, por lo que una
+recarga se reengancha al archivo durable y no al proceso del server.
+
+El watcher existente de PR reutiliza su único GraphQL por minuto para derivar
+`summarizePrCi()` de cada PR abierto enlazado. `chat._prCi` viaja por history y
+por `pr-ci`; `info()` expone solamente `codexBadge` y `ciBadge` para Sesiones.
+No hay consulta adicional ni se despierta el motor. Contrato puro:
+`bin/cwc-test-live-status.js` y `bin/cwc-test-pr-milestones.js`.
 
 ## Sala con entorno de preview (PLAN-3236 E2/E3)
 Una sala resuelve su entorno efímero por `salaId`, porque el registro usa ese valor como `chatId`.

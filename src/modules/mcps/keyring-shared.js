@@ -84,14 +84,6 @@ function normIdentity(value) {
   return String(value || '').trim().toLowerCase() || null;
 }
 
-function codexEmail(auth) {
-  try {
-    const encoded = auth?.tokens?.id_token?.split('.')?.[1];
-    if (!encoded) return null;
-    return normIdentity(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))?.email);
-  } catch { return null; }
-}
-
 function sameNonEmptySecret(a, b) {
   return typeof a === 'string' && a.trim().length > 0
     && typeof b === 'string' && b.trim().length > 0 && a === b;
@@ -414,17 +406,12 @@ export async function probeCodexCli(scope) {
     const dependents = ['modelo Tándem (codex exec)', 'límites de Codex en el panel Uso'];
     const action = reconnectActionFor({ id: 'codex-cli' });
     if (!scope.isHost) {
-      const email = codexEmail(auth);
       const hostAuth = readJson(userCodexAuthPath(hostUser()));
-      const hostEmail = codexEmail(hostAuth);
       const sameToken = sameNonEmptySecret(auth?.tokens?.refresh_token, hostAuth?.tokens?.refresh_token)
         || sameNonEmptySecret(auth?.tokens?.access_token, hostAuth?.tokens?.access_token);
-      if (!email || !hostEmail) {
-        const detail = 'No se pudo verificar de quién es la sesión de Codex.';
-        return item({ id: 'codex-cli', family: 'engines', label: 'Codex CLI', role: 'sesión del motor Tándem', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action, error: detail });
-      }
-      if (email === hostEmail || sameToken) {
-        const detail = 'Es la cuenta de Codex del anfitrión: entrá con la tuya.';
+      // console:BUG-3500: Codex comparte cuenta; solo rechazamos un auth.json copiado.
+      if (sameToken) {
+        const detail = 'Es una copia de la sesión de Codex del anfitrión: hacé tu propio login (la misma cuenta sirve).';
         return item({ id: 'codex-cli', family: 'engines', label: 'Codex CLI', role: 'sesión del motor Tándem', light: 'danger', statusLabel: 'Sin sesión', detail, dependents, action, error: detail });
       }
     }

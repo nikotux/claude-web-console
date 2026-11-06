@@ -28,6 +28,9 @@ const SEED_MAX = 256 * 1024 * 1024;
 const META_CHUNK = 64 * 1024;
 const MAX_META_LINE = 1024 * 1024;
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
+// BUG-3510: N pestañas = 1 escaneo; el cliente pollea cada 700 ms y este TTL
+// garantiza como máximo ~1,7 escaneos/s por owner, sin importar cuántas pestañas haya.
+const FLOW_TTL_MS = 600;
 
 const OWNER_STATE_MAX = 32;
 const ownerStates = new Map();
@@ -44,7 +47,8 @@ function stateFor(owner) {
     seenClaudeIds: new Map(),
     fileCwd: new Map(),
     ledger: [],
-    inFlight: false,
+    lastSummaryAt: 0,
+    inFlightPromise: null,
     lastSummary: {
       claude: { tps: 0, tokens60: 0, lastTs: 0 },
       codex: { tps: 0, tokens60: 0, lastTs: 0 },
@@ -560,14 +564,18 @@ async function scanCodex(owner, state) {
 
 export async function computeFlow(owner = hostUser()) {
   const state = stateFor(owner);
-  if (state.inFlight) return state.lastSummary;
-  state.inFlight = true;
-  try {
-    await scanClaude(owner, state);
-    await scanCodex(owner, state);
-  } finally {
-    state.inFlight = false;
-  }
-  state.lastSummary = summarize(state);
-  return state.lastSummary;
+  if (state.lastSummary && Date.now() - state.lastSummaryAt < FLOW_TTL_MS) return state.lastSummary;
+  if (state.inFlightPromise) return state.inFlightPromise;
+  state.inFlightPromise = (async () => {
+    try {
+      await scanClaude(owner, state);
+      await scanCodex(owner, state);
+      state.lastSummary = summarize(state);
+      state.lastSummaryAt = Date.now();
+      return state.lastSummary;
+    } finally {
+      state.inFlightPromise = null;
+    }
+  })();
+  return state.inFlightPromise;
 }

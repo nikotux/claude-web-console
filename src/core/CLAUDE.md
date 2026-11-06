@@ -388,7 +388,10 @@ bus(INTERFONO entre sesiones: BUS DE ARCHIVOS determinístico, 0
 tokens, en ~/.cwc-data/session-bus/. Dos capacidades: (1)
 MENSAJERÍA — sendMessage/pendingFor/markDelivered: una sesión deja
 un mensaje para otra (o broadcast 'all'); la destinataria lo recibe
-inyectado por su hook en el próximo turno. (2) CLAIMS anti-conflicto
+inyectado por su hook en el próximo turno.
+Memo de 1 s de `messages/` (2026-10-28, console:PLAN-3508): `pendingFor`/`allMessages` leen `listMessagesCached()`; toda escritura local invalida.
+Motivo: `/api/chat/list` llamaba `pendingFor` por cada uno de ~100 chats y releía el directorio 100 veces por request (~21 ms CPU).
+(2) CLAIMS anti-conflicto
 — claimFile/getClaim/releaseFile/releaseAll + evaluateClaim (árbol
 zombi: HOT<5min→bloquea · observador ended/working · tmux has-session
 · gris<30min soft · TTL vencido→robable) + tombstone (lápida al
@@ -586,9 +589,9 @@ con escritura atómica y mode 600. El CLI de auditoría/migración vive en
 Existe un TERCER destino de Pad además de `console` y los `tenant-*`: el
 workspace **`comunidad`** (`SHARED_WORKSPACE` en **`pad-provision.js`**, override
 por `CWC_PAD_SHARED_WORKSPACE`), neutral, con una sola colección
-`mejora-continua`. Es donde las lecciones de `project: tolkien` de TODOS los
-usuarios se agregan y suman recurrencia ENTRE PERSONAS — la señal que hoy se
-cuenta por individuo. **`ensureSharedWorkspace()`** lo crea idempotente con el
+`mejora-continua`. Desde `console:PLAN-3595`, las lecciones de cualquier
+`project` de TODOS los usuarios se agregan, conservan su etiqueta real y suman
+recurrencia ENTRE PERSONAS. **`ensureSharedWorkspace()`** lo crea idempotente con el
 token admin; **`inviteUserToSharedWorkspace(userId)`** suma al usuario como
 `editor`. Los dos corren best-effort al final de
 **`provisionUserPad`**, cada uno en su try/catch: **el pozo jamás puede convertir

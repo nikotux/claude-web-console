@@ -13,12 +13,21 @@ El módulo no es admin-gated completo: las estadísticas generales son accesible
 
 | Método | Ruta | Contrato actual |
 |---|---|---|
-| GET | `/api/stats` | Devuelve `{ cpu, mem, disk, load, uptime, hostname, server: { uptime, pid } }`. |
+| GET | `/api/stats` | Devuelve `{ cpu, mem, disk, load, uptime, hostname, server: { uptime, pid, rssMb, heapUsedMb, heapTotalMb, externalMb, eventLoopLagMs: { mean, max, p99 }, handles } }`. |
 | GET | `/api/stats/users` | **Admin-only (`isAdmin`)**. Devuelve `{ users: [{ userId, liveSessions, runners, rssMB, diskBytes }] }`. |
 
 ## Archivos
 
-- `index.js`: calcula snapshots del sistema, exporta `systemSnapshot()` y `perUserSnapshot()`, atribuye chats/runners a usuarios y registra los dos endpoints.
+- `index.js`: calcula snapshots del sistema, exporta `systemSnapshot()`, `serverProcessStats()` y `perUserSnapshot()`, atribuye chats/runners a usuarios y registra los dos endpoints.
+
+Desde 2026-10-28 (`console:PLAN-3508`, T7), `serverProcessStats()` conserva `pid`
+y `uptime` (segundos) y agrega memoria del proceso en MB (base 1024, 1 decimal):
+`rssMb`, `heapUsedMb`, `heapTotalMb` y `externalMb`. `handles` cuenta los recursos
+activos de `process.getActiveResourcesInfo()`. `eventLoopLagMs` expone media,
+máximo y percentil 99 en ms con 1 decimal (0 sin muestras): un único monitor con
+resolución de 20 ms se habilita al cargar el módulo y se resetea en cada lectura.
+La ventana es **desde la última lectura**, compartida por todos los consumidores
+del helper, no acumulada desde el arranque.
 
 Consume `manager` desde `modules/chat`, helpers de espacios desde `core/user-space.js`, `config.home` y el gate `isAdmin` de `core/auth.js`.
 
