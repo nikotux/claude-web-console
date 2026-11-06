@@ -51,6 +51,20 @@ since the previous push. Newest entry first.
 
 <!-- cwc:changelog:start -->
 
+### 2026-11-06 17:46 — main
+- perf(forja): cachear el formateador de fechas y agregar benchmark
+- perf(forja): sondear merges nuevos antes de consultar por autor
+- perf(forja): aligerar el polling de la ficha
+- refactor(forja): retirar el festejo global que nunca llegaba al chat
+- feat(chat): hitos de PR por sesión (aprobado, mergeado, en producción)
+- feat(chat): aviso de 5 s y chip de hito en la lista de sesiones
+- fix(chat): hitos de PR sin carreras ni avisos perdidos en pestañas ocultas
+- fix(chat): título, router y juez con credenciales del dueño y sin tomar errores del SDK como texto
+- fix(chat): enlazar hitos de PR publicados por Codex desde sus comandos reales
+- fix(admin): los runners de admin usan la cuenta de Claude de quien los dispara
+- fix(admin): mostrar el 409 de cuenta de Claude faltante en vez de simular que arrancó
+- Dormir motores de chat según la pelota y afinar recursos del servicio
+
 ### 2026-10-28 15:33 — main
 - Endurecer runners y stores: timeouts, reanudación y aislamiento por usuario
 
@@ -349,16 +363,6 @@ since the previous push. Newest entry first.
 - Modified `src/modules/terminal/sessions.js`
 - Modified `src/modules/tmux/index.js`
 - Modified `src/modules/tolkien/index.js`
-
-### 2026-07-03 23:23 — main
-- Modified `CLAUDE.md`
-- Modified `bin/cwc-healthfix-runner.js`
-- Modified `public/css/style.css`
-- Modified `public/js/modules/system/health-review-modal.js`
-- Modified `public/js/modules/tolkien/bug-board.js`
-- Modified `src/modules/health/index.js`
-- Modified `src/modules/health/invariants.js`
-- Modified `src/modules/health/shared.js`
 
 _(older entries trimmed — see `git log` for the full history)_
 
