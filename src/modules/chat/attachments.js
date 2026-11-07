@@ -94,10 +94,16 @@ export function classifyAttachment(mime, name) {
   return 'binary';
 }
 
+// Carpeta absoluta de adjuntos del chat dentro de un data-dir conocido (o null
+// si el id es inválido).
+export function chatAttachDirIn(dataDir, chatId) {
+  if (!ID_RE.test(String(chatId || ''))) return null;
+  return path.join(dataDir, 'chat-attachments', chatId);
+}
+
 // Carpeta absoluta de adjuntos del chat (o null si el id es inválido).
 export function chatAttachDir(chatId) {
-  if (!ID_RE.test(String(chatId || ''))) return null;
-  return path.join(dataDirForChat(chatId), 'chat-attachments', chatId);
+  return chatAttachDirIn(dataDirForChat(chatId), chatId);
 }
 
 // Ruta virtual para el deep-link del Explorador (?path=…). El módulo files

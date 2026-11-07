@@ -98,7 +98,7 @@ import { spawnRunner, connectRunner, tryConnectRunner, releaseSpawnLock } from '
 import { nextPackageRef, upsertPackage, searchPackages, getPackage } from './packages.js';
 import {
   attachUpload, existingAttachments, attachPath, listChatAttachments, MAX_ATTACHMENTS,
-  attachRelForExplorer, chatAttachDir, classifyAttachment, setChatDataDirResolver,
+  attachRelForExplorer, chatAttachDir, chatAttachDirIn, classifyAttachment, setChatDataDirResolver,
 } from './attachments.js';
 import { ensureThumb } from './thumbs.js';
 import { imageFingerprint, resolveReplayFiles, toolImagePrefix } from './replay-images.js';
@@ -676,7 +676,10 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null, owner = null, chat
   }
   if (chatId && pendingReplay.length) {
     try {
-      const resolved = resolveReplayFiles(chatId, pendingReplay.map((entry) => entry.item));
+      // Rehydrate reproduce antes de this.chats.set(); resolver por manager en
+      // ese momento caería al data-dir del host en vez del dueño del chat.
+      const attachDir = chatAttachDirIn(userDataDir(owner || hostUser()), chatId);
+      const resolved = resolveReplayFiles(chatId, pendingReplay.map((entry) => entry.item), { dir: attachDir });
       for (let i = 0; i < pendingReplay.length; i += 1) {
         const match = resolved[i];
         if (!match) continue;

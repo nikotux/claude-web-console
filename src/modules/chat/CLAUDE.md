@@ -109,6 +109,8 @@ vez a `replay-images.js`. Ese helper indexa la carpeta por tamaño, compara
 3 muestras de 48 bytes sin decodificar todo el base64 y usa sha256 solo
 para desempatar; las imágenes de tool_result priorizan el prefijo
 `asst-<toolUseId>-` idéntico al runner. Un match recupera name/mime/images;
+el replay pasa el data-dir explícito del dueño porque rehydrate corre antes de
+registrar el chat en `manager.chats` y el resolver global caería al host.
 sin match queda exactamente el chip histórico `{type}`. El índice es LRU
 de 200 chats e invalida por mtime de carpeta. MENÚ ⋯ de la tarjeta de Sesiones:
 "Abrir carpeta del chat" (sessions.js) → GET /api/chat/folder?id=

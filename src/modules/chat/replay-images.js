@@ -38,17 +38,16 @@ export function toolImagePrefix(toolUseId) {
   return `asst-${String(toolUseId || 'tool').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'tool'}-`;
 }
 
-function indexFor(chatId) {
-  const dir = chatAttachDir(chatId);
+function indexFor(dir) {
   if (!dir) return null;
   let dirStat;
   try { dirStat = fs.statSync(dir); } catch { return null; }
   if (!dirStat.isDirectory()) return null;
 
-  const cached = replayCache.get(chatId);
-  if (cached && cached.dir === dir && cached.mtimeMs === dirStat.mtimeMs) {
-    replayCache.delete(chatId);
-    replayCache.set(chatId, cached);
+  const cached = replayCache.get(dir);
+  if (cached && cached.mtimeMs === dirStat.mtimeMs) {
+    replayCache.delete(dir);
+    replayCache.set(dir, cached);
     return cached.index;
   }
 
@@ -62,8 +61,8 @@ function indexFor(chatId) {
     list.push({ name: entry.name, mtimeMs: stat.mtimeMs });
     index.set(stat.size, list);
   }
-  replayCache.delete(chatId);
-  replayCache.set(chatId, { dir, mtimeMs: dirStat.mtimeMs, index });
+  replayCache.delete(dir);
+  replayCache.set(dir, { mtimeMs: dirStat.mtimeMs, index });
   while (replayCache.size > CACHE_MAX) replayCache.delete(replayCache.keys().next().value);
   return index;
 }
@@ -91,14 +90,14 @@ function mimeFor(kind, name) {
   return EXT_MIME[path.extname(name).slice(1).toLowerCase()] || 'application/octet-stream';
 }
 
-export function resolveReplayFiles(chatId, items) {
+export function resolveReplayFiles(chatId, items, { dir: explicitDir } = {}) {
   const list = Array.isArray(items) ? items : [];
   if (!chatId) return list.map(() => null);
   let index;
   let dir;
   try {
-    dir = chatAttachDir(chatId);
-    index = indexFor(chatId);
+    dir = explicitDir !== undefined ? explicitDir : chatAttachDir(chatId);
+    index = indexFor(dir);
   } catch {
     return list.map(() => null);
   }

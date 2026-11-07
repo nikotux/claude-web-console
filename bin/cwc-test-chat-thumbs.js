@@ -46,6 +46,7 @@ fs.mkdirSync(queueDir, { recursive: true });
 fs.mkdirSync(cacheDir, { recursive: true });
 
 try {
+  const attachments = await import('../src/modules/chat/attachments.js');
   const replay = await import('../src/modules/chat/replay-images.js');
   const thumbs = await import('../src/modules/chat/thumbs.js');
 
@@ -99,6 +100,18 @@ try {
   eq('T2 distingue dos archivos del mismo tamaño', resolved[0]?.name, 'mismo-b.png');
   eq('T2 chatId null devuelve null alineado', replay.resolveReplayFiles(null, [{ fp: userFp, kind: 'image' }]), [null]);
   eq('T2 chatId inválido devuelve null alineado', replay.resolveReplayFiles('../mal', [{ fp: userFp, kind: 'image' }]), [null]);
+
+  const tenantDataDir = path.join(testRoot, 'tenant-data');
+  const tenantChatDir = attachments.chatAttachDirIn(tenantDataDir, 'ctest-tenant');
+  const tenantImage = Buffer.alloc(377, 55);
+  fs.mkdirSync(tenantChatDir, { recursive: true });
+  fs.writeFileSync(path.join(tenantChatDir, 'inquilino.png'), tenantImage);
+  const tenantItem = { fp: replay.imageFingerprint(tenantImage.toString('base64')), kind: 'image' };
+  replay._clearReplayCache();
+  eq('T2 data-dir por defecto no encuentra archivo de inquilino', replay.resolveReplayFiles('ctest-tenant', [tenantItem]), [null]);
+  eq('T2 directorio explícito encuentra archivo de inquilino', replay.resolveReplayFiles('ctest-tenant', [tenantItem], { dir: tenantChatDir })[0],
+    { name: 'inquilino.png', mime: 'image/png' });
+  eq('T2 chatAttachDirIn rechaza id inválido', attachments.chatAttachDirIn(tenantDataDir, '../mal'), null);
 
   const late = Buffer.alloc(333, 44);
   const lateItem = { fp: replay.imageFingerprint(late.toString('base64')), kind: 'image' };
