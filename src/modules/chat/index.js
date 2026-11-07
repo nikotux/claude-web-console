@@ -3513,7 +3513,15 @@ class ChatManager {
       // Un ACK o un prepend ocurrido durante la red queda así incorporado.
       const changedChats = new Set();
       const ciChangedChats = new Set();
-      const ciDoneByChat = new Map();
+      // Despertador de PR (CI terminado, mergeado, en producción): solo si el
+      // chat esperaba con pelota OTRO. Nunca en la primera observación tras un
+      // reinicio: el CI exige transición observada y los hitos ya la excluyen.
+      const prEventsByChat = new Map();
+      const wakeFor = (chat, item) => {
+        if (chat.lastPelota !== 'otro') return;
+        if (!prEventsByChat.has(chat)) prEventsByChat.set(chat, []);
+        prEventsByChat.get(chat).push(item);
+      };
       for (const row of tracked) {
         const number = row.link.number;
         if (!selected.has(number)) continue;
@@ -3525,12 +3533,9 @@ class ChatManager {
         const ci = summarizePrCi(observed);
         const previousCi = (row.chat._prCi || []).find((item) => item.number === number) || null;
         if (!sameCi(previousCi, ci)) ciChangedChats.add(row.chat);
-        // Despertador: solo la transición corriendo → terminado (nunca la primera
-        // observación tras un reinicio) y solo si el chat esperaba con pelota OTRO.
-        if (previousCi?.state === 'running' && ci && ci.state !== 'running' && row.chat.lastPelota === 'otro') {
+        if (previousCi?.state === 'running' && ci && ci.state !== 'running') {
           const outcome = ci.state === 'passed' ? 'pasó' : `falló: ${ci.failedNames.join(', ') || 'sin detalle'}`;
-          if (!ciDoneByChat.has(row.chat)) ciDoneByChat.set(row.chat, []);
-          ciDoneByChat.get(row.chat).push({ number, sha: ci.sha, outcome });
+          wakeFor(row.chat, { kind: 'CI', number, sha: ci.sha, outcome });
         }
         const keptCi = (row.chat._prCi || []).filter((item) => item.number !== number);
         row.chat._prCi = ci ? [...keptCi, ci] : keptCi;
@@ -3543,6 +3548,10 @@ class ChatManager {
           const milestone = milestones.find((entry) => entry.kind === kind);
           if (milestone) row.chat._broadcast({ type: 'pr-milestone', milestone });
         }
+        // Si mergeó y llegó a producción en el mismo ciclo, alcanza con producción.
+        const prOutcome = transition.milestones.includes('deployed') ? 'en producción'
+          : transition.milestones.includes('merged') ? 'mergeado' : null;
+        if (prOutcome) wakeFor(row.chat, { kind: 'PR', number, sha: transition.link.mergeSha || '', outcome: prOutcome });
       }
       for (const chat of ciChangedChats) {
         const linked = new Set(chat.prLinks.map((link) => link.number));
@@ -3550,7 +3559,7 @@ class ChatManager {
         chat._broadcast({ type: 'pr-ci', ci: chat._prCi });
         chat.onUpdate?.();
       }
-      for (const [chat, items] of ciDoneByChat) chat.link?.send({ t: 'ci-done', items });
+      for (const [chat, items] of prEventsByChat) chat.link?.send({ t: 'pr-event', items });
       for (const chat of changedChats) chat.onUpdate?.();
     } catch (error) {
       // Una sola línea por ciclo y sin stdout/stderr/comandos, que podrían traer secretos.

@@ -594,9 +594,10 @@ campo `lastPelota` en la persistencia del chat, lo rehidrata y lo expone en
 Auto-siesta y reaper del server comprueban cada 60 s; en `working` no aplican
 los umbrales normales de inactividad.
 Válvula anti-colgado: un motor en `working` sin actividad por más de BG_MAX_HOLD_MS (4 h) se duerme igual.
-DESPERTADOR DEL CI (2026-11-06): comando del server `{ t: 'ci-done', items: [{number, sha, outcome}] }`
-(solo con pelota OTRO, ver chat/CLAUDE.md «Estado en vivo de Codex y CI»); cada ítem entra a
-`pendingWake` como `kind: 'CI'` y `maybeWake()` lo entrega en el mismo aviso `bg-done`.
+DESPERTADOR DE PR (2026-11-06): comando del server `{ t: 'pr-event', items: [{kind, number, sha, outcome}] }`
+(`kind` CI = checks terminados, PR = mergeado / en producción; solo con pelota OTRO, ver
+chat/CLAUDE.md «Estado en vivo de Codex y CI»). `ci-done` es el alias previo, solo CI. Cada ítem
+entra a `pendingWake` y `maybeWake()` lo entrega en el mismo aviso `bg-done`.
 GOTCHA: al iniciar un turno se limpian `turnText`
 y `lastPelota`; el umbral vuelve a 45 min hasta el resultado nuevo.
 Las guardas `bgHolds()` y los sweeps de fondo siguen vigentes; el log de

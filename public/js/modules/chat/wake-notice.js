@@ -21,14 +21,18 @@ export function wakeSummary(text) {
     const lines = value.split(/\r?\n/);
     const codexOutcomes = [];
     const ciOutcomes = [];
+    const prEvents = [];
     let subagents = 0;
     for (const line of lines) {
       const codex = line.match(/^• Codex .* → (.+)$/u);
       if (codex) codexOutcomes.push(codex[1].trim());
       const ci = line.match(/^• CI del PR #\d+ → (.+)$/u);
       if (ci) ciOutcomes.push(ci[1].trim());
+      const pr = line.match(/^• PR #(\d+) → (.+)$/u);
+      if (pr) prEvents.push({ number: Number(pr[1]), outcome: pr[2].trim() });
       if (/^• Subagente .* → terminado\s*$/u.test(line)) subagents += 1;
     }
+    const kinds = [codexOutcomes.length, ciOutcomes.length, prEvents.length, subagents].filter(Boolean).length;
 
     if (codexOutcomes.some((outcome) => outcome !== 'done')) {
       return {
@@ -42,11 +46,23 @@ export function wakeSummary(text) {
         text: t('chat.wake.ciFailed', 'El CI falló, hay que revisarlo'),
       };
     }
-    if (ciOutcomes.length && (codexOutcomes.length || subagents)) {
+    if (kinds > 1 && (ciOutcomes.length || prEvents.length)) {
       return {
         kind: 'mixed',
         text: t('chat.wake.several', 'Terminaron varios trabajos, puedes continuar'),
       };
+    }
+    if (prEvents.length > 1) {
+      return {
+        kind: 'pr',
+        text: t('chat.wake.prMany', 'Hay novedades en {n} PR, mira qué sigue', { n: prEvents.length }),
+      };
+    }
+    if (prEvents.length === 1) {
+      const { number, outcome } = prEvents[0];
+      return outcome === 'en producción'
+        ? { kind: 'deployed', text: t('chat.wake.prDeployed', 'Los cambios del PR #{number} ya están en producción', { number }) }
+        : { kind: 'merged', text: t('chat.wake.prMerged', 'El PR #{number} se mergeó, mira qué sigue', { number }) };
     }
     if (ciOutcomes.length) {
       return {

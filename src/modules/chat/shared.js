@@ -59,6 +59,7 @@ export function buildWakeText(kind, { items = [], otroElapsedMs = 0 } = {}) {
     const lines = items.map((item) => {
       if (item.kind === 'Codex') return `• Codex «${item.label}» → ${item.outcome}`;
       if (item.kind === 'CI') return `• CI del PR #${item.number} → ${item.outcome}`;
+      if (item.kind === 'PR') return `• PR #${item.number} → ${item.outcome}`;
       return `• Subagente «${item.label}» → terminado`;
     });
     return `${WAKE_PREFIX} Terminó trabajo de fondo que dejaste corriendo:\n${lines.join('\n')}\nRecogé el resultado (collect_codex para las delegaciones a Codex), verificalo y seguí con el próximo paso de tu plan sin esperar al usuario. Cerrá con la 🎾 Pelota que corresponda.`;

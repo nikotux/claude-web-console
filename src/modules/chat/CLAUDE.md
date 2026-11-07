@@ -2175,11 +2175,14 @@ recarga se reengancha al archivo durable y no al proceso del server.
 El watcher existente de PR reutiliza su único GraphQL por minuto para derivar
 `summarizePrCi()` de cada PR abierto enlazado. `chat._prCi` viaja por history y
 por `pr-ci`; `info()` expone solamente `codexBadge` y `ciBadge` para Sesiones.
-No hay consulta adicional. Despertador del CI: si un PR pasa de `running` a
-`passed`/`failed` entre dos observaciones (nunca en la primera tras un reinicio)
-y el chat tiene `lastPelota === 'otro'`, el server manda `{ t: 'ci-done', items }`
-al runner, que lo suma a `pendingWake` como `kind: 'CI'` y despierta con el mismo
-`bg-done` («• CI del PR #N → pasó | falló: …»). Contrato puro:
+No hay consulta adicional. Despertador de PR: solo si el chat tiene
+`lastPelota === 'otro'`, el server junta por chat (a) el CI que pasó de `running`
+a `passed`/`failed` entre dos observaciones y (b) los hitos `merged`/`deployed`
+recién emitidos (si llegan juntos, solo `deployed`); ninguno nace en la primera
+observación tras un reinicio. Manda `{ t: 'pr-event', items: [{kind:'CI'|'PR',
+number, sha, outcome}] }` al runner, que los suma a `pendingWake` y despierta con
+el mismo `bg-done` («• CI del PR #N → pasó | falló: …», «• PR #N → mergeado |
+en producción»). `aprobado` NO despierta: es señal para el usuario. Contrato puro:
 `bin/cwc-test-live-status.js` y `bin/cwc-test-pr-milestones.js`.
 
 ## Sala con entorno de preview (PLAN-3236 E2/E3)

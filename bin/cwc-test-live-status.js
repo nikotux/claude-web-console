@@ -151,6 +151,25 @@ test('resume el CI terminado o fallado', () => {
     { kind: 'CI', number: 2067, outcome: 'falló: e2e' }, { kind: 'Codex', label: 'uno', outcome: 'error' },
   ])).kind, 'codex-problem');
 });
+test('resume mergeado y en producción de un PR', () => {
+  const deployed = wake([{ kind: 'PR', number: 2067, outcome: 'en producción' }]);
+  assert.match(deployed, /• PR #2067 → en producción/);
+  assert.deepEqual(wakeSummary(deployed), {
+    kind: 'deployed', text: 'Los cambios del PR #2067 ya están en producción',
+  });
+  assert.deepEqual(wakeSummary(wake([{ kind: 'PR', number: 2067, outcome: 'mergeado' }])), {
+    kind: 'merged', text: 'El PR #2067 se mergeó, mira qué sigue',
+  });
+  assert.deepEqual(wakeSummary(wake([
+    { kind: 'PR', number: 1, outcome: 'mergeado' }, { kind: 'PR', number: 2, outcome: 'en producción' },
+  ])), { kind: 'pr', text: 'Hay novedades en 2 PR, mira qué sigue' });
+  assert.deepEqual(wakeSummary(wake([
+    { kind: 'PR', number: 1, outcome: 'en producción' }, { kind: 'CI', number: 2, outcome: 'pasó' },
+  ])).kind, 'mixed');
+  assert.deepEqual(wakeSummary(wake([
+    { kind: 'PR', number: 1, outcome: 'en producción' }, { kind: 'CI', number: 2, outcome: 'falló: e2e' },
+  ])).kind, 'ci-failed');
+});
 test('resume el check-in de pelota otro', () => {
   const text = buildWakeText('otro-checkin', { otroElapsedMs: 27 * 60_000 });
   assert.deepEqual(wakeSummary(text), {

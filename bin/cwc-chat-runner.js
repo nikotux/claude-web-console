@@ -862,13 +862,15 @@ function handleCommand(c, msg) {
     });
     return;
   }
-  // CI de un PR que pasó de corriendo a terminado mientras la pelota era OTRO:
-  // el server lo detecta (watcher de PR) y acá entra como un trabajo más del despertador.
-  if (msg.t === 'ci-done' && Array.isArray(msg.items)) {
+  // Eventos de PR mientras la pelota era OTRO (CI terminado, mergeado, en
+  // producción): el server los detecta en el watcher de PR y acá entran como
+  // un trabajo más del despertador. `ci-done` es el nombre previo (solo CI).
+  if ((msg.t === 'pr-event' || msg.t === 'ci-done') && Array.isArray(msg.items)) {
     for (const item of msg.items.slice(0, 10)) {
       const number = Number(item?.number);
+      const kind = item?.kind === 'PR' ? 'PR' : 'CI';
       if (!Number.isSafeInteger(number) || number <= 0 || typeof item.outcome !== 'string') continue;
-      pendingWake.set(`ci:${number}:${item.sha || ''}`, { kind: 'CI', number, outcome: item.outcome.slice(0, 300) });
+      pendingWake.set(`${kind.toLowerCase()}:${number}:${item.outcome}:${item.sha || ''}`, { kind, number, outcome: item.outcome.slice(0, 300) });
     }
     maybeWake();
     return;
