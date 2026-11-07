@@ -608,6 +608,13 @@ Pad; `ui/help-index.js` lo carga de forma lazy bajo el id `cerebro`, igual que
 ### public/js/modules/chat/chat-tab.js  vista chat · public/js/modules/terminal/terminal.js  vista terminal
 `chat/help.js` documenta en “Gráficos y diagramas” los gráficos inline,
 micro-barras y diagramas Mermaid disponibles dentro de los mensajes.
+`chat-tab.js::_attsEl` carga cada imagen con `loading=lazy` y `decoding=async`
+desde el endpoint `?thumb=1`; solo los originales PNG/JPG/JPEG obtienen
+miniatura. GIF, WEBP y cualquier imagen <60 KB se sirven desde el original.
+El click conserva la URL original para el
+lightbox. Al terminar la carga re-ancla el hilo solo si estaba cerca del final,
+igual que el crecimiento asíncrono de Mermaid. El preview pendiente del
+composer sigue usando su `localUrl` y no pasa por miniaturas server-side.
 Las salas aceptan además los eventos persistidos/vivos `subsala` y `eco` por el
 mismo `_onEvent` que reproduce `history`: `_subsala` deduplica por `chatId` y
 pinta una línea navegable; `_eco` pinta el aviso madre↔hija, markdown seguro,

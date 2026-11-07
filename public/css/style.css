@@ -3797,7 +3797,8 @@ body.doc-mode .chat-assistant .chat-md .md-bar-num {
 /* Previews DENTRO de la burbuja del usuario (vivo + replay). */
 .chat-atts { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; }
 .chat-att-img {
-  max-width: 180px; max-height: 180px; object-fit: cover; cursor: pointer;
+  height: 180px; width: auto; max-width: 320px; min-width: 48px;
+  object-fit: contain; cursor: pointer;
   border-radius: var(--cwc-radius-sm); border: 1px solid var(--cwc-border);
 }
 .chat-att-img:hover { border-color: var(--cwc-accent); }

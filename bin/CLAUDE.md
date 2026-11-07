@@ -654,6 +654,19 @@ que no toca la papelera real. Imprime 35 aserciones agrupadas T1..T6: copia del
 transcript · reparación perezosa · idempotencia · purga a los 30 días ·
 restaurar · purga manual y multiusuario. Uso:
 `node bin/cwc-test-chat-trash.js`; termina con `N pass / M fail` + exit code.
+### bin/cwc-chat-thumbs-backfill.js  backfill idempotente de miniaturas WebP
+solo para originales PNG/JPG/JPEG de los adjuntos del host y todos los
+inquilinos; GIF, WEBP y archivos <60 KB se sirven originales. Es DRY RUN por defecto;
+`--apply` genera secuencialmente (sin usar la cola HTTP) y poda huérfanos
+`_thumbs/<sha1-20>.webp`; `--user <nombre>` filtra y `--json` da resumen
+estructurado. Honra `CWC_HOME` y `CWC_CHAT_THUMBS=0`. Ejecución recomendada:
+`nice -n 19 node bin/cwc-chat-thumbs-backfill.js --apply`; se puede reanudar
+sin estado adicional porque nombre+tamaño+mtime hacen cada salida idempotente.
+### bin/cwc-test-chat-thumbs.js  harness aislado de `thumbs.js`,
+`replay-images.js` y el CLI de backfill. Fija `CWC_DATA_DIR` antes del import,
+genera PNG grande/pequeño, JPG, GIF y WEBP con sharp dentro de un `mkdtemp`, prueba
+huellas, matching, invalidación LRU, dedupe, límite global 2, abort, switch y
+dos pasadas del backfill; borra todo al final y sale 1 ante cualquier fallo.
 ### bin/cwc-codex-runner.js     ejecutor DESACOPLADO de UNA delegación Tándem a Codex
 (`--job <id>`). Es config-free: no importa `core/config.js` y resuelve el
 directorio multi-tenant desde `CWC_DATA_DIR`/HOME. Al pasar a `running`

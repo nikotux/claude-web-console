@@ -1139,9 +1139,14 @@ export class ChatTab {
         const img = document.createElement('img');
         img.className = 'chat-att-img';
         const src = `/api/chat/attachment?id=${encodeURIComponent(this.id)}&name=${encodeURIComponent(a.name)}`;
-        img.src = src;
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.src = `${src}&thumb=1`;
         img.alt = a.name;
         img.title = a.name;
+        img.addEventListener('load', () => {
+          if (this.msgsEl.scrollHeight - this.msgsEl.scrollTop - this.msgsEl.clientHeight < 80 + img.clientHeight) this._scroll();
+        });
         img.addEventListener('click', () => this._lightbox(src, a.name));
         box.appendChild(img);
       } else {

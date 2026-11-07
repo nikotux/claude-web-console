@@ -100,6 +100,8 @@ import {
   attachUpload, existingAttachments, attachPath, listChatAttachments, MAX_ATTACHMENTS,
   attachRelForExplorer, chatAttachDir, classifyAttachment, setChatDataDirResolver,
 } from './attachments.js';
+import { ensureThumb } from './thumbs.js';
+import { imageFingerprint, resolveReplayFiles, toolImagePrefix } from './replay-images.js';
 import {
   queueIndiceDistill, readIndiceState, reconcileIndiceState, setIndiceDataDirResolver,
 } from './indice-shared.js';
@@ -577,7 +579,7 @@ function transcriptExists(cwd, sessionId, owner = null) {
   try { return fss.existsSync(path.join(chatProjectDir(cwd, owner), `${sessionId}.jsonl`)); }
   catch { return false; }
 }
-function loadTranscriptEvents(cwd, sessionId, untilMs = null, owner = null) {
+function loadTranscriptEvents(cwd, sessionId, untilMs = null, owner = null, chatId = null) {
   const file = path.join(chatProjectDir(cwd, owner), `${sessionId}.jsonl`);
   let txt;
   try { txt = fss.readFileSync(file, 'utf8'); } catch { return []; }
@@ -608,14 +610,21 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null, owner = null) {
       if (typeof c === 'string') {
         if (c.trim()) events.push({ type: 'user', text: c, ...(evTs != null ? { ts: evTs } : {}) });
       } else if (Array.isArray(c)) {
-        // Adjuntos del turno (bloques image/document del SDK): en el replay
-        // desde el transcript NO tenemos el nombre en disco, así que se pintan
-        // como CHIPS de tipo (sin miniatura) — la imagen real sigue accesible
-        // por "Abrir carpeta del chat". Se adosan a la 1ª burbuja de texto (o a
-        // una burbuja vacía si el turno fue solo-adjunto).
+        // Adjuntos del turno (bloques image/document del SDK): el transcript no
+        // conserva su nombre, pero guardamos una huella liviana para asociarlos
+        // después con el archivo persistido del chat. Si no hay match conservan
+        // exactamente el chip de tipo histórico, sin nombre ni miniatura.
         const atts = c
           .filter((b) => b.type === 'image' || b.type === 'document')
-          .map((b) => ({ type: b.type === 'image' ? 'image' : 'pdf' }));
+          .map((b) => {
+            const type = b.type === 'image' ? 'image' : 'pdf';
+            const att = { type };
+            if (b.source?.type === 'base64') {
+              const fp = imageFingerprint(b.source.data);
+              if (fp) att._replayFile = { fp, kind: type, base64Getter: () => b.source.data };
+            }
+            return att;
+          });
         let attsAttached = false;
         let emittedText = false;
         for (const b of c) {
@@ -627,7 +636,23 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null, owner = null) {
             emittedText = true;
           }
           if (b.type === 'tool_result') {
-            events.push({ type: 'tool_result', id: b.tool_use_id, ok: !b.is_error, output: trim(resultText(b.content), 2000), ...(evTs != null ? { ts: evTs } : {}) });
+            const ev = { type: 'tool_result', id: b.tool_use_id, ok: !b.is_error, output: trim(resultText(b.content), 2000), ...(evTs != null ? { ts: evTs } : {}) };
+            if (Array.isArray(b.content)) {
+              ev._replayImages = b.content
+                .filter((block) => block?.type === 'image' && block?.source?.type === 'base64')
+                .slice(0, 4)
+                .map((block) => {
+                  const fp = imageFingerprint(block.source.data);
+                  return fp ? {
+                    fp,
+                    kind: 'image',
+                    prefix: toolImagePrefix(b.tool_use_id),
+                    base64Getter: () => block.source.data,
+                  } : null;
+                })
+                .filter(Boolean);
+            }
+            events.push(ev);
           }
         }
         if (atts.length && !emittedText) events.push({ type: 'user', text: '', attachments: atts, ...(evTs != null ? { ts: evTs } : {}) });
@@ -641,7 +666,36 @@ function loadTranscriptEvents(cwd, sessionId, untilMs = null, owner = null) {
       }
     }
   }
-  return events.slice(-400);
+  const kept = events.slice(-400);
+  const pendingReplay = [];
+  for (const ev of kept) {
+    for (const att of ev.attachments || []) {
+      if (att._replayFile) pendingReplay.push({ item: att._replayFile, att, ev: null });
+    }
+    for (const item of ev._replayImages || []) pendingReplay.push({ item, att: null, ev });
+  }
+  if (chatId && pendingReplay.length) {
+    try {
+      const resolved = resolveReplayFiles(chatId, pendingReplay.map((entry) => entry.item));
+      for (let i = 0; i < pendingReplay.length; i += 1) {
+        const match = resolved[i];
+        if (!match) continue;
+        const entry = pendingReplay[i];
+        if (entry.att) {
+          entry.att.name = match.name;
+          entry.att.mime = match.mime;
+        } else {
+          entry.ev.images ||= [];
+          entry.ev.images.push({ name: match.name, type: 'image', mime: match.mime });
+        }
+      }
+    } catch { /* el replay histórico sin nombres sigue siendo un fallback válido */ }
+  }
+  for (const ev of kept) {
+    for (const att of ev.attachments || []) delete att._replayFile;
+    delete ev._replayImages;
+  }
+  return kept;
 }
 
 // ===== Handoff de sesión entre mundos (F1 de PLAN-373 / PEND-386) =====
@@ -1430,7 +1484,7 @@ class Chat {
     // Al retomar: el SDK restaura el contexto; la UI muestra lo anterior
     // reconstruyéndolo desde el transcript.
     if (this.resume) {
-      const events = loadTranscriptEvents(this.cwd, this.resume, null, this.owner);
+      const events = loadTranscriptEvents(this.cwd, this.resume, null, this.owner, this.id);
       this.history = this._salaLogSource() ? this._rebuildSalaHistory(events) : events;
     }
     this._ensureEngine();
@@ -1954,7 +2008,7 @@ class Chat {
     // Recargar la conversación desde el transcript (la TUI pudo agregar turnos)
     // y reabrir el motor sobre la misma sesión.
     if (this.sessionId) {
-      const events = loadTranscriptEvents(this.cwd, this.sessionId, null, this.owner);
+      const events = loadTranscriptEvents(this.cwd, this.sessionId, null, this.owner, this.id);
       this.history = this._salaLogSource() ? this._rebuildSalaHistory(events) : events;
     }
     this.viewMode = 'chat';
@@ -2020,7 +2074,7 @@ class Chat {
     // Recargar el history desde el transcript (por si el turno cortado dejó
     // algo) y levantar un runner FRESCO sobre la misma sesión.
     if (this.sessionId) {
-      const events = loadTranscriptEvents(this.cwd, this.sessionId, null, this.owner);
+      const events = loadTranscriptEvents(this.cwd, this.sessionId, null, this.owner, this.id);
       this.history = this._salaLogSource() ? this._rebuildSalaHistory(events) : events;
     }
     // BUG-504: el lock del spawn anterior es basura verificada; el socket ya cerró.
@@ -3688,7 +3742,7 @@ class ChatManager {
     // los eventos que la conversación ya tiene en memoria. Solo recargamos cuando
     // el transcript existe de verdad en el destino.
     if (transcriptExists(dest, chat.sessionId, chat.owner)) {
-      const events = loadTranscriptEvents(dest, chat.sessionId, null, chat.owner);
+      const events = loadTranscriptEvents(dest, chat.sessionId, null, chat.owner, chat.id);
       chat.history = chat._salaLogSource() ? chat._rebuildSalaHistory(events) : events;
     }
     // Al salir del suelo neutral, los pasaportes de invitados dejan de valer:
@@ -3881,7 +3935,7 @@ class ChatManager {
       // console:BUG-2153: sin transcript de origen, el destino queda sin .jsonl
       // y recargarlo blanquearía los eventos que todavía viven en memoria.
       if (transcriptExists(toCwd, chat.sessionId, chat.owner)) {
-        const events = loadTranscriptEvents(toCwd, chat.sessionId, null, chat.owner);
+        const events = loadTranscriptEvents(toCwd, chat.sessionId, null, chat.owner, chat.id);
         chat.history = chat._salaLogSource() ? chat._rebuildSalaHistory(events) : events;
       }
     }
@@ -4037,7 +4091,7 @@ class ChatManager {
         });
         chat.terminalId = term.id;
         chat.viewMode = 'tui';
-        const events = loadTranscriptEvents(chat.cwd, s.sessionId, null, chat.owner);
+        const events = loadTranscriptEvents(chat.cwd, s.sessionId, null, chat.owner, chat.id);
         chat.history = (chat._salaLogSource() ? chat._rebuildSalaHistory(events) : events).slice(-HISTORY_MAX);
       } else {
         // ¿El runner sobrevivió? (crash del server con turno en curso)
@@ -4052,7 +4106,7 @@ class ChatManager {
           }
           chat._bgTasks = Array.isArray(hello.bgTasks) ? hello.bgTasks : [];
           chat.otroSince = hello.otroSince || 0;
-          const base = loadTranscriptEvents(chat.cwd, chat.sessionId, hello.startedAt || null, chat.owner);
+          const base = loadTranscriptEvents(chat.cwd, chat.sessionId, hello.startedAt || null, chat.owner, chat.id);
           const events = [...base, ...(hello.events || [])];
           chat.history = (chat._salaLogSource() ? chat._rebuildSalaHistory(events) : events).slice(-HISTORY_MAX);
           chat.status = hello.status === 'working' ? 'working' : 'waiting';
@@ -4064,7 +4118,7 @@ class ChatManager {
           console.log(`[chat] runner de ${chat.id} seguía vivo: reconectado (${hello.status})`);
         } else {
           link?.close();
-          const events = loadTranscriptEvents(chat.cwd, s.sessionId, null, chat.owner);
+          const events = loadTranscriptEvents(chat.cwd, s.sessionId, null, chat.owner, chat.id);
           chat.history = (chat._salaLogSource() ? chat._rebuildSalaHistory(events) : events).slice(-HISTORY_MAX); // dormida
         }
       }
@@ -5244,35 +5298,59 @@ El archivo donde se guardan mis preferencias está en ${preferencesPath}. Cuando
         if (!req.file) return res.status(400).json({ error: 'Falta el archivo.' });
         const name = req.file.filename;
         const mime = req.file.mimetype || '';
-        res.json({ attachment: { name, type: classifyAttachment(mime, name), mime, size: req.file.size } });
+        const type = classifyAttachment(mime, name);
+        // Calentamiento best-effort, acotado por la misma cola global 2/200.
+        if (type === 'image') ensureThumb(chat.id, name).catch(() => {});
+        res.json({ attachment: { name, type, mime, size: req.file.size } });
       });
     });
 
     // Sirve un adjunto por nombre (miniaturas de la burbuja + "abrir en pestaña").
     // attachPath confina el nombre a la carpeta del chat (basename saneado +
     // padre exacto). Imágenes/PDF inline; el resto forzado a descarga; nosniff.
-    r.get('/attachment', (req, res) => {
+    r.get('/attachment', async (req, res) => {
       const chat = participantChat(req, req.query?.id);
       if (!chat) return res.status(404).end();
       const name = String(req.query?.name || '');
       const abs = attachPath(req.query?.id, name);
       if (!abs) return res.status(404).end();
       const type = classifyAttachment('', name);
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      if (type === 'image' || type === 'pdf') {
-        res.type(path.extname(abs));
-        res.setHeader('Content-Disposition', 'inline');
-      } else {
-        // Texto/binario: descarga forzada (nunca inline — evita servir HTML/SVG
-        // activo con su tipo real, mismo criterio que el gestor de archivos).
-        res.setHeader('Content-Disposition', `attachment; filename="${name.replace(/["\r\n]/g, '_')}"`);
-        res.type('application/octet-stream');
+      const sendOriginal = () => {
+        if (res.writableEnded || res.destroyed) return undefined;
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        if (type === 'image' || type === 'pdf') {
+          res.type(path.extname(abs));
+          res.setHeader('Content-Disposition', 'inline');
+          res.setHeader('Cache-Control', 'private, max-age=86400');
+        } else {
+          // Texto/binario: descarga forzada (nunca inline — evita servir HTML/SVG
+          // activo con su tipo real, mismo criterio que el gestor de archivos).
+          res.setHeader('Content-Disposition', `attachment; filename="${name.replace(/["\r\n]/g, '_')}"`);
+          res.type('application/octet-stream');
+        }
+        // Express 5 (send v1) aplica dotfiles:'ignore' por defecto y ~/.cwc-data
+        // es una carpeta oculta → 404 en TODO adjunto. La ruta ya viene validada
+        // y confinada por attachPath (basename saneado + padre exacto + statSync),
+        // así que 'allow' no relaja ninguna validación propia.
+        return res.sendFile(abs, { dotfiles: 'allow', cacheControl: false });
+      };
+      if (req.query?.thumb === '1' && type === 'image') {
+        const ac = new AbortController();
+        req.on('close', () => { if (!res.writableEnded) ac.abort(); });
+        try {
+          const thumb = await ensureThumb(chat.id, name, { signal: ac.signal });
+          if (thumb) {
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            res.setHeader('Content-Type', 'image/webp');
+            res.setHeader('Cache-Control', 'private, max-age=86400');
+            return res.sendFile(thumb, { dotfiles: 'allow', cacheControl: false }, (err) => {
+              if (!err || res.headersSent) return;
+              sendOriginal();
+            });
+          }
+        } catch { /* una miniatura nunca impide servir el original */ }
       }
-      // Express 5 (send v1) aplica dotfiles:'ignore' por defecto y ~/.cwc-data
-      // es una carpeta oculta → 404 en TODO adjunto. La ruta ya viene validada
-      // y confinada por attachPath (basename saneado + padre exacto + statSync),
-      // así que 'allow' no relaja ninguna validación propia.
-      res.sendFile(abs, { dotfiles: 'allow' });
+      return sendOriginal();
     });
 
     // Asegura la carpeta de adjuntos del chat y devuelve su ruta RELATIVA al

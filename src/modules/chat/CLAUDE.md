@@ -3,7 +3,8 @@
 
 > Ficha de contexto de esta carpeta. Claude Code la carga automáticamente cuando lee un archivo de acá (NO se carga al arrancar la sesión). Las reglas duras y convenciones globales viven en el `CLAUDE.md` de la raíz del repo.
 ### chat/                     conversaciones SDK: index.js (server) · shared.js (común) ·
-pr-milestones.js (hitos puros de PR) · runner-link.js (spawn/connect) · attachments.js (adjuntos) —
+pr-milestones.js (hitos puros de PR) · runner-link.js (spawn/connect) · attachments.js (adjuntos) ·
+thumbs.js (miniaturas) · replay-images.js (match de transcript) —
 el motor real es bin/cwc-chat-runner.js.
 ROBUSTEZ DE SESIÓN NUEVA Y PRIMER TURNO (2026-07-15, PLAN-494 del Pad
 `console`, 4 bugs — ideas de Niko): (BUG-496) un chat NACE con un
@@ -86,12 +87,30 @@ carpeta del chat (attachPath exige que path.dirname sea EXACTO) — el
 traversal ../../.env da 404; el límite de tamaño se aplica ANTES de
 leer a memoria. GET /api/chat/attachment?id=&name= sirve el archivo
 (imágenes/PDF inline, resto descarga forzada, nosniff) para las
-miniaturas de la burbuja. VISTA: la burbuja del usuario muestra
-miniatura (imagen, click → lightbox) o chip (PDF/archivo). El
-transcript del SDK persiste imágenes/PDF solo, así que al reabrir el
-chat loadTranscriptEvents deriva CHIPS de tipo de los bloques image/
-document (sin miniatura — no hay nombre en disco en el replay; la
-imagen real sigue en la carpeta). MENÚ ⋯ de la tarjeta de Sesiones:
+miniaturas de la burbuja. `thumbs.js` atiende `?thumb=1` solo para originales
+PNG/JPG/JPEG, con WebP de 360 px/quality 70 en `<chat>/_thumbs/`: `sharp` se importa lazy (un
+binario nativo roto no tumba el server), cachea por nombre+tamaño+mtime
+y limita TODAS las requests del proceso con una sola FIFO global de 2
+trabajos/200 pendientes. La request abortada no arranca al llegar su
+turno; cola llena, imagen <60 KB, GIF, WEBP, sharp ausente o
+`CWC_CHAT_THUMBS=0` degradan al original. Es trabajo request-scoped:
+reiniciar mata las requests y el browser reintenta, no deja una promesa
+operativa persistente contra la Regla 2. Original y miniatura llevan
+`Cache-Control: private, max-age=86400` sin `immutable`; el POST calienta
+best-effort la misma cola. Backfill idempotente y secuencial:
+`nice -n 19 node bin/cwc-chat-thumbs-backfill.js --apply` (dry-run sin
+`--apply`), también poda WebP huérfanos. VISTA: `_attsEl` pide la miniatura
+lazy con `decoding=async`, conserva la URL original para el lightbox y
+re-ancla el scroll si la carga crece cerca del final; la burbuja muestra
+miniatura (imagen) o chip (PDF/archivo). El transcript del SDK persiste
+imágenes/PDF sin nombre: `loadTranscriptEvents` conserva una huella
+temporal y, SOLO después de recortar a los últimos 400 eventos, llama una
+vez a `replay-images.js`. Ese helper indexa la carpeta por tamaño, compara
+3 muestras de 48 bytes sin decodificar todo el base64 y usa sha256 solo
+para desempatar; las imágenes de tool_result priorizan el prefijo
+`asst-<toolUseId>-` idéntico al runner. Un match recupera name/mime/images;
+sin match queda exactamente el chip histórico `{type}`. El índice es LRU
+de 200 chats e invalida por mtime de carpeta. MENÚ ⋯ de la tarjeta de Sesiones:
 "Abrir carpeta del chat" (sessions.js) → GET /api/chat/folder?id=
 asegura la carpeta y devuelve la ruta relativa al home; abre el
 Explorador existente (deep-link ?path=) en esa carpeta — reuso total,
@@ -145,13 +164,12 @@ runner y pasa por safeAttachName/attachPath (misma validación anti-
 traversal de los adjuntos); el endpoint sirve inline con nosniff.
 ALCANCE — FASE 1 = EN VIVO + reconexión al runner vivo (el evento
 tool_result con `images` va en el history, así que hello.events lo
-re-emite mientras el runner viva). Un chat DORMIDO reabierto desde el
-transcript del SDK (loadTranscriptEvents) NO re-deriva las miniaturas —
-las imágenes siguen en la carpeta del chat (accesibles por "Abrir carpeta
-del chat"), pero re-pintarlas en el replay del transcript es FASE 2
-pendiente. Verificado E2E: un chat haiku que hace Read de un PNG lo
-materializa en su carpeta + emite el tool_result con images; el endpoint
-sirve la imagen y `_attsEl` arma la miniatura correcta.
+re-emite mientras el runner viva). FASE 2 RESUELTA = un chat DORMIDO
+reabierto desde el transcript vuelve a asociar user image/document y
+tool_result image con los archivos de SU chat mediante `replay-images.js`;
+si el archivo fue borrado o la huella es ambigua, conserva el fallback sin
+nombre. Verificación funcional en `bin/cwc-test-chat-thumbs.js`: huellas,
+match/replay/cache, cola 2/200, abort/dedupe/switch y backfill idempotente.
 README.md documenta la config que hereda el chat (Fase 8:
 settingSources user+project, comandos slash, observador). Modelo
 EN VIVO (POST /api/chat/model, WS set_model): con motor corriendo
