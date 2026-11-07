@@ -3,7 +3,7 @@ import { icon, hydrateIcons } from '../ui/icons.js';
 import { confirmDialog, promptDialog, alertDialog } from '../ui/dialog.js';
 import { dismissablePopup } from '../ui/popup.js';
 import { bindHelp, helpBtn } from '../ui/help.js';
-import { initI18n, applyI18n } from '../ui/i18n.js';
+import { initI18n, applyI18n, t } from '../ui/i18n.js';
 
 const meForLang = await (async () => {
   try { return await (await fetch('/api/whoami')).json(); } catch { return null; }
@@ -129,6 +129,13 @@ function kindOf(entry) {
 }
 const join = (rel, name) => (rel ? `${rel}/${name}` : name);
 const parentOf = (rel) => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '');
+const isChatsPath = (rel = state.cwd) => rel === '@chats' || rel.startsWith('@chats/');
+
+function updatePathActions() {
+  const unavailable = state.mode === 'files' && isChatsPath();
+  $('fm-claude').hidden = unavailable;
+  $('fm-term').hidden = unavailable;
+}
 
 // ---------- orden ----------
 // Carpetas siempre agrupadas arriba (convención de Explorador/Finder); dentro
@@ -166,6 +173,7 @@ async function load() {
   hideCtx();
   state.selection.clear();
   state.anchor = null;
+  updatePathActions();
   if (state.mode === 'trash') return loadTrash();
   try {
     const res = await fetch(`${API}/list?path=${encodeURIComponent(state.cwd)}`);
@@ -271,7 +279,8 @@ function renderCrumbs() {
   const home = `<button class="fm-crumb" data-rel="">${icon('home')} Home</button>`;
   const rest = parts.map((p) => {
     acc = join(acc, p);
-    return `<span class="fm-sep">${icon('chevronRight', { size: 13 })}</span><button class="fm-crumb" data-rel="${escAttr(acc)}">${escHtml(p)}</button>`;
+    const label = p === '@chats' ? escHtml(t('files.crumbs.chats', '💬 Chats')) : escHtml(p);
+    return `<span class="fm-sep">${icon('chevronRight', { size: 13 })}</span><button class="fm-crumb" data-rel="${escAttr(acc)}">${label}</button>`;
   }).join('');
   crumbsEl.innerHTML = (state.mode === 'trash')
     ? `<button class="fm-crumb" data-rel="">${icon('trash')} Papelera</button>`
@@ -492,21 +501,24 @@ async function refreshTrashCount() {
 function showCtx(ev, entry) {
   const items = [];
   const multi = state.selection.size > 1;
+  const chatsPath = isChatsPath();
   if (multi) {
     items.push([`Descargar ${state.selection.size} (.zip)`, downloadSelected]);
-    items.push([`Eliminar ${state.selection.size}`, trashSelected, 'danger']);
+    if (!chatsPath) items.push([`Eliminar ${state.selection.size}`, trashSelected, 'danger']);
   } else {
     if (entry.type === 'dir') {
       items.push(['Abrir', () => open(entry)]);
-      items.push(['Nueva sesión de Claude aquí', () => sessionHere(join(state.cwd, entry.name), true)]);
-      items.push(['Abrir terminal aquí', () => sessionHere(join(state.cwd, entry.name), false)]);
+      if (!chatsPath) {
+        items.push(['Nueva sesión de Claude aquí', () => sessionHere(join(state.cwd, entry.name), true)]);
+        items.push(['Abrir terminal aquí', () => sessionHere(join(state.cwd, entry.name), false)]);
+      }
       items.push(['Descargar .zip', () => download(entry)]);
     } else {
       items.push(['Previsualizar', () => preview(entry)]);
       items.push(['Descargar', () => download(entry)]);
     }
     items.push(['Renombrar', () => rename(entry)]);
-    items.push(['Eliminar', () => trash(entry), 'danger']);
+    if (!chatsPath) items.push(['Eliminar', () => trash(entry), 'danger']);
   }
   ctxEl.innerHTML = items.map(([label, , cls]) => `<button class="${cls || ''}">${label}</button>`).join('');
   [...ctxEl.children].forEach((b, i) => b.addEventListener('click', () => { hideCtx(); items[i][1](); }));
@@ -572,7 +584,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.target.tagName === 'INPUT') return;
   if (state.mode !== 'files') return;
-  if ((e.key === 'Delete' || e.key === 'Backspace') && state.selection.size) { e.preventDefault(); trashSelected(); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && state.selection.size && !isChatsPath()) { e.preventDefault(); trashSelected(); }
   else if (e.key === 'Enter' && state.selection.size === 1) open(entryByName([...state.selection][0]));
 });
 

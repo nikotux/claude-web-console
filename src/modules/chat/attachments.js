@@ -100,11 +100,12 @@ export function chatAttachDir(chatId) {
   return path.join(dataDirForChat(chatId), 'chat-attachments', chatId);
 }
 
-// Ruta RELATIVA al home para el deep-link del Explorador (?path=…).
-// Para un inquilino es relativa a SU espacio, que el Explorador clampeado a userFileRoot no alcanza (limitación conocida).
+// Ruta virtual para el deep-link del Explorador (?path=…). El módulo files
+// resuelve @chats contra chat-attachments del dueño autenticado, sin exponer el
+// resto de su data-dir ni depender de que el workspace contenga esa carpeta.
 export function attachRelForExplorer(chatId) {
   if (!ID_RE.test(String(chatId || ''))) return null;
-  return path.join('.cwc-data', 'chat-attachments', chatId);
+  return `@chats/${chatId}`;
 }
 
 // Basename saneado o null (sin traversal, sin separadores, sin . / ..).

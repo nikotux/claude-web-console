@@ -1,6 +1,8 @@
 // modules/files/index.js — módulo de archivos (árbol, visor Y gestor completo).
 //
-// Interfaz estándar de módulo. Rutas HTTP (todas validan contra el root del request):
+// Interfaz estándar de módulo. Rutas HTTP (todas validan contra el root del request).
+// El prefijo virtual @chats resuelve exclusivamente la carpeta de adjuntos del
+// dueño autenticado, fuera del workspace de los inquilinos:
 //   GET  /api/files/list?path=&hidden=      -> entradas (con mtime); carpetas:
 //                                               childCount: 0..200|null,
 //                                               childCountCapped: boolean|null
@@ -27,8 +29,9 @@ import { resolveWithinRoot } from '../../core/paths.js';
 import {
   moveToTrash, listTrash, restoreFromTrash, purgeTrash, autoPurge, TRASH_DIRNAME,
 } from '../../core/trash.js';
-import { userFileRoot, hostUser } from '../../core/user-space.js';
+import { userDataDir, userFileRoot, hostUser } from '../../core/user-space.js';
 
+const CHATS_PREFIX = '@chats';
 const ALWAYS_HIDDEN = new Set(['node_modules', '.git', 'dist', TRASH_DIRNAME]);
 const MAX_READ_BYTES = 2 * 1024 * 1024;
 const BINARY_SNIFF_BYTES = 8192;
@@ -93,6 +96,31 @@ function reqOwner(req) {
 
 function reqFileRoot(req) {
   return userFileRoot(reqOwner(req));
+}
+
+// Resuelve una ruta visible del Explorador contra el root que le corresponde.
+// @chats nunca abre el data-dir completo: expone únicamente chat-attachments
+// del dueño autenticado. La validación lexical sigue delegada al helper común.
+export function resolveFilePath(owner, rel = '') {
+  const clean = String(rel).replace(/^[/\\]+/, '');
+  const virtual = clean === CHATS_PREFIX || clean.startsWith(`${CHATS_PREFIX}/`);
+  if (!virtual) {
+    const root = userFileRoot(owner);
+    return { root, abs: resolveWithinRoot(root, clean), virtual: false };
+  }
+  const root = path.join(userDataDir(owner), 'chat-attachments');
+  const rest = clean === CHATS_PREFIX ? '' : clean.slice(CHATS_PREFIX.length + 1);
+  return { root, abs: resolveWithinRoot(root, rest), virtual: true };
+}
+
+function resolveReqPath(req, rel = '') {
+  return resolveFilePath(reqOwner(req), rel);
+}
+
+function clientRel({ root, abs, virtual }) {
+  const rel = path.relative(root, abs);
+  if (!virtual) return rel;
+  return rel ? `${CHATS_PREFIX}/${rel.split(path.sep).join('/')}` : CHATS_PREFIX;
 }
 
 // La resolución contra root valida la ruta SOLO como string (no resuelve
@@ -251,8 +279,7 @@ const badReq = (m) => Object.assign(new Error(m), { badRequest: true });
 const upload = multer({
   storage: multer.diskStorage({
     destination(req, file, cb) {
-      const root = reqFileRoot(req);
-      const dir = resolveWithinRoot(root, req.query.path || '');
+      const { root, abs: dir } = resolveReqPath(req, req.query.path || '');
       if (!dir) return cb(badReq('Ruta inválida'));
       // Igual que mkdir/rename/trash: statSafeSync valida que la carpeta REAL
       // (symlinks resueltos) siga dentro del root — statSync crudo seguía un
@@ -266,8 +293,8 @@ const upload = multer({
       cb(null, dir);
     },
     filename(req, file, cb) {
-      const root = reqFileRoot(req);
-      const dir = resolveWithinRoot(root, req.query.path || '') || root;
+      const { abs: dir } = resolveReqPath(req, req.query.path || '');
+      if (!dir) return cb(badReq('Ruta inválida'));
       const raw = path.basename(file.originalname).replace(/[/\\]/g, '_') || 'archivo';
       cb(null, uniqueName(dir, raw));
     },
@@ -300,8 +327,8 @@ export default {
     });
 
     r.get('/list', async (req, res) => {
-      const root = reqFileRoot(req);
-      const abs = resolveWithinRoot(root, req.query.path || '');
+      const resolved = resolveReqPath(req, req.query.path || '');
+      const { root, abs } = resolved;
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
       const showHidden = req.query.hidden === '1';
       try {
@@ -314,15 +341,15 @@ export default {
         catch { return res.status(404).json({ error: 'No se pudo listar el directorio.' }); }
         if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
         if (!st.isDirectory()) return res.status(400).json({ error: 'No es un directorio.' });
-        res.json({ path: path.relative(root, abs), entries: await listDir(abs, showHidden) });
+        res.json({ path: clientRel(resolved), entries: await listDir(abs, showHidden) });
       } catch (e) {
         res.status(statusForError(e)).json({ error: 'No se pudo listar el directorio.' });
       }
     });
 
     r.get('/read', async (req, res) => {
-      const root = reqFileRoot(req);
-      const abs = resolveWithinRoot(root, req.query.path || '');
+      const resolved = resolveReqPath(req, req.query.path || '');
+      const { root, abs } = resolved;
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
       try {
         // Igual que en /list: statSafeSync cierra el escape por symlink
@@ -332,7 +359,7 @@ export default {
         catch { return res.status(404).json({ error: 'No se pudo leer el archivo.' }); }
         if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
         if (!st.isFile()) return res.status(400).json({ error: 'No es un archivo.' });
-        const meta = { path: path.relative(root, abs), name: path.basename(abs), size: st.size };
+        const meta = { path: clientRel(resolved), name: path.basename(abs), size: st.size };
         if (st.size > MAX_READ_BYTES) return res.json({ ...meta, tooLarge: true, content: '' });
         const buf = await fs.readFile(abs);
         if (buf.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return res.json({ ...meta, binary: true, content: '' });
@@ -348,8 +375,7 @@ export default {
     // como descarga (attachment) para que el navegador no la ejecute/renderice
     // en el mismo origen que la consola. Ver nota de seguridad más arriba.
     r.get('/raw', (req, res) => {
-      const root = reqFileRoot(req);
-      const abs = resolveWithinRoot(root, req.query.path || '');
+      const { root, abs } = resolveReqPath(req, req.query.path || '');
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
       try {
         let st;
@@ -398,8 +424,7 @@ export default {
     });
 
     r.get('/download', (req, res) => {
-      const root = reqFileRoot(req);
-      const abs = resolveWithinRoot(root, req.query.path || '');
+      const { root, abs } = resolveReqPath(req, req.query.path || '');
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
       try {
         let st;
@@ -416,8 +441,7 @@ export default {
     });
 
     r.get('/download-zip', (req, res) => {
-      const root = reqFileRoot(req);
-      const abs = resolveWithinRoot(root, req.query.path || '');
+      const { root, abs } = resolveReqPath(req, req.query.path || '');
       if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
       try {
         let st;
@@ -474,12 +498,16 @@ export default {
       if (!paths.length) return res.status(400).json({ error: 'Sin selección.' });
       if (paths.length > MAX_ZIP_ITEMS) return res.status(400).json({ error: `Demasiados ítems (máx. ${MAX_ZIP_ITEMS}).` });
       try {
-        const root = reqFileRoot(req);
         const items = [];
         const usedNames = new Set();
+        let selectionRoot = null;
         for (const rel of paths) {
-          const abs = resolveWithinRoot(root, rel);
+          const { root, abs } = resolveReqPath(req, rel);
           if (!abs) return res.status(400).json({ error: 'Ruta inválida.' });
+          if (selectionRoot !== null && root !== selectionRoot) {
+            return res.status(400).json({ error: 'No se pueden mezclar carpetas del chat con otras ubicaciones.' });
+          }
+          selectionRoot = root;
           try {
             const st = statSafeSync(abs, root);
             if (!st) return res.status(400).json({ error: 'Ruta inválida.' });
@@ -531,8 +559,7 @@ export default {
     });
 
     r.post('/mkdir', (req, res) => {
-      const root = reqFileRoot(req);
-      const parent = resolveWithinRoot(root, req.body?.path || '');
+      const { root, abs: parent } = resolveReqPath(req, req.body?.path || '');
       const n = safeName(req.body?.name);
       if (!parent) return res.status(400).json({ error: 'Ruta inválida.' });
       if (!n) return res.status(400).json({ error: 'Nombre inválido.' });
@@ -550,8 +577,8 @@ export default {
     });
 
     r.post('/rename', (req, res) => {
-      const root = reqFileRoot(req);
-      const abs = resolveWithinRoot(root, req.body?.path || '');
+      const resolved = resolveReqPath(req, req.body?.path || '');
+      const { root, abs } = resolved;
       const n = safeName(req.body?.newName);
       if (!abs || path.resolve(abs) === root) return res.status(400).json({ error: 'Ruta inválida.' });
       if (!n) return res.status(400).json({ error: 'Nombre inválido.' });
@@ -599,7 +626,7 @@ export default {
           if (fss.existsSync(target)) return res.status(409).json({ error: 'Ya existe un ítem con ese nombre.' });
           fss.renameSync(abs, target);
         }
-        res.json({ ok: true, path: path.relative(root, target) });
+        res.json({ ok: true, path: clientRel({ ...resolved, abs: target }) });
       } catch (e) {
         // Misma condición de carrera (destino ya existe) que /mkdir → mismo 409.
         if (e.code === 'EEXIST') return res.status(409).json({ error: 'Ya existe un ítem con ese nombre.' });
@@ -609,9 +636,11 @@ export default {
 
     // --- Papelera ---
     r.post('/trash', (req, res) => {
-      const root = reqFileRoot(req);
       const rel = req.body?.path || '';
-      const abs = resolveWithinRoot(root, rel);
+      const { root, abs, virtual } = resolveReqPath(req, rel);
+      if (virtual) {
+        return res.status(400).json({ error: 'La papelera no está disponible en la carpeta del chat.' });
+      }
       if (!abs || path.resolve(abs) === root) return res.status(400).json({ error: 'Ruta inválida.' });
       // Misma defensa: la carpeta contenedora REAL debe seguir dentro del root
       // antes de mover la entrada (si no, un symlink intermedio podría hacer
@@ -641,6 +670,9 @@ export default {
 
     r.post('/trash/restore', (req, res) => {
       try {
+        if (resolveReqPath(req, req.body?.path || '').virtual) {
+          return res.status(400).json({ error: 'La papelera no está disponible en la carpeta del chat.' });
+        }
         const root = reqFileRoot(req);
         const owner = reqOwner(req);
         // Defensa contra symlink de escape: a diferencia de mkdir/rename/trash

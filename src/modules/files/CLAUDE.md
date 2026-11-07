@@ -12,6 +12,15 @@ No es admin-gated. Trabaja con el root derivado del principal autenticado: el us
 maestro sin username mapea a `hostUser()`, y cualquier identidad degradada
 falla cerrada con 401 antes de entrar a los endpoints.
 
+## Raíz virtual `@chats`
+
+El Explorador acepta `@chats` como primer segmento virtual porque el workspace
+confinado de un inquilino no contiene sus adjuntos de chat, guardados en
+`.cwc-data/chat-attachments/`. `resolveFilePath()` lo resuelve únicamente contra
+`userDataDir(reqOwner(req))/chat-attachments`: nunca expone el resto de
+`.cwc-data` ni datos de otro usuario. Para el host usa la misma convención sobre
+su `.cwc-data`. La papelera está deshabilitada dentro de esta raíz virtual.
+
 ## Endpoints
 
 | Método | Ruta | Contrato actual |
