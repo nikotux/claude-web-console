@@ -56,9 +56,11 @@ export function wakeDecision({ status, pelota, idleMs, otroSince, now, pendingCo
 
 export function buildWakeText(kind, { items = [], otroElapsedMs = 0 } = {}) {
   if (kind === 'bg-done') {
-    const lines = items.map((item) => (item.kind === 'Codex'
-      ? `• Codex «${item.label}» → ${item.outcome}`
-      : `• Subagente «${item.label}» → terminado`));
+    const lines = items.map((item) => {
+      if (item.kind === 'Codex') return `• Codex «${item.label}» → ${item.outcome}`;
+      if (item.kind === 'CI') return `• CI del PR #${item.number} → ${item.outcome}`;
+      return `• Subagente «${item.label}» → terminado`;
+    });
     return `${WAKE_PREFIX} Terminó trabajo de fondo que dejaste corriendo:\n${lines.join('\n')}\nRecogé el resultado (collect_codex para las delegaciones a Codex), verificalo y seguí con el próximo paso de tu plan sin esperar al usuario. Cerrá con la 🎾 Pelota que corresponda.`;
   }
   if (kind === 'otro-checkin') {

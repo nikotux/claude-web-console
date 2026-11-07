@@ -137,6 +137,20 @@ test('resume una mezcla de Codex y subagente', () => {
     { kind: 'Codex', label: 'uno', outcome: 'done' }, { kind: 'Subagente', label: 'dos' },
   ])), { kind: 'mixed', text: 'Codex y el subagente terminaron, puedes continuar' });
 });
+test('resume el CI terminado o fallado', () => {
+  const passed = wake([{ kind: 'CI', number: 2067, outcome: 'pasó' }]);
+  assert.match(passed, /• CI del PR #2067 → pasó/);
+  assert.deepEqual(wakeSummary(passed), { kind: 'ci', text: 'El CI terminó, mira qué sigue' });
+  assert.deepEqual(wakeSummary(wake([{ kind: 'CI', number: 2067, outcome: 'falló: e2e, lint' }])), {
+    kind: 'ci-failed', text: 'El CI falló, hay que revisarlo',
+  });
+  assert.deepEqual(wakeSummary(wake([
+    { kind: 'CI', number: 2067, outcome: 'pasó' }, { kind: 'Codex', label: 'uno', outcome: 'done' },
+  ])), { kind: 'mixed', text: 'Terminaron varios trabajos, puedes continuar' });
+  assert.deepEqual(wakeSummary(wake([
+    { kind: 'CI', number: 2067, outcome: 'falló: e2e' }, { kind: 'Codex', label: 'uno', outcome: 'error' },
+  ])).kind, 'codex-problem');
+});
 test('resume el check-in de pelota otro', () => {
   const text = buildWakeText('otro-checkin', { otroElapsedMs: 27 * 60_000 });
   assert.deepEqual(wakeSummary(text), {

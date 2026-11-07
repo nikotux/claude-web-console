@@ -862,6 +862,17 @@ function handleCommand(c, msg) {
     });
     return;
   }
+  // CI de un PR que pasó de corriendo a terminado mientras la pelota era OTRO:
+  // el server lo detecta (watcher de PR) y acá entra como un trabajo más del despertador.
+  if (msg.t === 'ci-done' && Array.isArray(msg.items)) {
+    for (const item of msg.items.slice(0, 10)) {
+      const number = Number(item?.number);
+      if (!Number.isSafeInteger(number) || number <= 0 || typeof item.outcome !== 'string') continue;
+      pendingWake.set(`ci:${number}:${item.sha || ''}`, { kind: 'CI', number, outcome: item.outcome.slice(0, 300) });
+    }
+    maybeWake();
+    return;
+  }
   if (msg.t === 'user' && typeof msg.text === 'string'
       && (msg.text.trim() || (Array.isArray(msg.attachments) && msg.attachments.length))) {
     // Va al historial (para el replay de una reconexión) pero NO en vivo: el

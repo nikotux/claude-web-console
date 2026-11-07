@@ -20,10 +20,13 @@ export function wakeSummary(text) {
   if (isWakeText(value)) {
     const lines = value.split(/\r?\n/);
     const codexOutcomes = [];
+    const ciOutcomes = [];
     let subagents = 0;
     for (const line of lines) {
       const codex = line.match(/^• Codex .* → (.+)$/u);
       if (codex) codexOutcomes.push(codex[1].trim());
+      const ci = line.match(/^• CI del PR #\d+ → (.+)$/u);
+      if (ci) ciOutcomes.push(ci[1].trim());
       if (/^• Subagente .* → terminado\s*$/u.test(line)) subagents += 1;
     }
 
@@ -31,6 +34,24 @@ export function wakeSummary(text) {
       return {
         kind: 'codex-problem',
         text: t('chat.wake.codexProblem', 'Codex terminó con un problema, hay que revisarlo'),
+      };
+    }
+    if (ciOutcomes.some((outcome) => outcome.startsWith('falló'))) {
+      return {
+        kind: 'ci-failed',
+        text: t('chat.wake.ciFailed', 'El CI falló, hay que revisarlo'),
+      };
+    }
+    if (ciOutcomes.length && (codexOutcomes.length || subagents)) {
+      return {
+        kind: 'mixed',
+        text: t('chat.wake.several', 'Terminaron varios trabajos, puedes continuar'),
+      };
+    }
+    if (ciOutcomes.length) {
+      return {
+        kind: 'ci',
+        text: t('chat.wake.ciDone', 'El CI terminó, mira qué sigue'),
       };
     }
     if (codexOutcomes.length && subagents) {
