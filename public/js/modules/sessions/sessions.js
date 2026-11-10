@@ -786,7 +786,10 @@ export default {
         modal.body.innerHTML = `${trashLeadHtml()}<p class="sess-bg-empty">${t('sessions.trash.empty', 'La papelera está vacía.')}</p>`;
         return;
       }
-      modal.body.innerHTML = `${trashLeadHtml()}<div class="sess-bg-modal">${items.map((item, index) => {
+      modal.body.innerHTML = `${trashLeadHtml()}<div class="sess-trash-toolbar">
+        <span class="sess-trash-count">${escapeHtml(t('sessions.trash.count', '{n} conversación(es) en la papelera', { n: items.length }))}</span>
+        <button class="btn-ghost btn--danger" data-act="purge-all">${t('sessions.trash.purgeAll', '🗑️ Vaciar papelera')}</button>
+      </div><div class="sess-bg-modal">${items.map((item, index) => {
         const daysLeft = Math.max(0, Number(item.daysLeft) || 0);
         const daysClass = daysLeft <= 3 ? 'bb-chip--danger' : 'bb-chip--muted';
         const title = item.title || t('sessions.trash.untitled', 'Conversación sin título');
@@ -828,6 +831,7 @@ export default {
         row.querySelector('[data-act="restore"]').addEventListener('click', () => restoreTrashItem(modal, item));
         row.querySelector('[data-act="purge"]').addEventListener('click', () => purgeTrashItem(modal, item));
       });
+      modal.body.querySelector('[data-act="purge-all"]')?.addEventListener('click', () => purgeAllTrash(modal, items.length));
     }
 
     async function loadTrashModal(modal) {
@@ -891,6 +895,28 @@ export default {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || t('sessions.trash.purgeError', 'No se pudo eliminar la conversación.'));
+        await loadTrashModal(modal);
+      } catch (e) {
+        dialog.alertDialog({ title: t('sessions.trash.modalTitle', '🗑️ Papelera de conversaciones'), message: e.message });
+      }
+    }
+
+    async function purgeAllTrash(modal, count) {
+      const ok = await dialog.confirmDialog({
+        title: t('sessions.trash.purgeAllTitle', 'Vaciar papelera'),
+        message: t('sessions.trash.purgeAllConfirm', 'Se borrarán definitivamente {n} conversación(es) con su historial y sus archivos. Esta acción es irreversible.', { n: count }),
+        confirmLabel: t('sessions.trash.purgeAll', '🗑️ Vaciar papelera'),
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        const res = await fetch('/api/chat/trash/purge-all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || t('sessions.trash.purgeAllError', 'No se pudo vaciar la papelera.'));
         await loadTrashModal(modal);
       } catch (e) {
         dialog.alertDialog({ title: t('sessions.trash.modalTitle', '🗑️ Papelera de conversaciones'), message: e.message });

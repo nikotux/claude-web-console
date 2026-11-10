@@ -16,6 +16,7 @@
 //   GET  /api/chat/trash                                  -> { items }
 //   POST /api/chat/trash/restore {id}
 //   POST /api/chat/trash/purge {id}
+//   POST /api/chat/trash/purge-all
 //   POST /api/chat/to-aduana {id} -> convierte el chat en una sala de Aduana
 //   POST /api/chat/model {id, model}  -> cambia el modelo (en vivo si el
 //        motor está corriendo — q.setModel() del SDK, igual que setMode con
@@ -106,7 +107,7 @@ import {
   queueIndiceDistill, readIndiceState, reconcileIndiceState, setIndiceDataDirResolver,
 } from './indice-shared.js';
 import { TANDEM_CODEX_MODEL, TANDEM_CODEX_EFFORT, normalizeCodexModel, normalizeCodexEffort } from './codex-models.js';
-import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, autoPurgeAllChatTrash } from './trash.js';
+import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, purgeAllChatTrash, autoPurgeAllChatTrash } from './trash.js';
 import {
   acknowledgeMilestones, applyPrObservation, buildPrGraphqlQuery,
   extractTolkienPrLink, isDeployedCompareStatus, isTolkienPrCommand,
@@ -4954,6 +4955,14 @@ El archivo donde se guardan mis preferencias está en ${preferencesPath}. Cuando
       }
       purgeChatTrash(id, principalOf(req).username);
       res.json({ ok: true });
+    });
+
+    // Endpoint APARTE a propósito: un purge {id} mal formado nunca puede
+    // degenerar en un vaciado total (lección de /api/files/trash/purge).
+    // Solo vacía la papelera de quien llama, también si es admin.
+    r.post('/trash/purge-all', (req, res) => {
+      const purged = purgeAllChatTrash(principalOf(req).username);
+      res.json({ ok: true, purged });
     });
 
     // Adopta una sesión de Claude que corre en una TERMINAL tmux nuestra y la

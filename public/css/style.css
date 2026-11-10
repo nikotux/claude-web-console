@@ -822,6 +822,8 @@ html, body {
 }
 .sess-bgbtn--idle { opacity: .55; color: var(--cwc-text-dim); }
 .sess-bgbtn--idle .sess-bg-n { color: var(--cwc-text-dim); background: var(--cwc-bg-chip); border: 1px solid var(--cwc-border); }
+.sess-trash-toolbar { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .25rem 0 .6rem; margin-bottom: .45rem; border-bottom: 1px solid var(--cwc-border); }
+.sess-trash-count { color: var(--cwc-text-dim); font-size: .85rem; }
 .sess-bg-modal { display: flex; flex-direction: column; gap: .45rem; }
 .sess-bg-group { border-bottom: 1px solid var(--cwc-border); padding-bottom: .35rem; }
 .sess-bg-group > summary {

@@ -325,6 +325,38 @@ export function purgeChatTrash(id, owner) {
   }
 }
 
+// Vacía TODA la papelera de UN dueño (botón "Vaciar papelera"). Nunca toca la
+// de otro usuario: la ruta se deriva del owner. Lo que no se pudo borrar queda
+// en el índice para no perder el rastro. Devuelve cuántas entradas borró.
+export function purgeAllChatTrash(owner) {
+  const index = readIndex(owner);
+  const remaining = [];
+  let purged = 0;
+
+  for (const meta of index.items) {
+    const dir = itemDir(owner, meta?.trashId);
+    if (!dir) {
+      remaining.push(meta);
+      continue;
+    }
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      purged += 1;
+    } catch {
+      remaining.push(meta);
+    }
+  }
+
+  if (index.items.length !== remaining.length) {
+    try { writeIndex(owner, remaining); }
+    catch (err) {
+      console.error('[chat-trash] no pude vaciar la papelera:', err?.message);
+      return 0;
+    }
+  }
+  return purged;
+}
+
 export function autoPurgeChatTrash(owner) {
   const index = readIndex(owner);
   const now = Date.now();

@@ -178,7 +178,7 @@ export default function sessionsHelp() {
               {
                 icon: 'trash',
                 name: t('sessions.help.header.trash.name', 'Papelera'),
-                desc: t('sessions.help.header.trash.desc', 'muestra conversaciones cerradas por 30 días; permite Restaurar o Eliminar ya de forma irreversible'),
+                desc: t('sessions.help.header.trash.desc', 'muestra conversaciones cerradas por 30 días; permite Restaurar, Eliminar ya de forma irreversible o Vaciar papelera de una vez'),
               },
               {
                 icon: 'help',

@@ -29,10 +29,13 @@ const eq = (name, got, expected) => {
 
 const DAY_MS = 86400000;
 const owner = 'tester';
+const otherOwner = 'otro';
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cwc-trash-test-'));
 const ownerTrashDir = path.join(testRoot, '.cwc-users', owner, '.cwc-data', 'chat-trash');
+const otherTrashDir = path.join(testRoot, '.cwc-users', otherOwner, '.cwc-data', 'chat-trash');
 const indexPath = path.join(ownerTrashDir, 'index.json');
 const itemPath = (trashId) => path.join(ownerTrashDir, trashId);
+const otherItemPath = (trashId) => path.join(otherTrashDir, trashId);
 const transcriptCopyPath = (trashId, originalPath) => (
   path.join(itemPath(trashId), 'transcript', path.basename(originalPath))
 );
@@ -61,6 +64,7 @@ try {
     listChatTrash,
     restoreChatTrash,
     purgeChatTrash,
+    purgeAllChatTrash,
     autoPurgeChatTrash,
     autoPurgeAllChatTrash,
   } = await import('../src/modules/chat/trash.js');
@@ -274,6 +278,55 @@ try {
   eq('T6.e autoPurgeAllChatTrash devuelve un número', typeof t6AutoResult, 'number');
   eq('T6.f autoPurgeAllChatTrash deduplica y devuelve el conteo correcto', t6AutoResult, 1);
   eq('T6.g autoPurgeAllChatTrash borra la carpeta expirada', fs.existsSync(itemPath(t6AutoId)), false);
+
+  console.log('\nT7 · VACIAR PAPELERA Y AISLAMIENTO');
+  const t7Ids = [1, 2, 3].map((n) => trashChat({
+    chatId: `ctest-7-${n}`,
+    owner,
+    title: `Vaciar ${n}`,
+    cwd: `/tmp/vaciar-${n}`,
+    sessionId: `sid-7-${n}`,
+    transcriptPath: null,
+    attachDir: null,
+  }));
+  const t7OtherId = trashChat({
+    chatId: 'ctest-7-other',
+    owner: otherOwner,
+    title: 'Otro dueño',
+    cwd: '/tmp/otro',
+    sessionId: 'sid-7-other',
+    transcriptPath: null,
+    attachDir: null,
+  });
+  const t7Before = listChatTrash(owner).length;
+  const t7Purged = purgeAllChatTrash(owner);
+  ok('T7.a purgeAllChatTrash devuelve el total medido (al menos 3)', t7Before >= 3 && t7Purged === t7Before, { t7Before, t7Purged });
+  eq('T7.b la papelera del dueño queda vacía', listChatTrash(owner), []);
+  eq('T7.c las tres carpetas nuevas fueron borradas', t7Ids.map((id) => fs.existsSync(itemPath(id))), [false, false, false]);
+  eq('T7.d index.json queda con items vacío', JSON.parse(fs.readFileSync(indexPath, 'utf8')).items, []);
+  ok(
+    'T7.e la papelera de otro dueño queda intacta',
+    listChatTrash(otherOwner).length === 1 && fs.existsSync(otherItemPath(t7OtherId)),
+    { items: listChatTrash(otherOwner).length, folder: fs.existsSync(otherItemPath(t7OtherId)) },
+  );
+
+  let t7Again;
+  let t7AgainThrew = false;
+  try { t7Again = purgeAllChatTrash(owner); }
+  catch (err) { t7AgainThrew = true; t7Again = err; }
+  ok('T7.f repetir el vaciado devuelve 0 sin lanzar', !t7AgainThrew && t7Again === 0, t7Again);
+
+  let t7Missing;
+  let t7MissingThrew = false;
+  try { t7Missing = purgeAllChatTrash('sin-papelera'); }
+  catch (err) { t7MissingThrew = true; t7Missing = err; }
+  ok('T7.g vaciar un dueño sin papelera devuelve 0 sin lanzar', !t7MissingThrew && t7Missing === 0, t7Missing);
+  eq('T7.h purgeChatTrash rechaza un id vacío', purgeChatTrash('', otherOwner), false);
+  eq('T7.h purgeChatTrash rechaza un id undefined', purgeChatTrash(undefined, otherOwner), false);
+  ok(
+    'T7.h los ids inválidos no vacían la papelera ajena',
+    listChatTrash(otherOwner).length === 1 && fs.existsSync(otherItemPath(t7OtherId)),
+  );
 
   ok(
     'AISLAMIENTO · la papelera usada está dentro del temporal',
