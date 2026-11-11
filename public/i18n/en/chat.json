@@ -10,6 +10,7 @@
   "chat.mode.all": "All",
   "chat.mode.plan": "Plan",
   "chat.header.menuTitle": "Open side panel",
+  "chat.header.sessionsTitle": "Sessions / New session",
   "chat.header.worldTitle": "World of this conversation",
   "chat.header.modelPillTitle": "Automatic model router",
   "chat.header.modeTitle": "Permission mode",

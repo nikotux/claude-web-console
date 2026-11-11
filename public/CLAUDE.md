@@ -82,14 +82,15 @@ Las animaciones coordinan martillo, chispas, brasa, anillo, badge y shimmer, y
 respetan `prefers-reduced-motion`. Los festejos incluyen tanto merges nuevos
 como PRs que acaban de llegar a producción; estos últimos pueden agrupar varios
 PRs y solo se marcan vistos mediante el endpoint de festejos.
-En MÓVIL ambas barras son drawers overlay que se abren con DOS ASAS
-flotantes (#sidebar-handle izq = módulos / #sidebar-right-handle der
-= Sesiones; look compartido espejado, solo móvil) UBICADAS SOBRE EL
-COMPOSER (bottom: calc(64px + safe-area) — pedido del usuario
-2026-07-07: antes al medio del borde estorbaban) — la izquierda
-también responde al ☰ header/auxbar (cwc:open-sidebar). Cada drawer
-con su scrim (#sidebar-scrim / #sidebar-right-scrim, hermano `~`
-:not(.hidden)). FIX scroll fantasma (mismo pedido): en móvil los
+En MÓVIL ambas barras son drawers overlay. En chat y TUI las DOS ASAS
+flotantes se ocultan (pedido del usuario 2026-11-10: estorbaban sobre el
+composer): el drawer izquierdo de módulos se abre desde el ☰ del header
+(`cwc:open-sidebar`) y el derecho de Sesiones desde el ✨ del header
+(`cwc:open-sessions`). Las asas (#sidebar-handle izq / #sidebar-right-handle
+der; look compartido espejado, solo móvil) se mantienen únicamente donde no
+hay header: centro vacío y terminal puro. Cada drawer tiene su scrim
+(#sidebar-scrim / #sidebar-right-scrim, hermano `~` :not(.hidden)). FIX scroll
+fantasma (pedido anterior): en móvil los
 drawers son position:absolute; sin ancestro posicionado se ubicaban
 contra el viewport y el drawer derecho cerrado (translateX(100%))
 desbordaba generando scroll "al negro" — se contiene con
@@ -161,7 +162,7 @@ El bloque «Modo documento» se activa con `body.doc-mode` y alcanza únicamente
 TEXTO, no al contenedor, para que tablas, código y figuras conserven su ancho
 completo. La sangría de primera línea SIN margen entre párrafos es una decisión
 explícita del usuario: no mezclar ese ritmo de libro con separación adicional.
-En `@media (max-width: 768px)`, `.chat-head` pasa a DOS FILAS: título arriba a ancho completo e insignias/controles abajo. `.chat-head-break` es un `<span>` vacío con `flex-basis:100%`, oculto en escritorio (`display:none`), que parte la línea flex en móvil; todo control NUEVO del header debe ir DESPUÉS de ese break en el markup de `chat-tab.js`.
+En `@media (max-width: 768px)`, `.chat-head` pasa a DOS FILAS: ☰, título y ✨ de Sesiones arriba; insignias/controles abajo. `.chat-head-break` es un `<span>` vacío con `flex-basis:100%`, oculto en escritorio (`display:none`), que parte la línea flex en móvil; salvo los accesos de navegación de esa primera fila, todo control NUEVO del header debe ir DESPUÉS de ese break en el markup de `chat-tab.js`.
 Motivo (BUG-2766, `console:BUG-2766`, reportado el 2026-08-14 por Niko, Julián y Richi; medido con Playwright): como todos los hermanos del título llevan `flex:none`, `.chat-title` era el único encogible y colapsaba a **0 px** en un viewport de 390 px.
 No romper estos detalles: `.chat-title` usa `flex:1 1 0`, NO `1 1 auto` —con `auto` reclama el ancho de su texto, no entra junto al ☰ y cae a una tercera fila—; el `gap` baja a `.3rem` y `.chat-world > span` se oculta, dejando el ícono de mundo con su color y el nombre completo en `title`.
 Sin esas dos compresiones, la fila de controles tampoco entra en una sola línea.

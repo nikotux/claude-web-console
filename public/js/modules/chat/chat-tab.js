@@ -373,6 +373,9 @@ export class ChatTab {
         <header class="chat-head">
           <button class="btn-ghost btn--icon mobile-menu-btn chat-menu" title="${t('chat.header.menuTitle', 'Abrir panel lateral')}">${icon('menu', { size: 16 })}</button>
           <span class="chat-title">${this.title}</span>
+          <button type="button" class="btn-ghost btn--icon mobile-menu-btn chat-sessions-btn"
+            title="${t('chat.header.sessionsTitle', 'Sesiones / Nueva sesión')}"
+            aria-label="${t('chat.header.sessionsTitle', 'Sesiones / Nueva sesión')}">${icon('sparkle', { size: 16 })}</button>
           <span class="chat-head-break" aria-hidden="true"></span>
           <span class="chat-world" title="${t('chat.header.worldTitle', 'Mundo de esta conversación')}" hidden></span>
           <span class="chat-peers" aria-label="${t('chat.sala.participants', 'Participantes')}" hidden></span>
@@ -621,6 +624,10 @@ export class ChatTab {
     // panel es overlay y su propio ☰ queda fuera de pantalla al ocultarse.
     container.querySelector('.chat-menu').addEventListener('click', () => {
       window.dispatchEvent(new Event('cwc:open-sidebar'));
+    });
+    // ✨ (solo visible en móvil): pide al shell el drawer de Sesiones.
+    container.querySelector('.chat-sessions-btn').addEventListener('click', () => {
+      window.dispatchEvent(new Event('cwc:open-sessions'));
     });
     this.sendBtn.addEventListener('click', () => this._submit());
     this.cutBtn.addEventListener('click', () => {

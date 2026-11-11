@@ -177,6 +177,14 @@ function buildConversationInner(entry, info, initialPrompt = null) {
     bar.append(menuBtn, ttl, back);
     // La barra se arma con createElement; helpBtn devuelve el HTML del botón estándar.
     bar.insertAdjacentHTML('beforeend', helpBtn('terminal'));
+    // ✨ móvil: acceso al drawer de Sesiones desde el header de la TUI.
+    const sessionsBtn = document.createElement('button');
+    sessionsBtn.className = 'btn-ghost btn--icon mobile-menu-btn conv-sessions-btn';
+    sessionsBtn.title = 'Sesiones / Nueva sesión';
+    sessionsBtn.setAttribute('aria-label', 'Sesiones / Nueva sesión');
+    sessionsBtn.innerHTML = icon('sparkle', { size: 16 });
+    sessionsBtn.addEventListener('click', () => window.dispatchEvent(new Event('cwc:open-sessions')));
+    bar.append(sessionsBtn);
     const host = document.createElement('div');
     host.className = 'conv-tui-term';
     entry.pane.append(bar, host);
@@ -652,9 +660,11 @@ window.addEventListener('cwc:open-sidebar', () => {
   if (isMobile()) sidebarEl.classList.remove('collapsed');
 });
 
-// El drawer DERECHO (Sesiones) en móvil: lo abre el asa flotante y lo cierra
-// su scrim. En desktop el asa/scrim no se ven (CSS).
+// El drawer DERECHO (Sesiones) en móvil: lo abren el evento del header o el
+// asa flotante de las vistas sin header, y lo cierra su scrim. En desktop el
+// asa/scrim no se ven (CSS).
 const openRightDrawer = () => { sidebarRightEl.classList.remove('hidden'); if (isMobile()) sidebarRightEl.classList.remove('collapsed'); };
+window.addEventListener('cwc:open-sessions', openRightDrawer);
 document.getElementById('sidebar-right-handle').addEventListener('click', openRightDrawer);
 
 // Velos de fondo (solo visibles/clickeables en móvil, vía CSS): tocar afuera

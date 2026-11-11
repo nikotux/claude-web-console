@@ -3920,14 +3920,15 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
      y Richi). Todos los hermanos del título llevan flex:none, así que
      .chat-title —el único encogible— colapsaba a 0px en un viewport de 390px
      y era imposible saber en qué conversación estabas. El salto de línea flex
-     (.chat-head-break, basis 100%) empuja TODO lo que va después del título a
-     una segunda fila y le deja la primera entera. */
+     (.chat-head-break, basis 100%) empuja a una segunda fila TODO lo que va
+     después de él; el acceso ✨ a Sesiones queda junto al título en la primera. */
   .chat-head { flex-wrap: wrap; gap: .3rem; padding: .4rem .6rem; }
   .chat-head-break { display: block; flex: 1 0 100%; width: 100%; height: 0; margin: 0; }
   /* `flex-basis: 0` y no `auto`: con `auto` el título reclama el ancho entero
      de su texto, no entra junto al ☰ y se va a una tercera fila. Con 0 no
      reclama nada, comparte fila con el ☰ y crece hasta llenarla. */
   .chat-title { flex: 1 1 0; }
+  .chat-sessions-btn { margin-left: auto; color: var(--cwc-accent); }
   /* La insignia de mundo se queda con su ÍCONO y su color de identidad, pero
      suelta el texto: son ~55px que en la fila de controles no sobran, y el
      nombre completo del mundo sigue disponible en su atributo `title` (lo
@@ -4002,17 +4003,22 @@ body:has(#terminals .terminal-pane.active.chat-pane-host) #auxbar { display: non
   #sidebar-right.collapsed .sidebar-footer--right { display: flex; }
   #sidebar-right.hidden { transform: translateX(100%); box-shadow: none; }
 
-  /* Asas flotantes (izq = módulos, der = Sesiones) UBICADAS SOBRE EL COMPOSER
-     (pedido del usuario 2026-07-07: antes al medio del borde estorbaban). El
-     offset (~64px) las deja justo encima de la entrada de texto del chat; en
-     vistas sin composer flotan cerca del borde inferior, sin molestar. Cada
-     una pegada a su borde; se ocultan tras su drawer al abrirlo (z-index menor). */
+  /* Asas flotantes (izq = módulos, der = Sesiones) con el offset inferior del
+     antiguo composer (pedido del usuario 2026-07-07). Desde 2026-11-10 solo
+     quedan en vistas sin header; cada una va pegada a su borde y se oculta tras
+     su drawer al abrirlo (z-index menor). */
   #sidebar-handle, #sidebar-right-handle {
     display: inline-flex; position: absolute; z-index: 8;
     bottom: calc(64px + env(safe-area-inset-bottom, 0px));
   }
   #sidebar-handle { left: 0; }
   #sidebar-right-handle { right: 0; }
+  /* Pedido del usuario 2026-11-10: en chat/TUI estorbaban sobre el composer;
+     ☰ y ✨ viven en el header; se mantienen donde no hay header. */
+  body:has(#terminals .terminal-pane.active.chat-pane-host) #sidebar-handle,
+  body:has(#terminals .terminal-pane.active.chat-pane-host) #sidebar-right-handle,
+  body:has(#terminals .terminal-pane.active.conv-tui-host) #sidebar-handle,
+  body:has(#terminals .terminal-pane.active.conv-tui-host) #sidebar-right-handle { display: none; }
   #sidebar-right-scrim {
     display: block; position: absolute; inset: 0; z-index: 9;
     background: var(--cwc-scrim); opacity: 0; pointer-events: none;
@@ -5078,6 +5084,8 @@ body.cwc-solo #sidebar-right-scrim,
 body.cwc-solo #rail-tabs,
 body.cwc-solo #sidebar-handle,
 body.cwc-solo #sidebar-right-handle,
-body.cwc-solo .chat-menu { display: none !important; }
+body.cwc-solo .chat-menu,
+body.cwc-solo .chat-sessions-btn,
+body.cwc-solo .conv-sessions-btn { display: none !important; }
 body.cwc-solo #terminals { flex: 1 1 100%; min-width: 0; }
 .solo-missing { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .75rem; height: 100%; color: var(--cwc-text-secondary); }
