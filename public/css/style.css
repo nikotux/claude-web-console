@@ -510,7 +510,9 @@ html, body {
 /* El launcher vive DENTRO de .sb-head: llena la fila junto al ☰ (su botón es
    .btn--block, ocupa todo el ancho del slot). El padding lo pone .sb-head. */
 .sidebar-top { flex: 1 1 auto; min-width: 0; }
-.sidebar-scroll { flex: 1; overflow: auto; min-height: 0; }
+/* Las listas laterales nunca se desplazan horizontalmente: una tarjeta desbordada
+   antes movía toda la lista hacia un lado (reportado 2026-11-10). */
+.sidebar-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; }
 
 /* Alternancia de contenido según el estado del panel. */
 .only-collapsed { display: none; }
@@ -754,17 +756,23 @@ html, body {
    Texto achicado a pedido (mismo día): título a --cwc-fs-sm (antes md). */
 .sess-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .05rem; justify-content: center; }
 .sess-row1, .sess-row2 { display: flex; align-items: center; gap: .3rem; min-width: 0; }
+/* Red de seguridad: la fila no puede pintar sobre el botón «•••»; los chips se
+   achican primero y .sess-kids-toggle (flex: none) queda visible (reportado 2026-11-10). */
+.sess-row2 { overflow: hidden; }
 .sess-name {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: var(--cwc-fs-sm); font-weight: 600;
 }
-.sess-model { flex: none; font-size: .65rem; font-weight: 600; }
+.sess-model {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: .65rem; font-weight: 600;
+}
 .sess-live {
   margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: var(--cwc-fs-xs); color: var(--cwc-text-dim);
 }
 .sess-live-chip {
-  flex: none; max-width: 165px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 0 3 auto; min-width: 2.5rem; max-width: 165px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 0 .3rem; border: 1px solid var(--cwc-border); border-radius: var(--cwc-radius-sm);
   color: var(--cwc-text-secondary); background: var(--cwc-bg-chip); font-size: var(--cwc-fs-2xs);
 }
@@ -2142,11 +2150,12 @@ html, body {
 .hito-card { border-left: 2px solid color-mix(in srgb, var(--hito-ember) 55%, var(--cwc-border)); }
 .hito-status-ring { outline: 1px solid color-mix(in srgb, var(--hito-ember) 46%, transparent); outline-offset: 2px; border-radius: 50%; }
 .hito-session-chip {
-  display: inline-flex; align-items: center; gap: .2rem; min-width: 0; max-width: 10.5rem;
+  display: inline-flex; flex: 0 3 auto; align-items: center; gap: .2rem; min-width: 2.5rem; max-width: 10.5rem;
   margin-left: auto; padding: .08rem .3rem; border: 1px solid color-mix(in srgb, currentColor 32%, var(--cwc-border));
   border-radius: 999px; background: color-mix(in srgb, currentColor 8%, var(--cwc-bg-chip));
   font-size: var(--cwc-fs-2xs); line-height: 1.2; white-space: nowrap;
 }
+.hito-session-chip > svg { flex: none; }
 .hito-session-chip > span { overflow: hidden; color: var(--cwc-text-secondary); text-overflow: ellipsis; }
 .rail-status.hito-rail-glyph {
   display: grid; place-items: center; top: -5px; left: -5px; width: 14px; height: 14px;
