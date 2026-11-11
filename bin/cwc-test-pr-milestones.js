@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import {
   acknowledgeMilestones, applyPrObservation, applyPrTransitions, buildPrGraphqlQuery,
+  ciWakeOutcome,
   extractTolkienPrLink, isDeployedCompareStatus, isTolkienPrCommand,
   normalizeCodexPrLinks, normalizePrLinks, parseKamalProductionTitle,
   prCiBadge, prLinkFromCodexEvent, prLinkFromCommand, sameCi, summarizePrCi,
@@ -307,17 +308,17 @@ test('resume CI con todas las revisiones aprobadas', () => {
     finishedAt: Date.parse('2026-11-06T10:01:00.000Z'),
   });
 });
-test('una revisión corriendo domina aunque otra haya fallado', () => {
+test('una falla define failed aunque otra revisión siga corriendo', () => {
   const ci = summarizePrCi(ciObserved([
     checkRun('tests', 'FAILURE'),
     checkRun('deploy', null, { status: 'IN_PROGRESS', completedAt: null }),
   ]));
-  assert.equal(ci.state, 'running');
+  assert.equal(ci.state, 'failed');
   assert.equal(ci.done, 1);
   assert.equal(ci.failed, 1);
   assert.deepEqual(ci.running, ['deploy']);
   assert.deepEqual(ci.failedNames, ['tests']);
-  assert.equal(ci.finishedAt, null);
+  assert.equal(ci.finishedAt, Date.parse('2026-11-06T10:01:00.000Z'));
 });
 test('todas terminadas con falla producen estado failed y nombres acotados', () => {
   const nodes = Array.from({ length: 10 }, (_, i) => checkRun(` falla ${i} `.padEnd(100, 'x'), 'FAILURE'));
@@ -341,7 +342,7 @@ test('mezcla estados clásicos de StatusContext', () => {
     statusContext('legacy-bad', 'ERROR'),
     statusContext('legacy-wait', 'EXPECTED'),
   ]));
-  assert.equal(ci.state, 'running');
+  assert.equal(ci.state, 'failed');
   assert.equal(ci.done, 2);
   assert.equal(ci.failed, 1);
   assert.deepEqual(ci.running, ['legacy-wait']);
@@ -371,6 +372,47 @@ test('entrada basura nunca produce un resumen ni lanza', () => {
   assert.equal(summarizePrCi({ state: 'OPEN', commits: { nodes: 'no' } }), null);
   assert.equal(summarizePrCi({ get state() { throw new Error('basura'); } }), null);
   assert.equal(summarizePrCi(ciObserved([]), null), null);
+});
+test('ciWakeOutcome avisa la primera falla aunque sigan revisiones corriendo', () => {
+  const previousCi = summarizePrCi(ciObserved([
+    checkRun('tests', null, { status: 'IN_PROGRESS', completedAt: null }),
+    checkRun('deploy', null, { status: 'IN_PROGRESS', completedAt: null }),
+  ]));
+  const ci = summarizePrCi(ciObserved([
+    checkRun('tests', 'FAILURE'),
+    checkRun('deploy', null, { status: 'IN_PROGRESS', completedAt: null }),
+  ]));
+  assert.equal(ciWakeOutcome(previousCi, ci), 'falló: tests');
+});
+test('ciWakeOutcome no repite una falla cuando termina otra revisión', () => {
+  const previousCi = summarizePrCi(ciObserved([
+    checkRun('tests', 'FAILURE'),
+    checkRun('deploy', null, { status: 'IN_PROGRESS', completedAt: null }),
+  ]));
+  const ci = summarizePrCi(ciObserved([
+    checkRun('tests', 'FAILURE'),
+    checkRun('deploy', 'FAILURE', { completedAt: '2026-11-06T10:02:00.000Z' }),
+  ]));
+  assert.equal(ciWakeOutcome(previousCi, ci), null);
+});
+test('ciWakeOutcome cubre passed, running y observaciones ausentes', () => {
+  const running = summarizePrCi(ciObserved([
+    checkRun('tests', null, { status: 'IN_PROGRESS', completedAt: null }),
+  ]));
+  const passed = summarizePrCi(ciObserved([checkRun('tests', 'SUCCESS')]));
+  assert.equal(ciWakeOutcome(running, passed), 'pasó');
+  assert.equal(ciWakeOutcome(running, running), null);
+  assert.equal(ciWakeOutcome(null, passed), null);
+  assert.equal(ciWakeOutcome(running, null), null);
+});
+test('ciWakeOutcome permite que un re-run vuelva a despertar al terminar', () => {
+  const failed = summarizePrCi(ciObserved([checkRun('tests', 'FAILURE')]));
+  const running = summarizePrCi(ciObserved([
+    checkRun('tests', null, { status: 'IN_PROGRESS', completedAt: null }),
+  ]));
+  const passed = summarizePrCi(ciObserved([checkRun('tests', 'SUCCESS')]));
+  assert.equal(ciWakeOutcome(failed, running), null);
+  assert.equal(ciWakeOutcome(running, passed), 'pasó');
 });
 test('prCiBadge prioriza running, luego failed y el passed más reciente', () => {
   const passedOld = summarizePrCi(ciObserved([checkRun('old', 'SUCCESS')], { number: 1 }));

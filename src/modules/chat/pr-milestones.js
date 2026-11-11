@@ -124,7 +124,9 @@ export function summarizePrCi(observed, options = {}) {
 
     const runningChecks = checks.filter((check) => check.result === 'running');
     const failedChecks = checks.filter((check) => check.result === 'failed');
-    const state = runningChecks.length ? 'running' : failedChecks.length ? 'failed' : 'passed';
+    // Una sola falla ya define el resultado (fail-fast): el despertador avisa
+    // sin esperar a las revisiones que siguen corriendo.
+    const state = failedChecks.length ? 'failed' : runningChecks.length ? 'running' : 'passed';
     const startedTimes = checks.map((check) => check.startedAt).filter(Number.isFinite);
     const completedTimes = checks.map((check) => check.completedAt).filter(Number.isFinite);
     return {
@@ -144,6 +146,13 @@ export function summarizePrCi(observed, options = {}) {
   } catch {
     return null;
   }
+}
+
+// Solo la transición observada running → terminado despierta; un `failed` que
+// sigue recibiendo revisiones no vuelve a sonar.
+export function ciWakeOutcome(previousCi, ci) {
+  if (previousCi?.state !== 'running' || !ci || ci.state === 'running') return null;
+  return ci.state === 'passed' ? 'pasó' : `falló: ${ci.failedNames.join(', ') || 'sin detalle'}`;
 }
 
 export function prCiBadge(ciList) {

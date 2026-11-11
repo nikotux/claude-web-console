@@ -110,6 +110,7 @@ import { TANDEM_CODEX_MODEL, TANDEM_CODEX_EFFORT, normalizeCodexModel, normalize
 import { trashChat, listChatTrash, restoreChatTrash, purgeChatTrash, purgeAllChatTrash, autoPurgeAllChatTrash } from './trash.js';
 import {
   acknowledgeMilestones, applyPrObservation, buildPrGraphqlQuery,
+  ciWakeOutcome,
   extractTolkienPrLink, isDeployedCompareStatus, isTolkienPrCommand,
   newestPrBadge, normalizeCodexPrLinks, normalizePrLinks, parseKamalProductionTitle, pendingMilestones,
   prCiBadge, sameCi, summarizePrCi, validMilestoneKeys,
@@ -3591,10 +3592,8 @@ class ChatManager {
         const ci = summarizePrCi(observed);
         const previousCi = (row.chat._prCi || []).find((item) => item.number === number) || null;
         if (!sameCi(previousCi, ci)) ciChangedChats.add(row.chat);
-        if (previousCi?.state === 'running' && ci && ci.state !== 'running') {
-          const outcome = ci.state === 'passed' ? 'pasó' : `falló: ${ci.failedNames.join(', ') || 'sin detalle'}`;
-          wakeFor(row.chat, { kind: 'CI', number, sha: ci.sha, outcome });
-        }
+        const ciOutcome = ciWakeOutcome(previousCi, ci);
+        if (ciOutcome) wakeFor(row.chat, { kind: 'CI', number, sha: ci.sha, outcome: ciOutcome });
         const keptCi = (row.chat._prCi || []).filter((item) => item.number !== number);
         row.chat._prCi = ci ? [...keptCi, ci] : keptCi;
         const transition = applyPrObservation(current, observed, deployments.get(number), { now });
