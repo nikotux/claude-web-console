@@ -723,12 +723,20 @@ whoami.then((me) => {
 // escribe si algo cambió; con el teclado cerrado se limpian los estilos inline
 // para que #app vuelva a su 100dvh de CSS; y el scrollTo ya no corre en el evento
 // scroll del viewport porque alimentaba el bucle.
+// Fix 2026-11-10: con el teclado abierto #app recibe la clase `kb-open` y la
+// variable `--app-h`, para que el CSS achique la tarjeta en vivo / composer y
+// el composer nunca quede detrás del teclado.
 if (window.visualViewport) {
   const app = document.getElementById('app');
   const vv = window.visualViewport;
   let raf = 0;
   let last = '';
-  const clearFit = () => { app.style.height = ''; app.style.transform = ''; };
+  const clearFit = () => {
+    app.style.height = '';
+    app.style.transform = '';
+    app.classList.remove('kb-open');
+    app.style.removeProperty('--app-h');
+  };
   const fitViewport = () => {
     raf = 0;
     // Con zoom (pinch del usuario o auto-zoom de iOS) NO perseguimos el
@@ -749,6 +757,8 @@ if (window.visualViewport) {
     last = key;
     if (keyboardClosed) { clearFit(); return; }
     app.style.height = `${h}px`;
+    app.classList.add('kb-open');
+    app.style.setProperty('--app-h', `${h}px`);
     app.style.transform = top ? `translateY(${top}px)` : '';
   };
   const scheduleFit = () => { if (!raf) raf = requestAnimationFrame(fitViewport); };

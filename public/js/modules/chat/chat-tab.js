@@ -3288,11 +3288,13 @@ export class ChatTab {
   // inmóvil al restaurar un borrador con la pestaña inactiva, lazy-connect
   // PEND-747). En ese caso se deja en 'auto' hasta que haya layout real; se
   // recomputa en focus() al mostrar la pestaña y en el handler de 'input'.
+  // El tope sigue el max-height de CSS (más chico con el teclado abierto).
   _autosize() {
     const el = this.inputEl;
     if (!el) return;
     el.style.height = 'auto';
-    if (el.scrollHeight > 0) el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+    const max = parseFloat(getComputedStyle(el).maxHeight) || 140;
+    if (el.scrollHeight > 0) el.style.height = `${Math.min(el.scrollHeight, max)}px`;
   }
 
   focus() {

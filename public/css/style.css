@@ -3628,9 +3628,10 @@ body.doc-mode .chat-assistant .chat-md .md-bar-num {
   position: relative; /* ancla del popup de comandos slash */
 }
 
-/* Estado en vivo de delegaciones y revisiones, siempre arriba del composer. */
+/* Estado en vivo de delegaciones y revisiones, siempre arriba del composer.
+   Cede espacio en vez de empujar el composer bajo el teclado (reportado 2026-11-10). */
 .chat-live {
-  flex: none; max-height: min(42vh, 430px); overflow: auto;
+  flex: 0 1 auto; min-height: 0; max-height: min(42vh, 430px); overflow: auto;
   display: flex; flex-direction: column; gap: .4rem; padding: .45rem .7rem;
   border-top: 1px solid var(--cwc-border); background: var(--cwc-bg-panel);
 }
@@ -3750,6 +3751,14 @@ body.doc-mode .chat-assistant .chat-md .md-bar-num {
   padding: .4rem .6rem; line-height: 1.4;
 }
 .chat-input:focus { outline: none; border-color: var(--cwc-accent); }
+/* Teclado abierto (#app.kb-open + --app-h los pone fitViewport en main.js):
+   el alto visible es chico, así que la tarjeta en vivo y el textarea se
+   acotan a una fracción de ese alto y el composer no se esconde detrás del
+   teclado; el safe-area inferior sobra porque el teclado tapa esa franja
+   (reportado 2026-11-10). */
+#app.kb-open .chat-live { max-height: min(36vh, calc(var(--app-h, 100dvh) * .28)); }
+#app.kb-open .chat-input { max-height: min(140px, calc(var(--app-h, 100dvh) * .3)); }
+#app.kb-open .chat-composer { padding-bottom: .5rem; }
 /* iOS hace ZOOM automático al enfocar cualquier campo con letra < 16px (el
    .chat-input mide .85rem ≈ 13,6px) y, al cerrar el teclado, el zoom QUEDA:
    fitViewport (main.js) perseguía ese viewport ampliado y la pantalla temblaba
