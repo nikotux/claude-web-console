@@ -201,7 +201,7 @@ export default {
     }
 
     const chatItemKey = (c) => `chat:${c.id}`;
-    const tmuxItemKey = (s) => `tmux:${s.socket}:${s.name}`;
+    const tmuxItemKey = (s) => `tmux:${s.socketName}:${s.name}`;
     const sessionWorldKey = (s) => resolvePlace(s.cwd)?.rel || '__otros';
 
     // El navegador puede emitir un click al terminar el gesto de arrastre. La
@@ -2388,7 +2388,7 @@ export default {
       menu.querySelector('[data-act="adopt"]')?.addEventListener('click', () => act(() => adoptToChat(s)));
       menu.querySelector('[data-act="rename"]').addEventListener('click', () => act(() => rename(s)));
       menu.querySelector('[data-act="model"]').addEventListener('click', () => act(() => pickModel(s)));
-      menu.querySelector('[data-act="movefolder"]').addEventListener('click', () => act(() => moveToFolder(`tmux:${s.socket}:${s.name}`)));
+      menu.querySelector('[data-act="movefolder"]').addEventListener('click', () => act(() => moveToFolder(tmuxItemKey(s))));
       menu.querySelector('[data-act="kill"]').addEventListener('click', () => act(() => kill(s)));
     }
 
