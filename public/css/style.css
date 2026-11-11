@@ -2297,6 +2297,29 @@ html, body {
   flex: 1; overflow-y: auto; padding: .9rem .9rem .5rem;
   display: flex; flex-direction: column; gap: .75rem;
 }
+.chat-jump-bottom {
+  position: absolute; right: 1rem; bottom: .75rem; z-index: 5;
+  display: grid; width: 36px; height: 36px; padding: 0; place-items: center;
+  border: 1px solid var(--cwc-border-strong); border-radius: 50%;
+  background: var(--cwc-bg-elevated); color: var(--cwc-text-secondary);
+  box-shadow: var(--cwc-shadow-md); cursor: pointer;
+  animation: chat-jump-in .16s ease-out;
+}
+.chat-jump-bottom:hover { border-color: var(--cwc-accent); color: var(--cwc-accent); }
+.chat-jump-bottom:focus-visible { outline: 2px solid var(--cwc-accent); outline-offset: 2px; }
+.chat-jump-bottom[hidden] { display: none; }
+.chat-jump-dot {
+  position: absolute; top: 1px; right: 1px; width: 9px; height: 9px;
+  border: 2px solid var(--cwc-bg-elevated); border-radius: 50%;
+  background: var(--cwc-accent);
+}
+@keyframes chat-jump-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-jump-bottom { animation: none; }
+}
 .chat-msg {
   padding: .55rem .75rem; border-radius: var(--cwc-radius-lg);
   font-size: var(--cwc-fs-md); line-height: 1.5; white-space: pre-wrap; word-break: break-word;
@@ -2747,7 +2770,7 @@ html, body {
    siguen siendo hermanos de .chat-view y no se mueven. */
 .chat-body { flex: 1; display: flex; min-height: 0; }
 .chat-main {
-  flex: 1; min-width: 0; min-height: 0;
+  position: relative; flex: 1; min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
 }
 .chat-raw {

@@ -1,6 +1,7 @@
 {
   "chat.common.cancel": "Cancel",
   "chat.common.send": "Send",
+  "chat.jumpBottom": "Jump to the latest and keep following",
   "chat.message.author": "Message from {name}",
   "chat.askq.otherPlaceholder": "Other answer…",
   "chat.askq.assistantQuestion": "Assistant question",

@@ -417,6 +417,11 @@ export class ChatTab {
               <div class="chat-acta-body"></div>
             </details>
             <div class="chat-msgs"></div>
+            <button type="button" class="chat-jump-bottom" hidden
+              title="${t('chat.jumpBottom', 'Ir al final y seguir la conversación')}"
+              aria-label="${t('chat.jumpBottom', 'Ir al final y seguir la conversación')}">
+              ${icon('chevronDown', { size: 18 })}<span class="chat-jump-dot" hidden></span>
+            </button>
           </div>
           <aside class="chat-raw" hidden>
             <header class="chat-raw-head">
@@ -475,18 +480,56 @@ export class ChatTab {
     this.actaAtEl = container.querySelector('.chat-acta-at');
     this.actaStaleEl = container.querySelector('.chat-acta-stale');
     this.msgsEl = container.querySelector('.chat-msgs');
+    this.jumpBtnEl = container.querySelector('.chat-jump-bottom');
+    this._stickBottom = true;
+    this._jumpUnread = false;
+    this._userTouching = false;
+    this._jumpingUntil = 0;
+    this._scrollForce = false;
+    this._onMsgsScroll = () => {
+      if (performance.now() < this._jumpingUntil) return;
+      this._stickBottom = this._isNearMessagesBottom();
+      this._syncJumpBtn();
+    };
+    this._onMsgsWheel = (event) => {
+      if (event.deltaY >= 0) return;
+      this._stickBottom = false;
+      this._syncJumpBtn();
+    };
+    this._onMsgsTouchStart = () => { this._userTouching = true; };
+    this._onMsgsTouchEnd = () => { this._userTouching = false; };
+    this._onMsgsKeydown = (event) => {
+      if (!['PageUp', 'ArrowUp', 'Home'].includes(event.key)) return;
+      this._stickBottom = false;
+      this._syncJumpBtn();
+    };
+    this._onJumpBottom = () => {
+      this._stickBottom = true;
+      this._jumpUnread = false;
+      this._jumpingUntil = performance.now() + 700;
+      this.msgsEl.scrollTo({ top: this.msgsEl.scrollHeight, behavior: 'smooth' });
+      this._syncJumpBtn();
+    };
+    this.msgsEl.addEventListener('scroll', this._onMsgsScroll, { passive: true });
+    this.msgsEl.addEventListener('wheel', this._onMsgsWheel, { passive: true });
+    this.msgsEl.addEventListener('touchstart', this._onMsgsTouchStart, { passive: true });
+    this.msgsEl.addEventListener('touchend', this._onMsgsTouchEnd, { passive: true });
+    this.msgsEl.addEventListener('touchcancel', this._onMsgsTouchEnd, { passive: true });
+    this.msgsEl.addEventListener('keydown', this._onMsgsKeydown);
+    this.jumpBtnEl.addEventListener('click', this._onJumpBottom);
     this.rawEl = container.querySelector('.chat-raw');
     this.rawBodyEl = container.querySelector('.chat-raw-body');
     this.rawTitleEl = container.querySelector('.chat-raw-title');
     container.querySelector('.chat-raw-close').addEventListener('click', () => this._rawClose());
-    // Un diagrama Mermaid renderiza asíncrono (después de que su mensaje ya
-    // está en el DOM) y puede crecer la burbuja — re-anclar abajo, mismo
-    // criterio "siempre pinea al final" que usa _scroll() en todo el resto.
-    this.msgsEl.addEventListener('cwc:mermaid-rendered', () => this._scroll());
+    // Mermaid puede agrandar una burbuja después de pintarla; solo seguimos
+    // abajo si la persona no pausó el seguimiento.
+    this._onMermaidRendered = () => this._scroll();
+    this.msgsEl.addEventListener('cwc:mermaid-rendered', this._onMermaidRendered);
     // Teclado móvil: al abrirse, #app se achica al viewport visible (main.js) y
     // esta lista pierde alto sin mover su scrollTop → los últimos mensajes
     // quedaban tapados. Si ANTES del cambio de alto estábamos al final (medido
-    // con el alto previo, sin depender del orden de eventos), re-anclamos.
+    // con el alto previo, sin depender del orden de eventos), re-anclamos si
+    // la persona todavía sigue el final.
     this._msgsH = this.msgsEl.clientHeight;
     if (typeof ResizeObserver === 'function') {
       this._msgsResizeObs = new ResizeObserver(() => {
@@ -943,6 +986,7 @@ export class ChatTab {
     if (!this.initialPrompt || this._sentInitial || this.isSala === null) return;
     this._sentInitial = true;
     this._send({ type: this.isSala ? 'say' : 'user', text: this.initialPrompt });
+    this._scroll(true);
   }
 
   _submit() {
@@ -958,6 +1002,7 @@ export class ChatTab {
     const reply = this.isSala && this._replyTo ? { ...this._replyTo } : {};
     if (this.isSala) this._send({ type: 'say', text, ...(attachments.length ? { attachments } : {}), ...reply });
     else this._send({ type: 'user', text, ...(attachments.length ? { attachments } : {}) });
+    this._scroll(true);
     if (this.isSala) this._clearReply();
     for (const p of this.pending) { if (p.localUrl) URL.revokeObjectURL(p.localUrl); }
     this.pending = [];
@@ -1211,6 +1256,8 @@ export class ChatTab {
         this._clearTyping();
         this._renderSalaState();
         this.msgsEl.innerHTML = '';
+        this._jumpUnread = false;
+        this._syncJumpBtn();
         // El índice apunta a grupos que acaban de desaparecer del DOM.
         this._toolIndex.clear();
         this._rawClose();
@@ -1228,6 +1275,7 @@ export class ChatTab {
         this._historySayIndex = 0;
         this._historySayTotal = this.isSala ? m.events.filter((ev) => ev?.type === 'say').length : 0;
         for (const ev of m.events) this._onEvent(ev);
+        this._scroll(true);
         this._historyRendering = false;
         this._applyPendingPrompt(m.pendingPrompt);
         if (this.isSala && this._unreadAtOpen === 0) this._lastReadTs = this._lastSayTs;
@@ -3088,14 +3136,39 @@ export class ChatTab {
     }
   }
 
-  _scroll() {
+  _syncJumpBtn() {
+    if (this._stickBottom) this._jumpUnread = false;
+    if (!this.jumpBtnEl) return;
+    this.jumpBtnEl.hidden = this._stickBottom;
+    const dot = this.jumpBtnEl.querySelector('.chat-jump-dot');
+    if (dot) dot.hidden = !this._jumpUnread;
+  }
+
+  _scroll(force = false) {
+    if (force) {
+      this._stickBottom = true;
+      this._jumpUnread = false;
+      this._scrollForce = true;
+      this._syncJumpBtn();
+    } else if (!this._stickBottom || this._userTouching) {
+      this._jumpUnread = true;
+      this._syncJumpBtn();
+      return;
+    }
     // Coalesce: durante el streaming llegan muchos _scroll() por segundo; sin
     // esto cada token forzaría un reflow (lee scrollHeight). Con rAF se hace a
     // lo sumo UNA vez por frame.
     if (this._scrollPending) return;
     this._scrollPending = true;
     requestAnimationFrame(() => {
+      const forced = this._scrollForce;
+      this._scrollForce = false;
       this._scrollPending = false;
+      if (!forced && (!this._stickBottom || this._userTouching)) {
+        this._jumpUnread = true;
+        this._syncJumpBtn();
+        return;
+      }
       this.msgsEl.scrollTop = this.msgsEl.scrollHeight;
     });
   }
@@ -3304,7 +3377,7 @@ export class ChatTab {
     // historial re-renderizado o los eventos llegados en background dejaban la
     // vista arriba de todo al volver a este chat. setActive() nos llama justo
     // DESPUÉS de mostrar el panel, con el layout ya medible.
-    this._scroll();
+    this._scroll(true);
     this._autosize();
     if (this.isSala && this.salaId) {
       this._startPreviewPolling();
@@ -3325,6 +3398,14 @@ export class ChatTab {
     this._clearTyping();
     this._stopPreviewPolling();
     this._msgsResizeObs?.disconnect();
+    this.msgsEl?.removeEventListener('scroll', this._onMsgsScroll);
+    this.msgsEl?.removeEventListener('wheel', this._onMsgsWheel);
+    this.msgsEl?.removeEventListener('touchstart', this._onMsgsTouchStart);
+    this.msgsEl?.removeEventListener('touchend', this._onMsgsTouchEnd);
+    this.msgsEl?.removeEventListener('touchcancel', this._onMsgsTouchEnd);
+    this.msgsEl?.removeEventListener('keydown', this._onMsgsKeydown);
+    this.msgsEl?.removeEventListener('cwc:mermaid-rendered', this._onMermaidRendered);
+    this.jumpBtnEl?.removeEventListener('click', this._onJumpBottom);
     clearTimeout(this._markReadTimer);
     clearTimeout(this.reconnectTimer);
     try { this.ws?.close(); } catch { /* noop */ }
