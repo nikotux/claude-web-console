@@ -3340,8 +3340,6 @@ export class ChatTab {
     const toast = document.createElement('div');
     toast.className = 'hito-toast';
     toast.dataset.kind = milestone.kind;
-    toast.setAttribute('role', 'link');
-    toast.tabIndex = 0;
     toast.innerHTML = `
       <span class="hito-toast-mark">${milestoneGlyph(milestone.kind, { size: 16 })}</span>
       <span class="hito-toast-copy">
@@ -3350,13 +3348,6 @@ export class ChatTab {
       </span>
       <button type="button" class="hito-toast-close" title="${t('chat.prMilestone.close', 'Cerrar')}" aria-label="${t('chat.prMilestone.close', 'Cerrar')}">×</button>
       <span class="hito-toast-drain" aria-hidden="true"></span>`;
-    const open = () => {
-      if (milestone.url) window.open(milestone.url, '_blank', 'noopener');
-    };
-    toast.addEventListener('click', (event) => { if (!event.target.closest('.hito-toast-close')) open(); });
-    toast.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
-    });
     toast.addEventListener('pointerenter', () => this._pausePrMilestone('pointer'));
     toast.addEventListener('pointerleave', () => this._resumePrMilestone('pointer'));
     toast.addEventListener('focusin', () => this._pausePrMilestone('focus'));

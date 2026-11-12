@@ -2118,10 +2118,9 @@ html, body {
   align-items: start; gap: .55rem; overflow: hidden; padding: .65rem .65rem .72rem;
   border: 1px solid color-mix(in srgb, currentColor 38%, var(--cwc-border));
   border-radius: var(--cwc-radius-lg); background: color-mix(in srgb, var(--cwc-bg-elevated) 94%, currentColor 6%);
-  box-shadow: var(--cwc-shadow-md); cursor: pointer; pointer-events: auto;
+  box-shadow: var(--cwc-shadow-md); pointer-events: auto;
 }
 .hito-toast:hover { border-color: color-mix(in srgb, currentColor 58%, var(--cwc-border)); }
-.hito-toast:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .hito-toast-mark {
   display: grid; place-items: center; width: 24px; height: 24px;
   border: 1px solid color-mix(in srgb, currentColor 36%, transparent); border-radius: 50%;
