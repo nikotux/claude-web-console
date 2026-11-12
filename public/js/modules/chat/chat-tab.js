@@ -603,22 +603,30 @@ export class ChatTab {
       const toggle = event.target.closest('[data-live-toggle]');
       if (toggle) {
         const id = toggle.dataset.liveToggle;
-        if (this._liveExpanded.has(id)) this._liveExpanded.delete(id); else this._liveExpanded.add(id);
-        this._renderLive();
+        this._animateLiveCard(`codex:${id}`, () => {
+          if (this._liveExpanded.has(id)) this._liveExpanded.delete(id); else this._liveExpanded.add(id);
+          this._renderLive();
+        });
         return;
       }
       const minimize = event.target.closest('[data-live-minimize]');
       if (minimize) {
-        this._liveMinimized.add(minimize.dataset.liveMinimize);
-        try { sessionStorage.setItem(this._liveMinimizedKey, JSON.stringify([...this._liveMinimized])); } catch { /* noop */ }
-        this._renderLive();
+        const id = minimize.dataset.liveMinimize;
+        this._animateLiveCard(`codex:${id}`, () => {
+          this._liveMinimized.add(id);
+          try { sessionStorage.setItem(this._liveMinimizedKey, JSON.stringify([...this._liveMinimized])); } catch { /* noop */ }
+          this._renderLive();
+        });
         return;
       }
       const restore = event.target.closest('[data-live-restore]');
       if (restore) {
-        this._liveMinimized.delete(restore.dataset.liveRestore);
-        try { sessionStorage.setItem(this._liveMinimizedKey, JSON.stringify([...this._liveMinimized])); } catch { /* noop */ }
-        this._renderLive();
+        const id = restore.dataset.liveRestore;
+        this._animateLiveCard(`codex:${id}`, () => {
+          this._liveMinimized.delete(id);
+          try { sessionStorage.setItem(this._liveMinimizedKey, JSON.stringify([...this._liveMinimized])); } catch { /* noop */ }
+          this._renderLive();
+        });
         return;
       }
       const dismiss = event.target.closest('[data-live-dismiss]');
@@ -3198,6 +3206,37 @@ export class ChatTab {
       }
       this.msgsEl.scrollTop = this.msgsEl.scrollHeight;
     });
+  }
+
+  _animateLiveCard(key, mutate) {
+    const selector = `[data-live-card="${CSS.escape(key)}"]`;
+    const card = this.liveEl.querySelector(selector);
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      || !card || typeof Element.prototype.animate !== 'function') {
+      mutate();
+      return;
+    }
+
+    const from = card.getBoundingClientRect().height;
+    const wasBottom = this._isNearMessagesBottom();
+    mutate();
+    const next = this.liveEl.querySelector(selector);
+    if (!next) return;
+    const to = next.getBoundingClientRect().height;
+    if (Math.abs(to - from) < 2) return;
+
+    const animation = next.animate([
+      { height: `${from}px`, overflow: 'hidden', boxSizing: 'border-box' },
+      { height: `${to}px`, overflow: 'hidden', boxSizing: 'border-box' },
+    ], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    next.querySelectorAll(':scope > :not(.live-mini-bar)').forEach((child) => {
+      child.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: 180, delay: 40, easing: 'ease-out', fill: 'backwards',
+      });
+    });
+    animation.finished.then(() => {
+      if (wasBottom) this._scroll();
+    }).catch(() => {});
   }
 
   _renderLive() {
