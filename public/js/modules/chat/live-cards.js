@@ -52,7 +52,9 @@ function dismissButton(kind, key) {
   return `<button type="button" class="live-dismiss" data-live-dismiss="${escapeHtml(kind)}:${escapeHtml(key)}" aria-label="${escapeHtml(t('chat.live.dismiss', 'Ocultar'))}" title="${escapeHtml(t('chat.live.dismiss', 'Ocultar'))}">×</button>`;
 }
 
-export function renderCodexCard(job, { now = Date.now(), typical = null, expanded = false } = {}) {
+export function renderCodexCard(job, {
+  now = Date.now(), typical = null, expanded = false, minimized = false,
+} = {}) {
   if (!job || typeof job !== 'object') return '';
   const clock = stamp(now) || Date.now();
   const id = String(job.id || '');
@@ -83,30 +85,70 @@ export function renderCodexCard(job, { now = Date.now(), typical = null, expande
 
   const currentIndex = steps.findIndex((step) => step?.done !== true);
   const current = currentIndex >= 0 ? steps[currentIndex] : null;
-  const stepText = total
-    ? t('chat.live.codex.step', 'Va en el paso {n} de {total} — {text}', { n: Math.min(total, done + 1), total, text: plainLiveText(current?.text) })
+  const currentNumber = total ? Math.min(total, done + 1) : 0;
+  const currentText = total
+    ? plainLiveText(current?.text)
     : t('chat.live.codex.noSteps', 'Trabajando (este encargo no trae lista de pasos)');
+  const stepText = total
+    ? t('chat.live.codex.step', 'Va en el paso {n} de {total} — {text}', { n: currentNumber, total, text: currentText })
+    : currentText;
   const typicalText = typical?.medianMs > 0
     ? t('chat.live.codex.typical', ' · la mayoría de los encargos termina en unos {time}', { time: formatLiveDuration(typical.medianMs) })
     : '';
   const staleMs = clock - stamp(job.heartbeatAt);
-  const warnings = [
+  const warningTexts = [
     typical?.p90Ms > 0 && elapsedMs > typical.p90Ms ? t('chat.live.codex.slow', '⚠️ Está tardando más que casi todos los anteriores') : '',
     stamp(job.heartbeatAt) && staleMs > 90_000
       ? t('chat.live.codex.stale', '⚠️ No da señales hace {time}', { time: formatLiveDuration(staleMs) }) : '',
-  ].filter(Boolean).map((text) => `<div class="live-warning">${escapeHtml(text)}</div>`).join('');
-  const lastMessage = progress.lastMessage
-    ? `<div class="live-detail">${escapeHtml(t('chat.live.codex.lastMessage', '💬 Lo último que contó: «{text}»', { text: plainLiveText(progress.lastMessage) }))}</div>` : '';
-  const happening = progress.now?.label
-    ? `<div class="live-detail">${escapeHtml(t('chat.live.codex.now', '▶ En este momento: {text}', { text: plainLiveText(progress.now.label) }))}</div>` : '';
-  const chips = [
-    files === 1
-      ? t('chat.live.codex.filesChipSingular', '📝 Cambió {n} archivo', { n: files })
-      : files ? t('chat.live.codex.filesChip', '📝 Cambió {n} archivos', { n: files }) : '',
-    actions === 1
-      ? t('chat.live.codex.actionsChipSingular', '🔁 Hizo {n} acción', { n: actions })
-      : actions ? t('chat.live.codex.actionsChip', '🔁 Hizo {n} acciones', { n: actions }) : '',
-  ].filter(Boolean).map((text) => `<span class="live-chip">${escapeHtml(text)}</span>`).join('');
+  ].filter(Boolean);
+  const warnings = warningTexts.map((text) => `<div class="live-warning">${escapeHtml(text)}</div>`).join('');
+  const lastMessageText = progress.lastMessage ? plainLiveText(progress.lastMessage) : '';
+  const nowText = progress.now?.label ? plainLiveText(progress.now.label) : '';
+  const lastMessage = lastMessageText
+    ? `<div class="live-detail">${escapeHtml(t('chat.live.codex.lastMessage', '💬 Lo último que contó: «{text}»', { text: lastMessageText }))}</div>` : '';
+  const happening = nowText
+    ? `<div class="live-detail">${escapeHtml(t('chat.live.codex.now', '▶ En este momento: {text}', { text: nowText }))}</div>` : '';
+  const chipItems = [
+    files ? {
+      full: files === 1
+        ? t('chat.live.codex.filesChipSingular', '📝 Cambió {n} archivo', { n: files })
+        : t('chat.live.codex.filesChip', '📝 Cambió {n} archivos', { n: files }),
+      mini: files === 1
+        ? t('chat.live.codex.miniFilesChipSingular', '📝 {n} archivo', { n: files })
+        : t('chat.live.codex.miniFilesChip', '📝 {n} archivos', { n: files }),
+    } : null,
+    actions ? {
+      full: actions === 1
+        ? t('chat.live.codex.actionsChipSingular', '🔁 Hizo {n} acción', { n: actions })
+        : t('chat.live.codex.actionsChip', '🔁 Hizo {n} acciones', { n: actions }),
+      mini: actions === 1
+        ? t('chat.live.codex.miniActionsChipSingular', '🔁 {n} acción', { n: actions })
+        : t('chat.live.codex.miniActionsChip', '🔁 {n} acciones', { n: actions }),
+    } : null,
+  ].filter(Boolean);
+  const chips = chipItems.map((item) => `<span class="live-chip">${escapeHtml(item.full)}</span>`).join('');
+
+  if (minimized) {
+    const miniTypical = typical?.medianMs > 0
+      ? t('chat.live.codex.miniTypical', ' de ~{time}', { time: formatLiveDuration(typical.medianMs) })
+      : '';
+    const miniDuration = duration || formatLiveDuration(0);
+    const miniNowText = nowText || lastMessageText;
+    const miniChips = chipItems.map((item) => `<span class="live-mini-chip">${escapeHtml(item.mini)}</span>`).join('');
+    const miniWarnings = warningTexts.map((text) => `<span class="live-mini-warn">${escapeHtml(text)}</span>`).join('');
+    const miniSub = [
+      miniNowText ? `<span class="live-mini-now">▶ ${escapeHtml(miniNowText)}</span>` : '',
+      miniChips,
+      miniWarnings,
+    ].join('');
+    const pct = total ? Math.max(0, Math.min(100, done / total * 100)) : 0;
+    return `<article class="live-card live-card--running live-card--mini${warningTexts.length ? ' live-card--warn' : ''}" data-live-card="codex:${escapeHtml(id)}">
+      <div class="live-mini-row"><span class="live-pulse" aria-hidden="true"></span><strong>${escapeHtml(t('chat.live.codex.miniTitle', '⚙️ Codex'))}</strong>${total ? `<span class="live-mini-badge">${currentNumber}/${total}</span>` : ''}<span class="live-mini-step">${escapeHtml(currentText)}</span><span class="live-mini-time" data-live-elapsed="codex-mini" data-start="${stamp(job.startedAt)}" data-typical="${Number(typical?.medianMs) || 0}">${escapeHtml(t('chat.live.codex.miniElapsed', '⏱ {time}', { time: miniDuration }) + miniTypical)}</span><button type="button" class="live-restore" data-live-restore="${escapeHtml(id)}" title="${escapeHtml(t('chat.live.codex.restore', 'Restaurar'))}" aria-label="${escapeHtml(t('chat.live.codex.restore', 'Restaurar'))}">⤢</button></div>
+      ${miniSub ? `<div class="live-mini-row live-mini-sub">${miniSub}</div>` : ''}
+      <div class="live-mini-bar${total ? '' : ' is-indeterminate'}"><span style="width:${pct}%"></span></div>
+    </article>`;
+  }
+
   const checklist = steps.map((step, index) => {
     const state = step?.done === true ? 'done' : index === currentIndex ? 'current' : 'pending';
     const mark = state === 'done' ? '✅' : state === 'current' ? '🔄' : '⚪';
@@ -119,7 +161,7 @@ export function renderCodexCard(job, { now = Date.now(), typical = null, expande
     ? `<div class="live-expanded"${expanded ? '' : ' hidden'}>${total ? `<ul class="live-checklist">${checklist}</ul>` : ''}${recent ? `<h4>${escapeHtml(t('chat.live.codex.recent', 'Últimas acciones'))}</h4><ul class="live-recent">${recent}</ul>` : ''}</div>` : '';
 
   return `<article class="live-card live-card--running" data-live-card="codex:${escapeHtml(id)}">
-    <div class="live-card-head"><span class="live-pulse" aria-hidden="true"></span><div><strong>${escapeHtml(t('chat.live.codex.working', '⚙️ Codex está trabajando'))}</strong>${job.label ? `<small>${escapeHtml(job.label)}</small>` : ''}</div></div>
+    <div class="live-card-head"><span class="live-pulse" aria-hidden="true"></span><div><strong>${escapeHtml(t('chat.live.codex.working', '⚙️ Codex está trabajando'))}</strong>${job.label ? `<small>${escapeHtml(job.label)}</small>` : ''}</div><button type="button" class="live-minimize" data-live-minimize="${escapeHtml(id)}" title="${escapeHtml(t('chat.live.codex.minimize', 'Minimizar'))}" aria-label="${escapeHtml(t('chat.live.codex.minimize', 'Minimizar'))}">—</button></div>
     ${progressBar(done, total, !total)}<div class="live-step">${escapeHtml(stepText)}</div>
     ${duration ? `<div class="live-time" data-live-elapsed="codex" data-start="${stamp(job.startedAt)}" data-typical="${Number(typical?.medianMs) || 0}">${escapeHtml(t('chat.live.codex.elapsed', '⏱ Lleva {time}', { time: duration }) + typicalText)}</div>` : ''}${warnings}${lastMessage}${happening}
     ${chips ? `<div class="live-chips">${chips}</div>` : ''}

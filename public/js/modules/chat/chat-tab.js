@@ -341,6 +341,7 @@ export class ChatTab {
     this._codexTypical = null;
     this._prCi = [];
     this._liveExpanded = new Set();
+    this._liveMinimized = new Set();
     this._ciPassedSeen = new Map();
     this._liveDismissed = new Set();
     this._liveTimer = null;
@@ -593,11 +594,30 @@ export class ChatTab {
       const stored = JSON.parse(sessionStorage.getItem(this._liveDismissKey) || '[]');
       if (Array.isArray(stored)) this._liveDismissed = new Set(stored.map(String));
     } catch { /* sessionStorage bloqueado o dato viejo inválido */ }
+    this._liveMinimizedKey = `cwc:chat-live-minimized:${this.id}`;
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(this._liveMinimizedKey) || '[]');
+      if (Array.isArray(stored)) this._liveMinimized = new Set(stored.map(String));
+    } catch { /* sessionStorage bloqueado o dato viejo inválido */ }
     this.liveEl.addEventListener('click', (event) => {
       const toggle = event.target.closest('[data-live-toggle]');
       if (toggle) {
         const id = toggle.dataset.liveToggle;
         if (this._liveExpanded.has(id)) this._liveExpanded.delete(id); else this._liveExpanded.add(id);
+        this._renderLive();
+        return;
+      }
+      const minimize = event.target.closest('[data-live-minimize]');
+      if (minimize) {
+        this._liveMinimized.add(minimize.dataset.liveMinimize);
+        try { sessionStorage.setItem(this._liveMinimizedKey, JSON.stringify([...this._liveMinimized])); } catch { /* noop */ }
+        this._renderLive();
+        return;
+      }
+      const restore = event.target.closest('[data-live-restore]');
+      if (restore) {
+        this._liveMinimized.delete(restore.dataset.liveRestore);
+        try { sessionStorage.setItem(this._liveMinimizedKey, JSON.stringify([...this._liveMinimized])); } catch { /* noop */ }
         this._renderLive();
         return;
       }
@@ -3198,6 +3218,7 @@ export class ChatTab {
       return true;
     }).map((job) => renderCodexCard(job, {
       now: clock, typical: this._codexTypical, expanded: this._liveExpanded.has(String(job.id || '')),
+      minimized: this._liveMinimized.has(String(job.id || '')),
     }));
     const ci = this._prCi.filter((item) => {
       const key = `ci:${item?.number || 0}:${item?.sha || ''}`;
@@ -3248,7 +3269,11 @@ export class ChatTab {
       const start = Number(el.dataset.start) || 0;
       if (!start) continue;
       const duration = formatLiveDuration(clock - start);
-      if (el.dataset.liveElapsed === 'codex') {
+      if (el.dataset.liveElapsed === 'codex-mini') {
+        const median = Number(el.dataset.typical) || 0;
+        const suffix = median ? t('chat.live.codex.miniTypical', ' de ~{time}', { time: formatLiveDuration(median) }) : '';
+        el.textContent = t('chat.live.codex.miniElapsed', '⏱ {time}', { time: duration }) + suffix;
+      } else if (el.dataset.liveElapsed === 'codex') {
         const median = Number(el.dataset.typical) || 0;
         const suffix = median ? t('chat.live.codex.typical', ' · la mayoría de los encargos termina en unos {time}', { time: formatLiveDuration(median) }) : '';
         el.textContent = t('chat.live.codex.elapsed', '⏱ Lleva {time}', { time: duration }) + suffix;

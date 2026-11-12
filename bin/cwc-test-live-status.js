@@ -71,6 +71,49 @@ test('tarjeta Codex usa singular para un archivo y una acción', () => {
   assert.match(finished, /cambió 1 archivo/);
   assert.doesNotMatch(finished, /1 archivos/);
 });
+test('tarjeta Codex completa ofrece minimizar', () => {
+  const html = renderCodexCard(job('full', {
+    progress: { steps: [{ text: 'Implementar', done: false }] },
+  }), { now });
+  assert.match(html, /data-live-minimize="full"/);
+  assert.match(html, /aria-label="Minimizar"/);
+});
+test('tarjeta Codex minimizada muestra avance, actividad y restaurar', () => {
+  const html = renderCodexCard(job('mini', {
+    progress: {
+      steps: [
+        { text: 'Uno', done: true }, { text: 'Dos', done: true }, { text: 'Tres', done: true },
+        { text: 'Escribir estilos', done: false }, { text: 'Probar', done: false }, { text: 'Entregar', done: false },
+      ],
+      now: { label: 'Ajustando la tarjeta' },
+      counts: { files: 2, actions: 5 },
+    },
+  }), { now, minimized: true });
+  assert.match(html, />4\/6</);
+  assert.match(html, /Escribir estilos/);
+  assert.match(html, /▶ Ajustando la tarjeta/);
+  assert.match(html, /data-live-restore="mini"/);
+  assert.match(html, /class="live-mini-bar"><span style="width:50%"><\/span>/);
+  assert.doesNotMatch(html, /Ver los pasos/);
+});
+test('tarjeta Codex minimizada conserva la alerta sin señales', () => {
+  const html = renderCodexCard(job('stale', {
+    heartbeatAt: new Date(now - 91_000).toISOString(),
+    progress: { steps: [{ text: 'Esperar respuesta', done: false }] },
+  }), { now, minimized: true });
+  assert.match(html, /No da señales/);
+  assert.match(html, /live-card--warn/);
+});
+test('tarjeta Codex terminada ignora el estado minimizado', () => {
+  const finished = job('same-finished', {
+    status: 'done', finishedAt: new Date(now).toISOString(),
+    progress: { steps: [{ text: 'Listo', done: true }], counts: { files: 2 } },
+  });
+  assert.equal(
+    renderCodexCard(finished, { now, minimized: true }),
+    renderCodexCard(finished, { now, minimized: false }),
+  );
+});
 test('tarjeta Codex limpia markdown en pasos, mensaje y acciones', () => {
   const html = renderCodexCard(job('markdown', {
     progress: {
