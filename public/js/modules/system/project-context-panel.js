@@ -24,7 +24,7 @@ import { helpBtn } from '../../ui/help.js';
 import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 import { renderDiff } from '../../ui/diff.js';
-import { CHAT_MODEL_OPTIONS, EFFORT_OPTIONS } from '../../ui/models.js';
+import { CHAT_MODEL_OPTIONS, EFFORT_OPTIONS, CODEX_MODEL_OPTIONS } from '../../ui/models.js';
 
 const PROJECTS_API = '/api/projects';
 const BUGFIX_API = '/api/projects/work-context'; // contexto de trabajo conservado en Proyectos
@@ -299,12 +299,22 @@ export function mountProjectContextPanel(el, ctx) {
       };
       return [v, labels[v] || label];
     });
+    const codexEffortOptions = [
+      ['low', t('system.projectContext.effortLow', 'Bajo')],
+      ['medium', t('system.projectContext.effortMedium', 'Medio')],
+      ['high', t('system.projectContext.effortHigh', 'Alto')],
+      ['xhigh', t('system.projectContext.effortVeryHigh', 'Muy alto')],
+      ['max', t('system.projectContext.effortMax', 'Máximo')],
+      ['ultra', t('system.projectContext.effortUltra', 'Ultra')],
+    ];
     bodyEl.innerHTML = `
       <p class="pj-hint">${t('system.projectContext.prefsHint', 'Defaults de tus chats NUEVOS. Un chat que elija modelo explícito igual manda. Vacío = default del sistema.')}</p>
       <div class="bk-list">
         <div class="bk-row"><span class="hp-detail"><b>${t('system.projectContext.modelAutotuxLabel', 'Modelo / AutoTux')}</b></span><span class="bk-actions"><select class="dlg-input" data-pref="defaultModelChoice">${opt(chatModelOptions, prefs.defaultModelChoice, t('system.projectContext.systemAutotuxOption', '— sistema (AutoTux) —'))}</select></span></div>
         <div class="bk-row"><span class="hp-detail"><b>${t('system.projectContext.effortLabel', 'Esfuerzo')}</b></span><span class="bk-actions"><select class="dlg-input" data-pref="defaultEffort">${opt(effortOptions, prefs.defaultEffort, t('system.projectContext.byModelOption', '— según modelo —'))}</select></span></div>
         <div class="bk-row"><span class="hp-detail"><b>${t('system.projectContext.permissionModeLabel', 'Modo de permisos')}</b></span><span class="bk-actions"><select class="dlg-input" data-pref="defaultPermissionMode">${opt(PERM_LABELS, prefs.defaultPermissionMode, t('system.projectContext.systemAskOption', '— sistema (Preguntar) —'))}</select></span></div>
+        <div class="bk-row"><span class="hp-detail"><b>${t('system.projectContext.codexModelLabel', 'Modelo Codex (Tándem)')}</b></span><span class="bk-actions"><select class="dlg-input" data-pref="defaultCodexModel">${opt(CODEX_MODEL_OPTIONS, prefs.defaultCodexModel, t('system.projectContext.systemCodexModelOption', '— sistema (GPT-5.6 Sol) —'))}</select></span></div>
+        <div class="bk-row"><span class="hp-detail"><b>${t('system.projectContext.codexEffortLabel', 'Esfuerzo Codex')}</b></span><span class="bk-actions"><select class="dlg-input" data-pref="defaultCodexEffort">${opt(codexEffortOptions, prefs.defaultCodexEffort, t('system.projectContext.systemCodexEffortOption', '— sistema (Alto) —'))}</select></span></div>
       </div>
       <div class="dlg-actions"><button class="btn" data-ref="savePrefs">${t('system.projectContext.savePrefs', 'Guardar preferencias')}</button></div>
       <p class="hp-empty" data-ref="prefsMsg"></p>`;

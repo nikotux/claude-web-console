@@ -421,6 +421,7 @@ explícita en el picker y como preferencia per-user. Los chats YA existentes
 conservan su modelChoice persistido (no hay migración). Verificado en caliente:
 create sin `model` ⇒ {modelChoice:'tandem', model:'opus', effort:'high',
 tandemCodex:{gpt-5.5, high}}.
+`defaultCodexModel`/`defaultCodexEffort` fijan el ejecutor de los chats Tándem nuevos y al entrar a Tándem sin configuración explícita.
 Tándem exige una credencial Codex DEL DUEÑO en `$HOME/.codex/auth.json`, donde
 el HOME lo resuelve el runner por-usuario. Si falta, el default de creación
 degrada a AutoTux (BUG-1875), y una delegación explícita falla con un mensaje

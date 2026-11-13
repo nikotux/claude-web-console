@@ -1,5 +1,5 @@
 // core/user-prefs.js — preferencias per-user del chat (defaults de modelo/
-// effort/modo de permisos). Persistido en <userDataDir(userId)>/prefs.json,
+// effort/modo de permisos y modelo/esfuerzo Codex de Tándem). Persistido en <userDataDir(userId)>/prefs.json,
 // escritura atómica, lectura best-effort. Lo consume POST /api/chat/create
 // cuando el body NO trae el valor (el body explícito SIEMPRE gana). SP8-5
 // (PLAN-594, DOC-677).
@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
 import { userDataDir } from './user-space.js';
+import { CODEX_MODELS, CODEX_EFFORTS } from '../modules/chat/codex-models.js';
 
 // Enums válidos (espejo de public/js/ui/models.js CHAT_MODEL_OPTIONS/EFFORT_OPTIONS
 // y core/tool-policy.js PERMISSION_MODES). 'auto' en effort = seguir el tier.
@@ -25,6 +26,8 @@ export function readPrefs(userId) {
   if (PREF_MODEL_CHOICES.has(raw.defaultModelChoice)) out.defaultModelChoice = raw.defaultModelChoice;
   if (PREF_EFFORTS.has(raw.defaultEffort)) out.defaultEffort = raw.defaultEffort;
   if (PREF_PERMISSION_MODES.has(raw.defaultPermissionMode)) out.defaultPermissionMode = raw.defaultPermissionMode;
+  if (CODEX_MODELS.has(raw.defaultCodexModel)) out.defaultCodexModel = raw.defaultCodexModel;
+  if (CODEX_EFFORTS.has(raw.defaultCodexEffort)) out.defaultCodexEffort = raw.defaultCodexEffort;
   return out;
 }
 
@@ -44,6 +47,8 @@ export function writePrefs(userId, patch) {
   apply('defaultModelChoice', PREF_MODEL_CHOICES);
   apply('defaultEffort', PREF_EFFORTS);
   apply('defaultPermissionMode', PREF_PERMISSION_MODES);
+  apply('defaultCodexModel', CODEX_MODELS);
+  apply('defaultCodexEffort', CODEX_EFFORTS);
   const p = prefsPath(userId);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   writeJsonAtomic(p, next, { space: 2 });

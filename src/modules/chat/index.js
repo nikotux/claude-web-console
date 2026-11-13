@@ -3658,7 +3658,7 @@ class ChatManager {
     }
   }
 
-  create({ cwd, model, permissionMode, resume = null, title = null, titleLocked = false, ticket = null, learningId = null, limbo = false, owner = null, pendingPrompt = null, startEngine = true }) {
+  create({ cwd, model, permissionMode, resume = null, title = null, titleLocked = false, ticket = null, learningId = null, limbo = false, owner = null, pendingPrompt = null, startEngine = true, tandemCodex = null }) {
     const id = `c${process.pid}-${++this._seq}`;
     // Freshness on-demand del inventario (Fase 3 del sistema nervioso): si el
     // chat es sobre la CONSOLA, regenerá el CENSO VIVO (~/.cwc-data/inventory.md)
@@ -3671,6 +3671,10 @@ class ChatManager {
     // `new Chat` directo y respeta los títulos ya persistidos.
     const base = (title && String(title).trim().slice(0, 60)) || path.basename(cwd) || '~';
     const chat = new Chat({ id, cwd, model, permissionMode, resume, title: uniqueName(base), ticket, learningId });
+    if (tandemCodex && typeof tandemCodex === 'object' && chat.modelChoice === 'tandem') {
+      const cxModel = normalizeCodexModel(tandemCodex.model);
+      chat.tandemCodex = { model: cxModel, effort: normalizeCodexEffort(cxModel, tandemCodex.effort) };
+    }
     chat.titleLocked = !!titleLocked && !!(title && String(title).trim());
     chat.onUpdate = () => this.persist();
     chat._onTolkienEnvNeeded = () => this.provisionTolkienEnvForChat(id);
@@ -4498,6 +4502,10 @@ function createChatForRequest(req, res, body = {}, { pendingPrompt = null, start
     owner,
     pendingPrompt,
     startEngine,
+    // El default per-user de Codex se aplica sólo al crear un chat Tándem.
+    tandemCodex: (modelChoice === 'tandem' && (prefs.defaultCodexModel || prefs.defaultCodexEffort))
+      ? { model: prefs.defaultCodexModel || TANDEM_CODEX_MODEL, effort: prefs.defaultCodexEffort || TANDEM_CODEX_EFFORT }
+      : null,
   });
   // Default de effort per-user: sólo para modelo FIJO (auto/tandem lo manejan solos).
   if (prefs.defaultEffort && prefs.defaultEffort !== 'auto' && modelChoice !== 'auto' && modelChoice !== 'tandem') {
@@ -5048,7 +5056,15 @@ El archivo donde se guardan mis preferencias está en ${preferencesPath}. Cuando
       // reasonerModel,reasonerEffort,codexModel,codexEffort}}. Sin `tandem` usa
       // defaults (retrocompat con el Tándem original opus/high + gpt-5.6-sol/high).
       if (model === 'tandem') {
-        chat.configureTandem(req.body?.tandem && typeof req.body.tandem === 'object' ? req.body.tandem : {});
+        let tandem = req.body?.tandem;
+        if (!tandem || typeof tandem !== 'object') {
+          const prefs = readPrefs(chat.owner);
+          tandem = {
+            codexModel: prefs.defaultCodexModel || TANDEM_CODEX_MODEL,
+            codexEffort: prefs.defaultCodexEffort || TANDEM_CODEX_EFFORT,
+          };
+        }
+        chat.configureTandem(tandem);
         manager.persist();
         return res.json({ ok: true, chat: chat.info() });
       }
