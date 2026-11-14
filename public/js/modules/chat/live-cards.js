@@ -143,7 +143,7 @@ export function renderCodexCard(job, {
     ].join('');
     const pct = total ? Math.max(0, Math.min(100, done / total * 100)) : 0;
     return `<article class="live-card live-card--running live-card--mini${warningTexts.length ? ' live-card--warn' : ''}" data-live-card="codex:${escapeHtml(id)}">
-      <div class="live-mini-row"><span class="live-pulse" aria-hidden="true"></span><strong>${escapeHtml(t('chat.live.codex.miniTitle', '⚙️ Codex'))}</strong>${total ? `<span class="live-mini-badge">${currentNumber}/${total}</span>` : ''}<span class="live-mini-step">${escapeHtml(currentText)}</span><span class="live-mini-time" data-live-elapsed="codex-mini" data-start="${stamp(job.startedAt)}" data-typical="${Number(typical?.medianMs) || 0}">${escapeHtml(t('chat.live.codex.miniElapsed', '⏱ {time}', { time: miniDuration }) + miniTypical)}</span><button type="button" class="live-restore" data-live-restore="${escapeHtml(id)}" title="${escapeHtml(t('chat.live.codex.restore', 'Restaurar'))}" aria-label="${escapeHtml(t('chat.live.codex.restore', 'Restaurar'))}">⤢</button></div>
+      <div class="live-mini-row"><span class="live-pulse" aria-hidden="true"></span><strong>${escapeHtml(t('chat.live.codex.miniTitle', '⚙️ Codex'))}</strong>${total ? `<span class="live-mini-badge">${currentNumber}/${total}</span>` : ''}<span class="live-mini-step">${escapeHtml(currentText)}</span><span class="live-mini-time" data-live-elapsed="codex-mini" data-start="${stamp(job.startedAt)}" data-typical="${Number(typical?.medianMs) || 0}">${escapeHtml(t('chat.live.codex.miniElapsed', '⏱ {time}', { time: miniDuration }) + miniTypical)}</span><button type="button" class="live-restore" data-live-restore="codex:${escapeHtml(id)}" title="${escapeHtml(t('chat.live.codex.restore', 'Restaurar'))}" aria-label="${escapeHtml(t('chat.live.codex.restore', 'Restaurar'))}">⤢</button></div>
       ${miniSub ? `<div class="live-mini-row live-mini-sub">${miniSub}</div>` : ''}
       <div class="live-mini-bar${total ? '' : ' is-indeterminate'}"><span style="width:${pct}%"></span></div>
     </article>`;
@@ -161,7 +161,7 @@ export function renderCodexCard(job, {
     ? `<div class="live-expanded"${expanded ? '' : ' hidden'}>${total ? `<ul class="live-checklist">${checklist}</ul>` : ''}${recent ? `<h4>${escapeHtml(t('chat.live.codex.recent', 'Últimas acciones'))}</h4><ul class="live-recent">${recent}</ul>` : ''}</div>` : '';
 
   return `<article class="live-card live-card--running" data-live-card="codex:${escapeHtml(id)}">
-    <div class="live-card-head"><span class="live-pulse" aria-hidden="true"></span><div><strong>${escapeHtml(t('chat.live.codex.working', '⚙️ Codex está trabajando'))}</strong>${job.label ? `<small>${escapeHtml(job.label)}</small>` : ''}</div><button type="button" class="live-minimize" data-live-minimize="${escapeHtml(id)}" title="${escapeHtml(t('chat.live.codex.minimize', 'Minimizar'))}" aria-label="${escapeHtml(t('chat.live.codex.minimize', 'Minimizar'))}">—</button></div>
+    <div class="live-card-head"><span class="live-pulse" aria-hidden="true"></span><div><strong>${escapeHtml(t('chat.live.codex.working', '⚙️ Codex está trabajando'))}</strong>${job.label ? `<small>${escapeHtml(job.label)}</small>` : ''}</div><button type="button" class="live-minimize" data-live-minimize="codex:${escapeHtml(id)}" title="${escapeHtml(t('chat.live.codex.minimize', 'Minimizar'))}" aria-label="${escapeHtml(t('chat.live.codex.minimize', 'Minimizar'))}">—</button></div>
     ${progressBar(done, total, !total)}<div class="live-step">${escapeHtml(stepText)}</div>
     ${duration ? `<div class="live-time" data-live-elapsed="codex" data-start="${stamp(job.startedAt)}" data-typical="${Number(typical?.medianMs) || 0}">${escapeHtml(t('chat.live.codex.elapsed', '⏱ Lleva {time}', { time: duration }) + typicalText)}</div>` : ''}${warnings}${lastMessage}${happening}
     ${chips ? `<div class="live-chips">${chips}</div>` : ''}
@@ -169,7 +169,7 @@ export function renderCodexCard(job, {
   </article>`;
 }
 
-export function renderCiCard(ci, { now = Date.now() } = {}) {
+export function renderCiCard(ci, { now = Date.now(), minimized = false } = {}) {
   if (!ci || typeof ci !== 'object') return '';
   const clock = stamp(now) || Date.now();
   const number = Number(ci.number) || 0;
@@ -198,8 +198,24 @@ export function renderCiCard(ci, { now = Date.now() } = {}) {
   const readyText = total === 1
     ? t('chat.live.ci.readySingular', '{done} de {total} lista', { done, total })
     : t('chat.live.ci.ready', '{done} de {total} listas', { done, total });
+  if (minimized) {
+    const miniFailed = !failed ? '' : failed === 1
+      ? t('chat.live.ci.miniFailedSingular', '❌ {n} falló: {names}', { n: failed, names: failedNames })
+      : t('chat.live.ci.miniFailed', '❌ {n} fallaron: {names}', { n: failed, names: failedNames });
+    const miniSub = [
+      miniFailed ? `<span class="live-mini-fail">${escapeHtml(miniFailed)}</span>` : '',
+      runningNames ? `<span class="live-mini-now">${escapeHtml(t('chat.live.ci.miniNow', '▶ {names}', { names: runningNames }))}</span>` : '',
+      link,
+    ].join('');
+    const pct = total ? Math.max(0, Math.min(100, done / total * 100)) : 0;
+    return `<article class="live-card live-card--running live-card--mini${failed ? ' live-card--fail' : ''}" data-live-card="ci:${escapeHtml(key)}">
+      <div class="live-mini-row"><span class="live-pulse" aria-hidden="true"></span><strong>${escapeHtml(t('chat.live.ci.miniTitle', '🧪 PR #{number}', { number }))}</strong>${total ? `<span class="live-mini-badge">${done}/${total}</span>` : ''}<span class="live-mini-step">${escapeHtml(t('chat.live.ci.miniStep', 'revisiones listas'))}</span>${duration ? `<span class="live-mini-time" data-live-elapsed="ci-mini" data-start="${stamp(ci.startedAt)}">${escapeHtml(t('chat.live.ci.miniElapsed', '⏱ {time}', { time: duration }))}</span>` : ''}<button type="button" class="live-restore" data-live-restore="ci:${escapeHtml(key)}" title="${escapeHtml(t('chat.live.ci.restore', 'Restaurar'))}" aria-label="${escapeHtml(t('chat.live.ci.restore', 'Restaurar'))}">⤢</button></div>
+      ${miniSub ? `<div class="live-mini-row live-mini-sub">${miniSub}</div>` : ''}
+      <div class="live-mini-bar"><span style="width:${pct}%"></span></div>
+    </article>`;
+  }
   return `<article class="live-card live-card--running" data-live-card="ci:${escapeHtml(key)}">
-    <div class="live-card-head"><div><strong>${escapeHtml(t('chat.live.ci.running', '🧪 Revisiones automáticas del PR #{number}', { number }))}</strong>${ci.title ? `<small>${escapeHtml(ci.title)}</small>` : ''}</div></div>
+    <div class="live-card-head"><div><strong>${escapeHtml(t('chat.live.ci.running', '🧪 Revisiones automáticas del PR #{number}', { number }))}</strong>${ci.title ? `<small>${escapeHtml(ci.title)}</small>` : ''}</div><button type="button" class="live-minimize" data-live-minimize="ci:${escapeHtml(key)}" title="${escapeHtml(t('chat.live.ci.minimize', 'Minimizar'))}" aria-label="${escapeHtml(t('chat.live.ci.minimize', 'Minimizar'))}">—</button></div>
     ${progressBar(done, total)}<div class="live-step">${escapeHtml(readyText + failedText)}</div>
     ${runningNames ? `<div class="live-detail">${escapeHtml(t('chat.live.ci.now', '▶ Corriendo: {names}', { names: runningNames }))}</div>` : ''}
     ${duration ? `<div class="live-time" data-live-elapsed="ci" data-start="${stamp(ci.startedAt)}">${escapeHtml(t('chat.live.ci.elapsed', '⏱ Lleva {time}', { time: duration }))}</div>` : ''}${link}

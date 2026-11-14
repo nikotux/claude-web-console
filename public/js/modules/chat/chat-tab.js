@@ -597,7 +597,12 @@ export class ChatTab {
     this._liveMinimizedKey = `cwc:chat-live-minimized:${this.id}`;
     try {
       const stored = JSON.parse(sessionStorage.getItem(this._liveMinimizedKey) || '[]');
-      if (Array.isArray(stored)) this._liveMinimized = new Set(stored.map(String));
+      if (Array.isArray(stored)) {
+        this._liveMinimized = new Set(stored.map((value) => {
+          const key = String(value);
+          return key.startsWith('codex:') || key.startsWith('ci:') ? key : `codex:${key}`;
+        }));
+      }
     } catch { /* sessionStorage bloqueado o dato viejo inválido */ }
     this.liveEl.addEventListener('click', (event) => {
       const toggle = event.target.closest('[data-live-toggle]');
@@ -611,9 +616,9 @@ export class ChatTab {
       }
       const minimize = event.target.closest('[data-live-minimize]');
       if (minimize) {
-        const id = minimize.dataset.liveMinimize;
-        this._animateLiveCard(`codex:${id}`, () => {
-          this._liveMinimized.add(id);
+        const key = minimize.dataset.liveMinimize;
+        this._animateLiveCard(key, () => {
+          this._liveMinimized.add(key);
           try { sessionStorage.setItem(this._liveMinimizedKey, JSON.stringify([...this._liveMinimized])); } catch { /* noop */ }
           this._renderLive();
         });
@@ -621,9 +626,9 @@ export class ChatTab {
       }
       const restore = event.target.closest('[data-live-restore]');
       if (restore) {
-        const id = restore.dataset.liveRestore;
-        this._animateLiveCard(`codex:${id}`, () => {
-          this._liveMinimized.delete(id);
+        const key = restore.dataset.liveRestore;
+        this._animateLiveCard(key, () => {
+          this._liveMinimized.delete(key);
           try { sessionStorage.setItem(this._liveMinimizedKey, JSON.stringify([...this._liveMinimized])); } catch { /* noop */ }
           this._renderLive();
         });
@@ -3257,7 +3262,7 @@ export class ChatTab {
       return true;
     }).map((job) => renderCodexCard(job, {
       now: clock, typical: this._codexTypical, expanded: this._liveExpanded.has(String(job.id || '')),
-      minimized: this._liveMinimized.has(String(job.id || '')),
+      minimized: this._liveMinimized.has(`codex:${job.id || ''}`),
     }));
     const ci = this._prCi.filter((item) => {
       const key = `ci:${item?.number || 0}:${item?.sha || ''}`;
@@ -3267,7 +3272,9 @@ export class ChatTab {
       const expires = this._ciPassedSeen.get(key) + 120_000;
       nextExpiry = Math.min(nextExpiry, expires);
       return expires > clock;
-    }).map((item) => renderCiCard(item, { now: clock }));
+    }).map((item) => renderCiCard(item, {
+      now: clock, minimized: this._liveMinimized.has(`ci:${item?.number || 0}:${item?.sha || ''}`),
+    }));
     this.liveEl.innerHTML = [...codex, ...ci].join('');
     this.liveEl.hidden = this.liveEl.childElementCount === 0;
     clearTimeout(this._liveExpiryTimer);
@@ -3316,6 +3323,8 @@ export class ChatTab {
         const median = Number(el.dataset.typical) || 0;
         const suffix = median ? t('chat.live.codex.typical', ' · la mayoría de los encargos termina en unos {time}', { time: formatLiveDuration(median) }) : '';
         el.textContent = t('chat.live.codex.elapsed', '⏱ Lleva {time}', { time: duration }) + suffix;
+      } else if (el.dataset.liveElapsed === 'ci-mini') {
+        el.textContent = t('chat.live.ci.miniElapsed', '⏱ {time}', { time: duration });
       } else {
         el.textContent = t('chat.live.ci.elapsed', '⏱ Lleva {time}', { time: duration });
       }

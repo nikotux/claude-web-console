@@ -75,7 +75,7 @@ test('tarjeta Codex completa ofrece minimizar', () => {
   const html = renderCodexCard(job('full', {
     progress: { steps: [{ text: 'Implementar', done: false }] },
   }), { now });
-  assert.match(html, /data-live-minimize="full"/);
+  assert.match(html, /data-live-minimize="codex:full"/);
   assert.match(html, /aria-label="Minimizar"/);
 });
 test('tarjeta Codex minimizada muestra avance, actividad y restaurar', () => {
@@ -92,7 +92,7 @@ test('tarjeta Codex minimizada muestra avance, actividad y restaurar', () => {
   assert.match(html, />4\/6</);
   assert.match(html, /Escribir estilos/);
   assert.match(html, /▶ Ajustando la tarjeta/);
-  assert.match(html, /data-live-restore="mini"/);
+  assert.match(html, /data-live-restore="codex:mini"/);
   assert.match(html, /class="live-mini-bar"><span style="width:50%"><\/span>/);
   assert.doesNotMatch(html, /Ver los pasos/);
 });
@@ -143,6 +143,39 @@ test('tarjeta CI usa singular y plural según los conteos', () => {
     number: 8, state: 'running', total: 5, done: 3, failed: 2, failedNames: ['lint', 'test'],
   }, { now });
   assert.match(runningMany, /3 de 5 listas · 2 fallaron: lint, test/);
+});
+test('tarjeta CI en curso ofrece minimizar con su clave completa', () => {
+  const html = renderCiCard({
+    number: 12, sha: 'abc', state: 'running', total: 5, done: 2,
+  }, { now });
+  assert.match(html, /data-live-minimize="ci:12:abc"/);
+});
+test('tarjeta CI minimizada muestra avance, revisiones activas y restaurar', () => {
+  const html = renderCiCard({
+    number: 12, sha: 'abc', state: 'running', total: 5, done: 2,
+    running: ['lint', 'test'], url: 'https://github.com/acme/repo/pull/12',
+    startedAt: new Date(now - 60_000).toISOString(),
+  }, { now, minimized: true });
+  assert.match(html, />2\/5</);
+  assert.match(html, /▶ lint, test/);
+  assert.match(html, /data-live-restore="ci:12:abc"/);
+  assert.match(html, /class="live-mini-bar"><span style="width:40%"><\/span>/);
+});
+test('tarjeta CI minimizada resalta revisiones fallidas', () => {
+  const html = renderCiCard({
+    number: 12, sha: 'abc', state: 'running', total: 5, done: 2, failed: 1,
+    failedNames: ['lint'], url: 'https://github.com/acme/repo/pull/12',
+  }, { now, minimized: true });
+  assert.match(html, /live-card--fail/);
+  assert.match(html, /❌ 1 falló: lint/);
+});
+test('tarjetas CI finalizadas ignoran el estado minimizado', () => {
+  for (const ci of [
+    { number: 12, sha: 'abc', state: 'passed', total: 5, done: 5 },
+    { number: 12, sha: 'abc', state: 'failed', total: 5, done: 5, failed: 1, failedNames: ['lint'] },
+  ]) {
+    assert.equal(renderCiCard(ci, { now, minimized: true }), renderCiCard(ci, { now, minimized: false }));
+  }
 });
 test('un minuto conserva el formato compacto', () => {
   assert.equal(formatLiveDuration(60_000), '1 min');
