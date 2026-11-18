@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './core/config.js';
 import { waitForZeroTier } from './core/zerotier.js';
-import { ensureCert } from './core/tls.js';
+import { ensureCert, caCertPath } from './core/tls.js';
 import {
   isAuthenticated, isAdmin, principalOf, tokenMatches, COOKIE_NAME,
   createSession, destroySession, sessionIdOf, SESSION_COOKIE,
@@ -222,6 +222,19 @@ async function main() {
   // también el splash de index.html (que es post-auth) sin ruta extra.
   app.get('/img/mordor-logo.png', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'img', 'mordor-logo.png')));
   app.get('/img/mordor-iso.png', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'img', 'mordor-iso.png')));
+  app.get('/img/app-192.png', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'img', 'app-192.png')));
+  app.get('/img/app-512.png', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'img', 'app-512.png')));
+  app.get('/img/apple-touch-icon.png', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'img', 'apple-touch-icon.png')));
+  app.get('/manifest.webmanifest', (req, res) => {
+    res.type('application/manifest+json');
+    res.sendFile(path.join(PUBLIC_DIR, 'manifest.webmanifest'));
+  });
+  // Sólo el certificado público de la CA: nunca exponer sus claves privadas.
+  app.get('/consola-ca.crt', (req, res) => {
+    res.setHeader('Content-Type', 'application/x-x509-ca-cert');
+    res.setHeader('Content-Disposition', 'attachment; filename="claude-web-console-ca.crt"');
+    res.sendFile(caCertPath());
+  });
 
   // Onboarding PÚBLICO (SP7): un usuario nuevo no tiene cuenta — estos endpoints
   // se gatean por el TOKEN de invitación, no por login. Montados ANTES del gate.
@@ -385,8 +398,8 @@ async function main() {
   const ctx = { config };
   registerModules({ app, apiRouter, wss, ctx });
 
-  // HTTPS con cert self-signed atado a la IP ZeroTier (contexto seguro para el
-  // portapapeles del navegador). El WebSocket viaja por wss sobre el mismo server.
+  // HTTPS con hoja renovable y CA local limitada a ZeroTier y localhost.
+  // El WebSocket viaja por wss sobre el mismo server, con la cadena completa.
   const { key, cert } = ensureCert(ip);
   const tlsOptions = { key, cert };
   const server = https.createServer(tlsOptions, app);

@@ -10,6 +10,7 @@
 //      ~/.cwc-data/health.json.
 //      GET /api/health/review · POST /api/health/review (admin)
 import express from 'express';
+import crypto from 'node:crypto';
 import fss from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -353,9 +354,11 @@ function checkClaudeCred() {
 
 function checkCert() {
   try {
-    const st = fss.statSync(path.join(ROOT, 'certs', 'cert.pem'));
-    const days = Math.round((Date.now() - st.mtimeMs) / 86400000);
-    return { id: 'cert', label: 'Certificado TLS', status: 'ok', detail: `generado hace ${days} día(s) (se regenera solo si cambia la IP)` };
+    const cert = new crypto.X509Certificate(fss.readFileSync(path.join(ROOT, 'certs', 'cert.pem')));
+    const remaining = (Date.parse(cert.validTo) - Date.now()) / 86400000;
+    const days = Math.floor(remaining);
+    return { id: 'cert', label: 'Certificado TLS', status: remaining < 30 ? 'warn' : 'ok',
+      detail: `la hoja vence en ${days} día(s)${remaining < 30 ? ' (se renueva solo al reiniciar el servicio)' : ''}` };
   } catch {
     return { id: 'cert', label: 'Certificado TLS', status: 'warn', detail: 'certs/cert.pem no existe todavía (se genera al arrancar)' };
   }

@@ -7,6 +7,9 @@ let pushActive = false;
 let swOk = false;
 let initialized = false;
 let polling = false;
+let cachedRegistration = null;
+let cachedVapidKey = null;
+let prefetching = null;
 const observed = new Map();
 const notified = new Set();
 const enabledHere = () => localStorage.getItem(PREF) === 'on';
@@ -27,13 +30,29 @@ async function request(action, body) {
 
 async function registration() {
   if (!('serviceWorker' in navigator)) return null;
+  const existing = await navigator.serviceWorker.getRegistration('/');
+  if (existing) return (cachedRegistration = existing);
   let timer;
   try {
-    return await Promise.race([
+    const reg = await Promise.race([
       navigator.serviceWorker.ready,
       new Promise((resolve) => { timer = setTimeout(() => resolve(null), 5000); }),
     ]);
+    if (reg) cachedRegistration = reg;
+    return reg;
   } finally { clearTimeout(timer); }
+}
+
+// Preparar todo antes del clic: Safari necesita subscribe dentro del gesto.
+function prefetchPush() {
+  if (prefetching) return prefetching;
+  prefetching = Promise.allSettled([
+    registration().then((reg) => { swOk = !!reg; }),
+    cachedVapidKey ? Promise.resolve() : request('vapid-key').then(({ key }) => {
+      cachedVapidKey = urlBase64ToUint8Array(key);
+    }),
+  ]).finally(() => { prefetching = null; });
+  return prefetching;
 }
 
 function urlBase64ToUint8Array(value) {
@@ -42,6 +61,7 @@ function urlBase64ToUint8Array(value) {
 }
 
 export async function status() {
+  await prefetchPush();
   const permission = supported() ? Notification.permission : 'unsupported';
   if (permission !== 'granted') pushActive = false;
   else {
@@ -59,20 +79,36 @@ export async function status() {
 
 export async function enable() {
   if (!supported()) return { mode: 'unsupported' };
-  const permission = await Notification.requestPermission();
-  if (permission !== 'granted') {
-    localStorage.setItem(PREF, 'off');
-    return { mode: 'denied' };
+  let sub;
+  if (cachedRegistration?.pushManager && cachedVapidKey) {
+    try {
+      // Primera operación asíncrona: el permiso lo pide subscribe implícitamente.
+      sub = await cachedRegistration.pushManager.subscribe({
+        userVisibleOnly: true, applicationServerKey: cachedVapidKey,
+      });
+    } catch { /* Sin caché utilizable o permiso: seguir con el respaldo habitual. */ }
+  }
+  if (!sub) {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      localStorage.setItem(PREF, 'off');
+      return { mode: 'denied' };
+    }
   }
   localStorage.setItem(PREF, 'on');
   try {
-    const reg = await registration();
-    swOk = !!reg;
-    if (!reg?.pushManager) throw new Error('service-worker');
-    const { key } = await request('vapid-key');
-    const sub = await reg.pushManager.getSubscription() || await reg.pushManager.subscribe({
-      userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key),
-    });
+    if (!sub) {
+      const reg = await registration();
+      swOk = !!reg;
+      if (!reg?.pushManager) throw new Error('service-worker');
+      if (!cachedVapidKey) {
+        const { key } = await request('vapid-key');
+        cachedVapidKey = urlBase64ToUint8Array(key);
+      }
+      sub = await reg.pushManager.getSubscription() || await reg.pushManager.subscribe({
+        userVisibleOnly: true, applicationServerKey: cachedVapidKey,
+      });
+    }
     await request('subscribe', { subscription: sub.toJSON() });
     pushActive = true;
     return { mode: 'push' };
@@ -97,7 +133,7 @@ export async function disable() {
 
 function localNotification(body, chatId) {
   const notification = new Notification(t('system.projectContext.pushTitle', '🎾 La pelota es tuya'), {
-    body, tag: chatId ? `pelota-${chatId}` : 'pelota-test',
+    body, tag: chatId ? `pelota-${chatId}` : 'pelota-test', icon: '/img/app-192.png',
   });
   notification.onclick = () => {
     notification.close();
@@ -146,8 +182,10 @@ async function poll() {
 }
 
 export function initPelotaNotify() {
-  if (initialized || new URLSearchParams(location.search).has('solo')) return;
+  if (initialized) return;
   initialized = true;
+  void prefetchPush();
+  if (new URLSearchParams(location.search).has('solo')) return;
   setInterval(poll, 15000);
   void poll();
 }

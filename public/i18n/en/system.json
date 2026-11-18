@@ -1314,6 +1314,7 @@
   "system.projectContext.hooksDialogTitle": "Hooks",
   "system.projectContext.pelotaNotifyLabel": "🔔 Notify me when the ball is mine",
   "system.projectContext.pushTest": "Test",
+  "system.projectContext.downloadCert": "Download certificate",
   "system.projectContext.pushUnsupported": "Not supported in this browser",
   "system.projectContext.pushDenied": "❌ Blocked in your browser: enable notifications using the address bar padlock",
   "system.projectContext.pushOff": "Notifications disabled in this browser",

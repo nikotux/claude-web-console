@@ -21,6 +21,7 @@ self.addEventListener('push', (e) => {
     const url = target.origin === self.location.origin ? target.href : '/';
     await self.registration.showNotification(data.title, {
       body: data.body || '', tag: data.tag || 'pelota', renotify: true, data: { url },
+      icon: '/img/app-192.png', badge: '/img/app-192.png',
     });
   })());
 });

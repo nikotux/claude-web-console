@@ -222,7 +222,7 @@ Las 4 familias están blindadas como invariantes en `src/modules/health/invarian
 
 ## NO MODIFICAR (generado o estado de runtime)
 
-**En el repo:** `node_modules/`, `package-lock.json` (solo vía npm) · `certs/` (self-signed autogenerado) · `users.json`, `sessions.json` (auth, perms 600), `recents.json`, `titles.json`, `session-owners.json` (dueño de cada sesión tmux, para la rehidratación multi-tenant) · `.env` (config del usuario — solo el usuario).
+**En el repo:** `node_modules/`, `package-lock.json` (solo vía npm) · `certs/` (CA local + hoja TLS autogeneradas) · `users.json`, `sessions.json` (auth, perms 600), `recents.json`, `titles.json`, `session-owners.json` (dueño de cada sesión tmux, para la rehidratación multi-tenant) · `.env` (config del usuario — solo el usuario).
 
 **Fuera del repo:** `~/.cwc-data/` (estado de runtime de TODOS los módulos: chats, cachés, jobs de runners, snapshots, locks y logs) · `~/.cwc-backups/` · `~/.cwc-trash/` · `~/.cwc-state/` (observador — OJO: `claude-state.js` PODA todo `.json` de ahí sin `ts` fresco; nunca guardes ahí nada ajeno al observador).
 
@@ -235,6 +235,9 @@ El detalle histórico completo — archivo por archivo, con formato y política 
 Notificaciones de pelota: `~/.cwc-data/vapid.json` guarda las claves VAPID
 globales del host (lazy, modo 0600); `<userDataDir>/push-subscriptions.json`
 guarda las suscripciones privadas de cada usuario (hasta 10, poda de 404/410).
+TLS usa dos niveles: CA local restringida a la IP ZeroTier y localhost, instalable
+desde `/consola-ca.crt`; hoja de 397 días renovada al arrancar si le quedan
+menos de 30 días. Al migrar a v3 o cambiar la IP hay que instalar la nueva CA.
 
 ## Librería `tickets/` (módulo archivado 2026-10-28)
 

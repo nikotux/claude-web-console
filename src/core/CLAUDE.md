@@ -39,7 +39,11 @@ el diseño final mueve la adopción a la consola del sponsor, porque cada quien
 decide a quién presta su llave. Riesgo aceptado explícitamente por Nico el 2026-08-29: el
 patrocinado puede leer el token prestado desde `/proc/self/environ` usando Bash;
 se acepta por confianza, como la Ley 5 de Aduana, sin recortar Bash ni
-`bypassPermissions`) · wss · registry · tls ·
+`bypassPermissions`) · wss · registry ·
+tls(CA local de 10 años con nameConstraints para ZeroTier y localhost,
+instalable en /consola-ca.crt; hoja de 397 días renovada al arrancar si faltan
+menos de 30 días, cadena hoja + CA; v3 migra con backups y sólo cambia la CA
+si falta, cambia la IP o la versión; claves 0600) ·
 zerotier · tmux(validación) ·
 trash(papelera POR ROOT/DUEÑO, sin `config`: `moveToTrash(root, absPath,
 originalRel, owner)` · `listTrash(root, {owner, all})` ·
