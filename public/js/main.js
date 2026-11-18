@@ -867,8 +867,11 @@ if (isMobile()) {
 // deploy (ver public/sw.js + la ruta /sw.js del server). Registro
 // no-bloqueante y best-effort: si falla, la app funciona igual sin caché.
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
+  // El top-level await puede hacer que load ya haya pasado al llegar acá.
+  const registerServiceWorker = () => {
     navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
       .catch((err) => console.warn('[sw] no se pudo registrar', err));
-  });
+  };
+  if (document.readyState === 'complete') registerServiceWorker();
+  else window.addEventListener('load', registerServiceWorker, { once: true });
 }

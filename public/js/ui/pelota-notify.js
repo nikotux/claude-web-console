@@ -32,6 +32,10 @@ async function registration() {
   if (!('serviceWorker' in navigator)) return null;
   const existing = await navigator.serviceWorker.getRegistration('/');
   if (existing) return (cachedRegistration = existing);
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
+    if (reg) return (cachedRegistration = reg);
+  } catch { /* Si el registro falla, esperar al worker disponible con timeout. */ }
   let timer;
   try {
     const reg = await Promise.race([
