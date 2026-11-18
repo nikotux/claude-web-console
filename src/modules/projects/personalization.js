@@ -8,6 +8,7 @@ import { systemScopeFor } from '../../core/system-scope.js';
 import { hostUser, userClaudeDir, userGlobalClaudePath } from '../../core/user-space.js';
 import { readHooksState, setHookEnabled } from '../../core/user-hooks.js';
 import { readPrefs, writePrefs } from '../../core/user-prefs.js';
+import { vapidPublicKey, addSubscription, removeSubscription, hasSubscription, sendPushToUser } from '../../core/web-push.js';
 import {
   listSectionsOfFile, readSectionOfFile, writeSectionOfFile, readTextFile, hashOf,
 } from './memory.js';
@@ -49,6 +50,40 @@ export function pickIdentity(body) {
 }
 
 export function mountPersonalization(r) {
+  // Suscripciones del principal autenticado; nunca aceptar un dueño del cliente.
+  r.get('/me/push/vapid-key', (req, res) => {
+    try { uidOf(req); res.json({ key: vapidPublicKey() }); }
+    catch (e) { res.status(statusFor(e, 500)).json({ error: messageFor(e, 'No se pudo leer la clave push.') }); }
+  });
+  for (const action of ['subscribe', 'unsubscribe', 'status']) {
+    r.post(`/me/push/${action}`, (req, res) => {
+      try {
+        const owner = uidOf(req);
+        if (action === 'subscribe') addSubscription(owner, req.body?.subscription, req.get('user-agent'));
+        else {
+          const endpoint = req.body?.endpoint;
+          if (typeof endpoint !== 'string' || !endpoint.startsWith('https://') || endpoint.length > 4096) {
+            return res.status(400).json({ error: 'Endpoint push inválido.' });
+          }
+          if (action === 'status') return res.json({ subscribed: hasSubscription(owner, endpoint) });
+          removeSubscription(owner, endpoint);
+        }
+        res.json({ ok: true });
+      } catch (e) {
+        res.status(statusFor(e, e.badRequest ? 400 : 500)).json({ error: messageFor(e, 'No se pudo actualizar push.') });
+      }
+    });
+  }
+  r.post('/me/push/test', async (req, res) => {
+    try {
+      const sent = await sendPushToUser(uidOf(req), {
+        type: 'test', title: '🎾 La pelota es tuya', body: 'Las notificaciones push funcionan.',
+        url: '/', tag: 'pelota-test',
+      });
+      res.json({ ok: true, sent });
+    } catch (e) { res.status(statusFor(e, 500)).json({ error: messageFor(e, 'No se pudo probar push.') }); }
+  });
+
   // ── CLAUDE.md GLOBAL per-user, editable por secciones (SP8-3, el corazón) ──
   r.get('/me/global/sections', (req, res) => {
     try { res.json(listSectionsOfFile(userGlobalClaudePath(uidOf(req)))); }

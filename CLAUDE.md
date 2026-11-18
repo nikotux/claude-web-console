@@ -232,6 +232,10 @@ Qué archivo de `~/.cwc-data/` escribe cada módulo, con su formato y su políti
 
 El detalle histórico completo — archivo por archivo, con formato y política de poda — quedó en `docs/runtime-datos.md`.
 
+Notificaciones de pelota: `~/.cwc-data/vapid.json` guarda las claves VAPID
+globales del host (lazy, modo 0600); `<userDataDir>/push-subscriptions.json`
+guarda las suscripciones privadas de cada usuario (hasta 10, poda de 404/410).
+
 ## Librería `tickets/` (módulo archivado 2026-10-28)
 
 Tickets & Features v2 fue ARCHIVADO el 2026-10-28 (`console:PLAN-3480`, decisión de Nico), como antes Bugs v1.

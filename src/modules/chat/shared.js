@@ -33,6 +33,19 @@ export function parsePelota(text) {
   return null;
 }
 
+// Acción de la última línea de pelota, sin adornos iniciales del protocolo.
+export function pelotaAction(text) {
+  if (typeof text !== 'string') return '';
+  const lines = text.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (parsePelota(lines[i]) === null) continue;
+    const match = lines[i].match(/\bPelota\*{0,2}\s*:\s*\*{0,2}\s*TUYA\b(.*)$/i);
+    if (!match) return '';
+    return match[1].replace(/^[\s\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Modifier}\uFE0F\u200D*_:—–\-#>`]+/u, '').trim().slice(0, 140);
+  }
+  return '';
+}
+
 // Solo «nadie» acorta la espera; los demás casos conservan 45 min.
 // Los consumidores deben impedir el sueño mientras el motor esté working;
 // con OTRO, runner y server además retienen mediante holdsForOtro.

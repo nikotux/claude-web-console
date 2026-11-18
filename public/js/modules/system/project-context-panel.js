@@ -25,6 +25,7 @@ import { t } from '../../ui/i18n.js';
 import { pacman } from '../../ui/pacman.js';
 import { renderDiff } from '../../ui/diff.js';
 import { CHAT_MODEL_OPTIONS, EFFORT_OPTIONS, CODEX_MODEL_OPTIONS } from '../../ui/models.js';
+import * as pelotaNotify from '../../ui/pelota-notify.js';
 
 const PROJECTS_API = '/api/projects';
 const BUGFIX_API = '/api/projects/work-context'; // contexto de trabajo conservado en Proyectos
@@ -315,9 +316,53 @@ export function mountProjectContextPanel(el, ctx) {
         <div class="bk-row"><span class="hp-detail"><b>${t('system.projectContext.permissionModeLabel', 'Modo de permisos')}</b></span><span class="bk-actions"><select class="dlg-input" data-pref="defaultPermissionMode">${opt(PERM_LABELS, prefs.defaultPermissionMode, t('system.projectContext.systemAskOption', '— sistema (Preguntar) —'))}</select></span></div>
         <div class="bk-row"><span class="hp-detail"><b>${t('system.projectContext.codexModelLabel', 'Modelo Codex (Tándem)')}</b></span><span class="bk-actions"><select class="dlg-input" data-pref="defaultCodexModel">${opt(CODEX_MODEL_OPTIONS, prefs.defaultCodexModel, t('system.projectContext.systemCodexModelOption', '— sistema (GPT-5.6 Sol) —'))}</select></span></div>
         <div class="bk-row"><span class="hp-detail"><b>${t('system.projectContext.codexEffortLabel', 'Esfuerzo Codex')}</b></span><span class="bk-actions"><select class="dlg-input" data-pref="defaultCodexEffort">${opt(codexEffortOptions, prefs.defaultCodexEffort, t('system.projectContext.systemCodexEffortOption', '— sistema (Alto) —'))}</select></span></div>
+        <div class="bk-row"><span class="hp-detail"><b>${t('system.projectContext.pelotaNotifyLabel', '🔔 Avisarme cuando la pelota sea mía')}</b><br><span class="hp-sev" data-ref="pushStatus" role="status"></span></span><span class="bk-actions"><button class="btn-ghost btn--sm" data-ref="pushToggle" disabled>${t('system.projectContext.enable', 'Activar')}</button><button class="btn-ghost btn--sm" data-ref="pushTest" disabled>${t('system.projectContext.pushTest', 'Probar')}</button></span></div>
       </div>
       <div class="dlg-actions"><button class="btn" data-ref="savePrefs">${t('system.projectContext.savePrefs', 'Guardar preferencias')}</button></div>
       <p class="hp-empty" data-ref="prefsMsg"></p>`;
+    const pushToggle = bodyEl.querySelector('[data-ref="pushToggle"]');
+    const pushTest = bodyEl.querySelector('[data-ref="pushTest"]');
+    const pushStatus = bodyEl.querySelector('[data-ref="pushStatus"]');
+    let pushState;
+    const renderPush = (state) => {
+      if (!alive || !bodyEl.contains(pushToggle)) return;
+      pushState = state;
+      pushToggle.textContent = state.enabled
+        ? t('system.projectContext.disable', 'Desactivar') : t('system.projectContext.enable', 'Activar');
+      pushToggle.disabled = state.mode === 'unsupported';
+      pushTest.disabled = !state.enabled || state.permission !== 'granted';
+      pushStatus.textContent = state.mode === 'unsupported'
+        ? t('system.projectContext.pushUnsupported', 'No soportado en este navegador')
+        : state.permission === 'denied'
+          ? t('system.projectContext.pushDenied', '❌ Bloqueadas en el navegador: habilitalas en el candado de la barra de direcciones')
+          : !state.enabled
+            ? t('system.projectContext.pushOff', 'Notificaciones desactivadas en este navegador')
+            : state.mode === 'push'
+              ? t('system.projectContext.pushActive', '✅ Push activo (llega aunque cierres la consola)')
+              : state.swOk
+                ? t('system.projectContext.pushLocal', '🟡 Solo con la consola abierta: no se pudo activar push en este navegador')
+                : t('system.projectContext.pushNoSw', '🟡 Solo con la consola abierta: este navegador no aceptó el service worker — suele ser porque el certificado HTTPS no está instalado como confiable');
+    };
+    pushToggle.addEventListener('click', async () => {
+      pushToggle.disabled = true;
+      pushTest.disabled = true;
+      try {
+        // enable pide permiso inmediatamente dentro del click, antes de consultar red.
+        if (pushState?.enabled) await pelotaNotify.disable();
+        else await pelotaNotify.enable();
+        renderPush(await pelotaNotify.status());
+      } catch (err) {
+        renderPush(await pelotaNotify.status());
+        pushStatus.textContent = err.message || t('system.projectContext.changeFailed', 'No se pudo cambiar.');
+      }
+    });
+    pushTest.addEventListener('click', async () => {
+      pushTest.disabled = true;
+      try { await pelotaNotify.test(); }
+      catch (err) { pushStatus.textContent = err.message || t('system.projectContext.changeFailed', 'No se pudo cambiar.'); }
+      finally { pushTest.disabled = !pushState?.enabled || pushState?.permission !== 'granted'; }
+    });
+    void pelotaNotify.status().then(renderPush);
     bodyEl.querySelector('[data-ref="savePrefs"]').addEventListener('click', async (e) => {
       const btn = e.currentTarget; btn.disabled = true;
       const patch = {};

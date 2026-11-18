@@ -10,6 +10,12 @@ con ~/.cwc-data/instance.json como default retrocompatible del host;
 autogenerado; caché POR ARCHIVO para no cruzar principales; DEFAULTS genéricos
 vacíos (los valores reales viven en instance.json), deepMerge por union de
 claves — ver módulo env-vars) ·
+web-push(VAPID global lazy en ~/.cwc-data/vapid.json, modo 0600;
+suscripciones por usuario en userDataDir/push-subscriptions.json, hasta 10
+endpoints; sendPushToUser hace un envío puntual best-effort con TTL 3600 y
+urgencia alta, elimina 404/410 sin exponer endpoints ni claves en logs.
+Lo usan personalización /me/push y chat al cerrar con pelota TUYA; el
+frontend ofrece push por service worker y respaldo Notification local) ·
 auth(sessions.json se persiste atómicamente con modo 0600; los errores de
 lectura distintos de ENOENT se loguean) ·
 onboard-tokens(un token `revoked` nunca valida; en server.js `loginFails` poda

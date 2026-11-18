@@ -9,6 +9,7 @@ import { modelColor } from './ui/models.js';
 import { openModal, confirmDialog, promptDialog, alertDialog, textEditorDialog } from './ui/dialog.js';
 import { initPermCenter } from './ui/perm-center.js';
 import { initInterfonoCenter } from './ui/interfono-center.js';
+import { initPelotaNotify } from './ui/pelota-notify.js';
 import { initI18n, applyI18n, t } from './ui/i18n.js';
 import { bindHelp, helpBtn, openHelpIndex } from './ui/help.js';
 import { allowModule } from './ui/profile.js';
@@ -39,6 +40,7 @@ const terminalsEl = document.getElementById('terminals');
 // en vez de una página aparte, para que no haya dos vistas que mantener.
 const SOLO_ID = new URLSearchParams(location.search).get('solo') || null;
 if (SOLO_ID) document.body.classList.add('cwc-solo');
+initPelotaNotify();
 
 const tabs = new Map(); // id -> { tab, tabButton, pane, flag, session }
 let activeId = null;
@@ -86,6 +88,8 @@ function syncRailMilestone(entry, badge) {
 
 function setActive(id) {
   activeId = id;
+  // El SW puede saber qué conversación se está mirando sin consultar la página.
+  history.replaceState(null, '', `${location.pathname}${location.search}#chat=${encodeURIComponent(id)}`);
   for (const [tid, entry] of tabs) {
     const on = tid === id;
     entry.pane.classList.toggle('active', on);
@@ -838,7 +842,7 @@ if (isMobile()) {
     const focus = new URLSearchParams(location.search).get('focus');
     const initial = (focus && tabs.has(focus)) ? focus : ([...tabs.keys()].pop() || null);
     if (initial) setActive(initial);
-    if (focus) history.replaceState(null, '', '/');
+    if (focus) history.replaceState(null, '', `/${location.hash}`);
     if (!live.length && !chats.length) bus.dispatchEvent(new Event('open-launcher'));
     // Si el tab ACTIVO es un chat, esperar a que su historial esté renderizado
     // DE VERDAD (promesa `ready` del ChatTab, resuelta al procesar el primer

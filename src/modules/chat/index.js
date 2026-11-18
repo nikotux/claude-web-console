@@ -85,6 +85,7 @@ setTicketClaudeDirResolver((owner) => userClaudeDir(owner || hostUser()));
 import { appendChatContext as appendLearningChatContext } from '../learning/store.js';
 import { projectsFor } from '../projects/index.js';
 import { queueRetroDistill } from '../retro/server-shared.js';
+import { sendPushToUser } from '../../core/web-push.js';
 import { sessionIdForCwd } from '../../core/claude-state.js';
 import { classifySignal, signalToMove, turnOverride, decideBase, insufficiencyEscalation, idleDecayMove, clampLevel, logDecision, logTurn, readTurnMetrics, analyzeCalibration, learnedSignalBias, MODEL_LEVELS, FORBIDDEN_AUTO, EFFORT_LEVELS, effortForModel, effortForLevel, effortIdx, decideUpAxis, decideDownAxis, AUTO_EFFORT_MAX_IDX, readWindowPressure, WINDOW_PRESSURE_CONSERVE, levelsFor } from '../../core/model-router.js';
 import { generateInventory, ROOT as CONSOLE_ROOT } from '../../core/inventory.js';
@@ -93,7 +94,7 @@ import { ENVS_DIR, envIdForChat, dbNameFor, allocatePort, atCap, saveEnv, patchE
 import { createWorktree, spawnEnvProvision, reattachEnvs, reapEnvs, reconcileEnvLiveness } from '../tolkien/env-shared.js';
 import {
   UUID_RE, PERMISSION_MODES, PERMISSION_TIMEOUT_MS, SLEEP_MS, BG_MAX_HOLD_MS, HISTORY_MAX, CHATS_DIR,
-  trim, toolSummary, toolDetail, resultText, parsePelota, sleepThresholdMs, holdsForOtro,
+  trim, toolSummary, toolDetail, resultText, parsePelota, pelotaAction, sleepThresholdMs, holdsForOtro,
 } from './shared.js';
 import { spawnRunner, connectRunner, tryConnectRunner, releaseSpawnLock } from './runner-link.js';
 import { nextPackageRef, upsertPackage, searchPackages, getPackage } from './packages.js';
@@ -1671,7 +1672,18 @@ class Chat {
         return;
       }
       case 'result': {
-        this.lastPelota = e.pelota ?? parsePelota(this._turnAnswerText || '') ?? null;
+        this.lastPelota = e.pelota ?? parsePelota(this._turnPelotaText || this._turnAnswerText || '') ?? null;
+        // hello.events sólo reconstruye history: el replay no pasa por este case.
+        try {
+          if (this.lastPelota === 'tuya') {
+            const accion = pelotaAction(this._turnPelotaText || this._turnAnswerText || '') || 'te toca responder';
+            void sendPushToUser(this.owner || hostUser(), {
+              type: 'pelota', chatId: this.id, title: '🎾 La pelota es tuya',
+              body: `${this.title}: ${accion}`, url: `/?focus=${this.id}`, tag: `pelota-${this.id}`,
+            });
+          }
+        } catch { console.warn('[chat] no se pudo enviar el aviso de pelota'); }
+        this._turnPelotaText = '';
         this.otroSince = e.otroSince ?? 0;
         const hadSession = !!this.sessionId;
         this.sessionId = e.sessionId || this.sessionId;
@@ -1714,6 +1726,10 @@ class Chat {
         if (e.type === 'permission_request' && !e.ts) e.ts = Date.now();
         // Juez AutoMix (D1): acumulamos el texto de la respuesta del turno para
         // que el juez post-turno pueda evaluar si se quedó corta (cap defensivo).
+        if (e.type === 'assistant' && e.text) {
+          // El juez limita el comienzo; el aviso necesita el cierre aun en respuestas largas.
+          this._turnPelotaText = ((this._turnPelotaText || '') + e.text).slice(-8000);
+        }
         if (e.type === 'assistant' && e.text && (this._turnAnswerText || '').length < 8000) {
           this._turnAnswerText = (this._turnAnswerText || '') + e.text;
         }
@@ -2470,6 +2486,7 @@ class Chat {
     // evaluar al cerrar si el modelo se quedó corto (banner de consentimiento).
     this._lastUserText = String(text || '');
     this._turnAnswerText = '';
+    this._turnPelotaText = '';
     // BUG-497: en el PRIMER turno del usuario NO hacer hot-swap de modelo — el
     // set_model EN VIVO sobre el motor recién nacido (query aún no inicializada)
     // choca con el arranque del primer prompt y el turno queda colgado. Turno 1

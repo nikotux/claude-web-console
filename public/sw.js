@@ -8,6 +8,42 @@
 const BUILD_ID = '__BUILD_ID__';
 const CACHE = 'cwc-' + BUILD_ID;
 
+// Push separado del caché: sólo omitirlo si el chat ya está visible y enfocado.
+self.addEventListener('push', (e) => {
+  e.waitUntil((async () => {
+    let data;
+    try { data = e.data?.json(); } catch { return; }
+    if (!data || typeof data.title !== 'string') return;
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (data.chatId && windows.some((c) => c.focused && c.visibilityState === 'visible'
+      && c.url.includes(encodeURIComponent(data.chatId)))) return;
+    const target = new URL(data.url || '/', self.location.origin);
+    const url = target.origin === self.location.origin ? target.href : '/';
+    await self.registration.showNotification(data.title, {
+      body: data.body || '', tag: data.tag || 'pelota', renotify: true, data: { url },
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil((async () => {
+    const target = new URL(e.notification.data?.url || '/', self.location.origin);
+    const url = target.origin === self.location.origin ? target.href : self.location.origin + '/';
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const existing = windows.find((c) => new URL(c.url).origin === self.location.origin
+      && new URL(c.url).pathname === '/' && !new URL(c.url).searchParams.has('solo'));
+    if (existing) {
+      try {
+        const navigated = await existing.navigate(url);
+        await (navigated || existing).focus();
+        return;
+      } catch { /* Si la ventana se cerró durante el click, abrir otra. */ }
+    }
+    await self.clients.openWindow(url);
+  })());
+});
+
 // App-shell mínimo precacheado en install (best-effort). El resto de los ~47
 // módulos JS se cachea on-demand en el fetch handler la primera vez que se
 // piden (evita un install gigante y frágil).
