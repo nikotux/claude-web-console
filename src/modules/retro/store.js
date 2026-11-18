@@ -14,7 +14,7 @@ import crypto from 'node:crypto';
 import { writeJsonAtomic } from '../../core/atomic-write.js';
 import {
   listItems, getItem, createItem, updateItem, deleteItem as padDeleteItem,
-  listLinks, setParent, deleteLink,
+  listLinks, setParent, deleteLink, addLink,
 } from '../../core/pad-service-client.js';
 import { readVerifyState, verifyForLesson } from './verify-shared.js';
 import { retroDataDirFor, retroHostUser } from './owner-dirs.js';
@@ -39,7 +39,14 @@ export const MC_SUN_BY_CATEGORY = Object.freeze({
   herramienta: 'ARQUI-1316',
 });
 export const MC_ID_RE = /^MC-\d+$/;
+const MC_TOPIC_GROUP_COLLECTION = 'arquitectura';
+const MC_TOPIC_UID_PREFIX = 'mc-tema:';
+const MC_BANK_UID = 'mc-banco';
+const MC_TOPIC_LINK_TYPE = 'implements';
+const MC_PARENT_LINK_TYPE = 'parent';
 const ACTIVITY_MAX = 300;
+const topicGroupRefsCache = new Map();
+const missingTopicGroupsWarned = new Set();
 
 // 'feedback-cliente' (2026-07-19): retroalimentación puntual de un cliente/
 // revisor (típicamente Chris, por mail/Teams/llamada) sobre un ticket/PR — NO
@@ -57,7 +64,8 @@ const clampStr = (s, n) => String(s ?? '').replace(/\r/g, '').slice(0, n);
 const oneOf = (v, list, def) => (list.includes(v) ? v : def);
 
 // CONVE-1257 del Pad / regla dura 11: todo ítem nace enlazado a su sol.
-// Este guard existe porque los soles ARQUI-* de BUG-1878 solo viven en `console`.
+// Los soles ARQUI-* de BUG-1878 solo viven en `console`; fuera de `console`,
+// PLAN-890 enlaza al `mc-tema:<topic>` propio y cae a `mc-banco`.
 function padSunApplies(ctx) {
   const ws = ctx && ctx.workspace;
   return !ws || ws === 'console';
@@ -65,6 +73,78 @@ function padSunApplies(ctx) {
 
 function linkTargetRef(link) {
   return link?.target_ref || link?.target?.ref || link?.target_item?.ref || null;
+}
+
+export function topicGroupRefsByUid(items) {
+  const refs = {};
+  for (const item of Array.isArray(items) ? items : []) {
+    const fields = parseFields(item);
+    const uid = fields.uid;
+    if (
+      item?.ref
+      && fields.kind === 'grupo'
+      && (uid === MC_BANK_UID || (typeof uid === 'string' && uid.startsWith(MC_TOPIC_UID_PREFIX)))
+    ) refs[uid] = item.ref;
+  }
+  return refs;
+}
+
+export function pickTopicGroupRef(topic, refsByUid = {}) {
+  const topicRef = refsByUid[`${MC_TOPIC_UID_PREFIX}${topic}`];
+  return topicRef || refsByUid[MC_BANK_UID] || null;
+}
+
+export function lessonHasHome(ref, links = []) {
+  return (Array.isArray(links) ? links : []).some((link) => (
+    (!link?.source_ref || link.source_ref === ref)
+    && (link?.link_type === MC_PARENT_LINK_TYPE || link?.link_type === MC_TOPIC_LINK_TYPE)
+  ));
+}
+
+async function topicGroupRefsFor(ctx) {
+  const key = ctx?.workspace;
+  let pending = topicGroupRefsCache.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const groupsR = await listItems(MC_TOPIC_GROUP_COLLECTION, { ctx });
+      if (!groupsR?.ok) throw new Error(groupsR?.error || 'respuesta inválida del Pad');
+      return topicGroupRefsByUid(groupsR.data);
+    })();
+    topicGroupRefsCache.set(key, pending);
+  }
+  try {
+    return await pending;
+  } catch (err) {
+    if (topicGroupRefsCache.get(key) === pending) topicGroupRefsCache.delete(key);
+    throw err;
+  }
+}
+
+async function linkLessonToTopicGroup(ref, topic, ctx) {
+  try {
+    const refsByUid = await topicGroupRefsFor(ctx);
+    const target = pickTopicGroupRef(topic, refsByUid);
+    if (!target) {
+      const key = ctx?.workspace;
+      if (!missingTopicGroupsWarned.has(key)) {
+        missingTopicGroupsWarned.add(key);
+        console.warn(`[retro] no encontré grupos MC temáticos ni banco en ${key || 'el workspace actual'}`);
+      }
+      return;
+    }
+    const linksR = await listLinks(ref, { ctx });
+    if (!linksR?.ok) {
+      console.error('[retro] no pude leer los links de la lección en Pad:', linksR?.error || linksR);
+      return;
+    }
+    if (lessonHasHome(ref, linksR.data)) return;
+    const linkR = await addLink(ref, target, MC_TOPIC_LINK_TYPE, { ctx });
+    if (!linkR?.ok) {
+      console.error('[retro] no pude enlazar la lección a su grupo temático en Pad:', linkR?.error || linkR);
+    }
+  } catch (err) {
+    console.error('[retro] no pude enlazar la lección a su grupo temático en Pad:', err?.message || err);
+  }
 }
 
 // Máquina de estados compartida con cwc-pad-mc-parent.js: solo clasifica
@@ -93,10 +173,14 @@ export function planLessonSunLinks(ref, sun, links = []) {
 // La consulta previa mantiene idempotentes los reintentos; si el parent correcto
 // ya existe (o acaba de crearse), limpia el viejo `implements` redundante.
 // Todo es best-effort para no arriesgar la destilación.
-async function linkLessonToSun(ref, category, ctx) {
+async function linkLessonToSun(ref, category, ctx, topic) {
+  if (!padSunApplies(ctx)) {
+    await linkLessonToTopicGroup(ref, topic, ctx);
+    return;
+  }
   try {
     const sun = MC_SUN_BY_CATEGORY[category];
-    if (!sun || !padSunApplies(ctx)) return;
+    if (!sun) return;
     const linksR = await listLinks(ref, { ctx });
     if (!linksR?.ok) {
       console.error('[retro] no pude leer los links de la lección en Pad:', linksR?.error || linksR);
@@ -401,7 +485,7 @@ export async function upsertLesson(input = {}, ctx = null, sharedCtx = null) {
       if (!r.ok) throw padError('upsertLesson', r);
       await appendActivity({ kind: 'recurrente', refId: existing.ref, title, detail: `x${rec}` }, ctx);
       // Auto-sana lecciones viejas que hubieran quedado huérfanas al reincidir.
-      await linkLessonToSun(existing.ref, f.category || category, ctx);
+      await linkLessonToSun(existing.ref, f.category || category, ctx, input.topic);
       const fresh = await getItem(existing.ref, { ctx });
       const lesson = lessonFromPadItem(
         fresh.ok ? fresh.data : { ...existing, fields: updatedFields },
@@ -430,7 +514,7 @@ export async function upsertLesson(input = {}, ctx = null, sharedCtx = null) {
     }, { ctx });
     if (!r.ok) throw padError('upsertLesson', r);
     await appendActivity({ kind: 'nueva', refId: r.data.ref, title }, ctx);
-    await linkLessonToSun(r.data.ref, category, ctx);
+    await linkLessonToSun(r.data.ref, category, ctx, input.topic);
     const fresh = await getItem(r.data.ref, { ctx });
     const lesson = lessonFromPadItem(
       fresh.ok ? fresh.data : {

@@ -44,7 +44,12 @@ los dos destinos que Claude Code auto-carga) · destination
 (sugerido) memoria|claude-md|contexto|convencion|contrato|invariante ·
 recurrence
 · confidence · fingerprint · sourceChats[] · content=Observación/
-Lección}. RECURRENCIA = PRIORIDAD: una lección repetida NO se
+Lección}. Fuera de `console` (inquilinos, p. ej. tenant-rarboleda) la lección
+se enlaza con `implements` al grupo de `arquitectura` con uid
+`mc-tema:<topic>` del propio workspace (el topic lo elige el destilador); si no
+existe, al banco `mc-banco`; si no hay ninguno, queda como antes. Si la lección
+ya tiene parent/implements no se toca. Origen: PLAN-890 (tenant-rarboleda).
+RECURRENCIA = PRIORIDAD: una lección repetida NO se
 duplica, sube su contador (dedup por fingerprint = sha1 de
 categoría+título normalizado). OJO (gotcha resuelto en la verificación
 E2E): el fingerprint por título es FRÁGIL — el modelo reformula el
