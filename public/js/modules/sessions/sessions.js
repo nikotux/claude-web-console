@@ -1472,7 +1472,7 @@ export default {
       for (const s of mySessions) listEl.appendChild(card(s, 'world:' + sessionWorldKey(s)));
 
       // F3 (PLAN-373/PEND-462): conversaciones ARCHIVADAS (revivibles) en una
-      // sección colapsada. Tocar una la revive y la abre (ver chatCard).
+      // sección colapsada. Tocar una pide confirmación antes de revivirla (ver chatCard).
       if (myArchivedChatsAll.length) {
         const det = document.createElement('details');
         det.className = 'sess-others sess-archived';
@@ -1603,10 +1603,10 @@ export default {
         syncToggle();
         main.querySelector('.sess-row1')?.appendChild(toggle);
       }
-      // Archivada (F3): tocarla la REVIVE y la abre; activa: abrir normal.
+      // Archivada (F3): tocarla PIDE CONFIRMACIÓN antes de revivirla y abrirla; activa: abrir normal.
       main.addEventListener('click', () => {
         if (cardOpenBlockedByDrag(elCard)) return;
-        c.archived ? reviveChat(c, { open: true }) : openChatView(c);
+        c.archived ? confirmReviveOpen(c) : openChatView(c);
       });
       // Doble-click = desanclar en ventana propia. El primer click ya abrió la
       // pestaña en el shell (la conversación queda en las DOS), así que acá solo
@@ -1621,7 +1621,7 @@ export default {
       main.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
         e.preventDefault();
-        c.archived ? reviveChat(c, { open: true }) : openChatView(c);
+        c.archived ? confirmReviveOpen(c) : openChatView(c);
       });
 
       const menuBtn = document.createElement('button');
@@ -1970,6 +1970,19 @@ export default {
       } catch (e) {
         dialog.alertDialog({ title: t('sessions.archive.title', 'Archivar'), message: e.message });
       } finally { refresh(); }
+    }
+
+    // Tocar una tarjeta archivada ya no la revive de una: muchas veces solo se
+    // quiere ver qué hay en Archivados. Pedir confirmación; cancelar la deja
+    // archivada. El menú ⋯ ("Revivir y abrir" / "Revivir") sigue directo.
+    async function confirmReviveOpen(c) {
+      const ok = await dialog.confirmDialog({
+        title: t('sessions.revive.confirmTitle', '¿Revivir esta conversación?'),
+        message: t('sessions.revive.confirmMessage', '“{title}” está archivada. Si la revivís vuelve a tu lista activa y se abre; si solo querías ver qué archivaste, elegí “Dejarla archivada”.', { title: c.title || t('sessions.trash.untitled', 'Conversación sin título') }),
+        confirmLabel: t('sessions.menu.reviveOpen', 'Revivir y abrir'),
+        cancelLabel: t('sessions.revive.keepArchived', 'Dejarla archivada'),
+      });
+      if (ok) await reviveChat(c, { open: true });
     }
 
     // F3: revivir una conversación archivada; con {open:true} además la abre.
