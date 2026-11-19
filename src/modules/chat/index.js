@@ -2469,6 +2469,7 @@ class Chat {
   // idéntico al histórico (content = string).
   sendUser(text, attachments = null, by = null) {
     if (this.closed) return;
+    if (this.archived) return; // archivada = solo lectura (ver WS 'user')
     if (!this.alive && this.viewMode !== 'chat') return;
     const atts = Array.isArray(attachments) && attachments.length ? attachments : null;
     if (!String(text || '').trim() && !atts) return; // ni texto ni adjuntos: nada que enviar
@@ -3137,6 +3138,7 @@ class Chat {
   archive() {
     if (this.archived || this.closed) return;
     this.archived = true;
+    this._broadcast({ type: 'archived', archived: true });
     if (this.terminalId) {
       const t = sessionManager.get(this.terminalId);
       if (t) t.kill();
@@ -3161,6 +3163,7 @@ class Chat {
     if (this.closed) return { ok: false, error: 'La conversación está cerrada.' };
     if (!this.archived) return { ok: true };
     this.archived = false;
+    this._broadcast({ type: 'archived', archived: false });
     this.lastActivity = Date.now();
     this._syncPackage('active', 'revived');
     this.onUpdate?.();
@@ -3254,7 +3257,8 @@ class Chat {
   _historyPayload(extra = {}) {
     return {
       type: 'history', events: this.history, mode: this.permissionMode, status: this.status,
-      viewMode: this.viewMode, terminalId: this.terminalId, slashCommands: this._slashList(),
+      viewMode: this.viewMode, archived: !!this.archived,
+      terminalId: this.terminalId, slashCommands: this._slashList(),
       model: this.model, modelChoice: this.modelChoice, // para que el badge "🤖 AutoTux: X" nazca poblado
       effort: this.effort, effortPinned: !!this._effortPinned, // eje thinking effort (PEND-391 #3)
       fableCeiling: !!this._fableCeiling, // PLAN-519 F1: techo Fable opt-in de AutoTux
@@ -3723,7 +3727,7 @@ class ChatManager {
     const chat = this.chats.get(id);
     if (!chat) return { ok: false, code: 404, error: 'Conversación inexistente.' };
     if (chat.closed) return { ok: false, code: 409, error: 'La conversación está cerrada.' };
-    if (chat.archived) return { ok: false, code: 409, error: 'Reviví la conversación antes de mudarla.' };
+    if (chat.archived) return { ok: false, code: 409, error: 'Desarchivá la conversación antes de mudarla.' };
     if (chat.viewMode !== 'chat') return { ok: false, code: 409, error: 'Solo se puede mudar en modo Chat (una TUI se reinicia desde la terminal).' };
     if (!chat.sessionId || !UUID_RE.test(chat.sessionId)) {
       return { ok: false, code: 409, error: 'La conversación aún no tiene sesión: enviá un mensaje antes de mudarla.' };
@@ -3802,7 +3806,7 @@ class ChatManager {
     const chat = this.chats.get(id);
     if (!chat) return { ok: false, code: 404, error: 'Conversación inexistente.' };
     if (chat.closed) return { ok: false, code: 409, error: 'La conversación está cerrada.' };
-    if (chat.archived) return { ok: false, code: 409, error: 'Reviví la conversación antes de mudarla.' };
+    if (chat.archived) return { ok: false, code: 409, error: 'Desarchivá la conversación antes de mudarla.' };
     if (chat.viewMode !== 'chat') return { ok: false, code: 409, error: 'Solo se puede mudar en modo Chat (una TUI se reinicia desde la terminal).' };
     if (!chat.sessionId || !UUID_RE.test(chat.sessionId)) {
       return { ok: false, code: 409, error: 'La conversación aún no tiene sesión: enviá un mensaje antes de mudarla.' };
@@ -5433,6 +5437,12 @@ El archivo donde se guardan mis preferencias está en ${preferencesPath}. Cuando
           // En una sala nadie saltea la Aduana con un turno directo: las
           // personas hablan por `say` y deciden juntas cuándo hacer `cut`.
           if (chat.isSala()) return;
+          // Archivada = SOLO LECTURA: se puede abrir y leer, pero no continuar hasta
+          // desarchivarla desde el menú ⋯ de Sesiones (el front ya bloquea el composer).
+          if (chat.archived) {
+            try { ws.send(JSON.stringify({ type: 'error', message: 'La conversación está archivada: desarchivala desde el menú ⋯ en Sesiones para continuar.' })); } catch { /* socket cerrado */ }
+            return;
+          }
           // Adjuntos: se validan contra la carpeta del chat (existingAttachments
           // filtra a los que existen en disco). Permite enviar solo-adjunto
           // (texto vacío) si hay al menos uno válido.

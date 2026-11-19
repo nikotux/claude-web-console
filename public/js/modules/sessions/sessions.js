@@ -386,7 +386,7 @@ export default {
       if (target.world === '__aduana' && dragged.isSala) {
         return t('sessions.drag.blockedSala', 'Esta conversación ya es una sala de 🛃 Aduana.');
       }
-      if (dragged.archived) return t('sessions.drag.blockedArchived', 'Reviví la conversación antes de mudarla a otro mundo.');
+      if (dragged.archived) return t('sessions.drag.blockedArchived', 'Desarchivá la conversación antes de mudarla a otro mundo.');
       if (dragged.isTui) return t('sessions.drag.blockedTui', 'Solo se puede mudar en modo Chat: una TUI se reinicia desde la terminal.');
       if (!dragged.hasSession) return t('sessions.drag.blockedNoSession', 'Enviá un primer mensaje en la conversación antes de mudarla a otro mundo.');
       return '';
@@ -1472,7 +1472,7 @@ export default {
       for (const s of mySessions) listEl.appendChild(card(s, 'world:' + sessionWorldKey(s)));
 
       // F3 (PLAN-373/PEND-462): conversaciones ARCHIVADAS (revivibles) en una
-      // sección colapsada. Tocar una pide confirmación antes de revivirla (ver chatCard).
+      // sección colapsada. Tocar una la abre en solo lectura; se desarchiva desde el menú ⋯ (ver chatCard).
       if (myArchivedChatsAll.length) {
         const det = document.createElement('details');
         det.className = 'sess-others sess-archived';
@@ -1603,17 +1603,17 @@ export default {
         syncToggle();
         main.querySelector('.sess-row1')?.appendChild(toggle);
       }
-      // Archivada (F3): tocarla PIDE CONFIRMACIÓN antes de revivirla y abrirla; activa: abrir normal.
+      // Tocar abre la conversación; una archivada se abre en SOLO LECTURA (sigue archivada). Desarchivar vive en el menú ⋯.
       main.addEventListener('click', () => {
         if (cardOpenBlockedByDrag(elCard)) return;
-        c.archived ? confirmReviveOpen(c) : openChatView(c);
+        openChatView(c);
       });
       // Doble-click = desanclar en ventana propia. El primer click ya abrió la
       // pestaña en el shell (la conversación queda en las DOS), así que acá solo
       // se suma la ventana suelta. `preventDefault` evita que el doble-click
       // seleccione el texto del título.
       main.addEventListener('dblclick', (e) => {
-        if (c.archived) return;   // una archivada hay que revivirla primero
+        if (c.archived) return;   // una archivada hay que desarchivarla primero
         e.preventDefault();
         e.stopPropagation();
         popoutChat(c.id, c.title);
@@ -1621,7 +1621,7 @@ export default {
       main.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
         e.preventDefault();
-        c.archived ? confirmReviveOpen(c) : openChatView(c);
+        openChatView(c);
       });
 
       const menuBtn = document.createElement('button');
@@ -1753,13 +1753,13 @@ export default {
       // su menú debe ofrecer las acciones de dueño.
       const canOwn = isMine(c.owner) || iAmAdmin;
       const isTui = c.viewMode === 'tui';
-      const arch = !!c.archived; // F3: una archivada muestra "Revivir" y esconde las acciones que exigen motor vivo
+      const arch = !!c.archived; // F3: una archivada muestra "Desarchivar" y esconde las acciones que exigen motor vivo
       const menu = document.createElement('div');
       menu.className = 'cwc-popup-menu';
       menu.innerHTML = `
-        <button class="cwc-popup-item" data-act="open">${icon(isTui ? 'terminal' : 'sparkle', { size: 15 })}<span>${arch ? t('sessions.menu.reviveOpen', 'Revivir y abrir') : t('sessions.menu.open', 'Abrir')}</span></button>
+        <button class="cwc-popup-item" data-act="open">${icon(isTui ? 'terminal' : 'sparkle', { size: 15 })}<span>${t('sessions.menu.open', 'Abrir')}</span></button>
         ${!arch ? `<button class="cwc-popup-item" data-act="popout">${icon('externalLink', { size: 15 })}<span>${t('sessions.menu.popout', 'Abrir en ventana')}</span></button>` : ''}
-        ${canOwn && arch ? `<button class="cwc-popup-item" data-act="revive">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.revive', 'Revivir')}</span></button>` : ''}
+        ${canOwn && arch ? `<button class="cwc-popup-item" data-act="revive">${icon('refresh', { size: 15 })}<span>${t('sessions.menu.unarchive', 'Desarchivar')}</span></button>` : ''}
         ${canOwn && !arch && !isTui ? `<button class="cwc-popup-item" data-act="mode">${icon('terminal', { size: 15 })}<span>${t('sessions.menu.toTui', 'Pasar a TUI')}</span></button>` : ''}
         ${canOwn && !arch && isTui ? `<button class="cwc-popup-item" data-act="mode">${icon('sparkle', { size: 15 })}<span>${t('sessions.menu.toChat', 'Pasar a Chat')}</span></button>` : ''}
         ${canOwn ? `<button class="cwc-popup-item" data-act="rename">${icon('edit', { size: 15 })}<span>${t('sessions.menu.rename', 'Renombrar')}</span></button>` : ''}
@@ -1777,7 +1777,7 @@ export default {
       positionPopup(menu, anchor);
       const dismiss = dismissablePopup(menu, { onDismiss: () => menu.remove() });
       const act = (fn) => { dismiss(); fn(); };
-      menu.querySelector('[data-act="open"]')?.addEventListener('click', () => act(() => (arch ? reviveChat(c, { open: true }) : openChatView(c))));
+      menu.querySelector('[data-act="open"]')?.addEventListener('click', () => act(() => openChatView(c)));
       menu.querySelector('[data-act="popout"]')?.addEventListener('click', () => act(() => popoutChat(c.id, c.title)));
       menu.querySelector('[data-act="revive"]')?.addEventListener('click', () => act(() => reviveChat(c)));
       menu.querySelector('[data-act="mode"]')?.addEventListener('click', () => act(() => switchChatMode(c)));
@@ -1972,32 +1972,18 @@ export default {
       } finally { refresh(); }
     }
 
-    // Tocar una tarjeta archivada ya no la revive de una: muchas veces solo se
-    // quiere ver qué hay en Archivados. Pedir confirmación; cancelar la deja
-    // archivada. El menú ⋯ ("Revivir y abrir" / "Revivir") sigue directo.
-    async function confirmReviveOpen(c) {
-      const ok = await dialog.confirmDialog({
-        title: t('sessions.revive.confirmTitle', '¿Revivir esta conversación?'),
-        message: t('sessions.revive.confirmMessage', '“{title}” está archivada. Si la revivís vuelve a tu lista activa y se abre; si solo querías ver qué archivaste, elegí “Dejarla archivada”.', { title: c.title || t('sessions.trash.untitled', 'Conversación sin título') }),
-        confirmLabel: t('sessions.menu.reviveOpen', 'Revivir y abrir'),
-        cancelLabel: t('sessions.revive.keepArchived', 'Dejarla archivada'),
-      });
-      if (ok) await reviveChat(c, { open: true });
-    }
-
-    // F3: revivir una conversación archivada; con {open:true} además la abre.
-    async function reviveChat(c, { open = false } = {}) {
+    // F3: desarchivar una conversación; queda dormida hasta el próximo mensaje.
+    async function reviveChat(c) {
       try {
         const res = await fetch('/api/chat/revive', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: c.id }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || t('sessions.revive.error', 'No se pudo revivir.'));
+        if (!res.ok) throw new Error(data.error || t('sessions.revive.error', 'No se pudo desarchivar.'));
         if (data.chat) syncConversation(data.chat);
-        if (open) openChatView(data.chat || c);
       } catch (e) {
-        dialog.alertDialog({ title: t('sessions.revive.title', 'Revivir'), message: e.message });
+        dialog.alertDialog({ title: t('sessions.revive.title', 'Desarchivar'), message: e.message });
       } finally { refresh(); }
     }
 

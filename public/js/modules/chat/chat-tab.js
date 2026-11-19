@@ -304,6 +304,7 @@ export class ChatTab {
     this._modelChoice = null;     // QUÉ ELIGIÓ la persona: 'auto' (AutoTux) u otro fijo — ver _applyModel/_applyModelChoice
     this._tandemActive = true;    // retrocompat: runners viejos no reportan tandemActive
     this._engineDormant = false;  // motor dormido: el badge de modelo NO debe alarmar (eso lo dice el Pac-Man)
+    this._archived = false;       // archivada = historial visible con composer en solo lectura
     this.isSala = null;           // null hasta que llegue el primer history
     this.salaId = null;           // 🛃 id de la CARPETA de la sala; distinto del id de la conversación
     this._previewEnv = null;
@@ -1023,13 +1024,14 @@ export class ChatTab {
   _sendInitialPrompt() {
     // En la primera conexión esperamos history para saber si corresponde
     // `user` (chat común) o `say` (sala). En reconexiones el dato ya está.
-    if (!this.initialPrompt || this._sentInitial || this.isSala === null) return;
+    if (!this.initialPrompt || this._sentInitial || this.isSala === null || this._archived) return;
     this._sentInitial = true;
     this._send({ type: this.isSala ? 'say' : 'user', text: this.initialPrompt });
     this._scroll(true);
   }
 
   _submit() {
+    if (this._archived) return;
     const text = this.inputEl.value.trim();
     // Adjuntos LISTOS (subidos, con name del server). Los que fallaron no viajan.
     const ready = this.pending.filter((p) => p.name && !p.error);
@@ -1135,6 +1137,7 @@ export class ChatTab {
   // chat); el chip optimista aparece mientras sube y se completa con el `name`
   // real que asigna el server. Al enviar el mensaje viajan solo las referencias.
   async _uploadFiles(fileList) {
+    if (this._archived) return;
     const files = Array.from(fileList || []);
     for (const file of files) {
       if (this.pending.length >= MAX_ATTACHMENTS) {
@@ -1306,6 +1309,7 @@ export class ChatTab {
         // previo lo dejó deshabilitado (antes `disabled=true` no se revertía nunca).
         if (this.inputEl) this.inputEl.disabled = false;
         if (this.sendBtn) this.sendBtn.disabled = false;
+        this._setArchived(!!m.archived);
         this._applyWorld(m.cwd, m.world); // insignia de mundo (anti-confusión)
         this._applyFlow(m.sessionId, m.cwd);
         if (m.packageRef) this._packageRef = m.packageRef; // F5: para excluirse del picker
@@ -1424,6 +1428,7 @@ export class ChatTab {
         break;
       case 'result': this._result(m); break;
       case 'status': this._setWorking(m.state === 'working'); break;
+      case 'archived': this._setArchived(!!m.archived); break;
       case 'model': this._applyModel(m.model, { auto: !!m.auto }); break;
       case 'modelChoice': this._applyModelChoice(m.modelChoice); break;
       // Eje thinking effort (PEND-391 #3): 2ª línea del banderín del header.
@@ -2051,7 +2056,9 @@ export class ChatTab {
   _renderSalaState() {
     this.container.querySelector('.chat-view')?.classList.toggle('chat-view--sala', !!this.isSala);
     if (this.inputEl) {
-      this.inputEl.placeholder = this.isSala
+      this.inputEl.placeholder = this._archived
+        ? t('chat.archived.placeholder', '📦 Conversación archivada · solo lectura. Desarchivala desde ⋯ en Sesiones para continuar.')
+        : this.isSala
         ? t('chat.sala.inputPlaceholder', 'Escribí a la sala… o @{name} para preguntarle', { name: this.salaAiName })
         : t('chat.composer.inputPlaceholder', 'Escribí o dictá un mensaje…');
     }
@@ -2060,10 +2067,21 @@ export class ChatTab {
     this._renderTyping();
   }
 
+  _setArchived(on) {
+    this._archived = !!on;
+    this.container.querySelector('.chat-view')?.classList.toggle('chat-view--archived', this._archived);
+    if (this.inputEl) this.inputEl.disabled = this._archived;
+    if (this.sendBtn) this.sendBtn.disabled = this._archived;
+    if (this.attachBtn) this.attachBtn.disabled = this._archived;
+    if (this.pkgRefBtn) this.pkgRefBtn.disabled = this._archived;
+    if (this.fileInput) this.fileInput.disabled = this._archived;
+    this._renderSalaState();
+  }
+
   _renderCutButton() {
     if (!this.cutBtn) return;
     this.cutBtn.hidden = !this.isSala;
-    this.cutBtn.disabled = !this.isSala || this._salaSayCount === 0 || this._cutPending;
+    this.cutBtn.disabled = this._archived || !this.isSala || this._salaSayCount === 0 || this._cutPending;
     if (this._cutPending) {
       this.cutBtn.textContent = t('chat.sala.cutPending', 'IA ocupada · queda pendiente');
     } else if (this._salaAskCount > 0) {
@@ -2924,6 +2942,7 @@ export class ChatTab {
   // contexto de otra sesión a la conversación actual. Lista construida con DOM +
   // textContent (sin innerHTML de datos del usuario).
   _openPackagePicker() {
+    if (this._archived) return;
     const m = openModal({ title: t('chat.pkg.pickerTitle', 'Referenciar un paquete-sesión'), width: 440 });
     const q = document.createElement('input');
     q.className = 'dlg-input chat-pkg-q';

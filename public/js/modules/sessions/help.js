@@ -18,7 +18,7 @@ export default function sessionsHelp() {
             items: [
               t('sessions.help.first.step1', 'Buscá la tarjeta por su nombre, proyecto y modelo.'),
               t('sessions.help.first.step2', 'Mirá el Pac-Man para saber si está trabajando, delegando, esperando o dormida.'),
-              t('sessions.help.first.step3', 'Tocá la tarjeta para abrirla o enfocar su pestaña si ya estaba abierta; si está archivada, te pide confirmación antes de revivirla y abrirla.'),
+              t('sessions.help.first.step3', 'Tocá la tarjeta para abrirla o enfocar su pestaña si ya estaba abierta; una conversación archivada se abre en solo lectura y sigue archivada.'),
               t('sessions.help.first.step4', 'Usá el contador desplegable de una conversación para revisar sus subagentes y trabajos en segundo plano.'),
             ],
           },
@@ -198,7 +198,7 @@ export default function sessionsHelp() {
               {
                 icon: 'sparkle',
                 name: t('sessions.help.card.open.name', 'Tocar la tarjeta'),
-                desc: t('sessions.help.card.open.desc', 'abre el chat o terminal, o enfoca su pestaña; una conversación archivada pide confirmación antes de revivirse y abrirse'),
+                desc: t('sessions.help.card.open.desc', 'abre el chat o terminal, o enfoca su pestaña; una conversación archivada se abre en solo lectura'),
               },
               {
                 icon: 'chevronRight',
@@ -243,8 +243,8 @@ export default function sessionsHelp() {
               },
               {
                 icon: 'refresh',
-                name: t('sessions.help.chatMenu.revive.name', 'Revivir / Reabrir para cambios'),
-                desc: t('sessions.help.chatMenu.revive.desc', 'reactiva una archivada o reinicia su motor para tomar código nuevo; reabrir corta el turno si estaba trabajando'),
+                name: t('sessions.help.chatMenu.revive.name', 'Desarchivar / Reabrir para cambios'),
+                desc: t('sessions.help.chatMenu.revive.desc', 'Desarchivar desde el menú ⋯ devuelve la conversación a la lista activa y permite volver a escribir; Reabrir para cambios reinicia el motor para tomar código nuevo y corta el turno si estaba trabajando'),
               },
               {
                 icon: 'edit',

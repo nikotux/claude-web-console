@@ -21,6 +21,7 @@
   "chat.composer.attachTitle": "Attach file (image, PDF, text…)",
   "chat.composer.pkgrefTitle": "Reference another session package (F5)",
   "chat.composer.inputPlaceholder": "Type or dictate a message…",
+  "chat.archived.placeholder": "📦 Archived conversation · read-only. Unarchive it from ⋯ in Sessions to continue.",
   "chat.composer.stopTitle": "Stop",
   "chat.stop.title": "Stop response",
   "chat.stop.message": "Stop the response in progress? It interrupts what Claude is generating.",
