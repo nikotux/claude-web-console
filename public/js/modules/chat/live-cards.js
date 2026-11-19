@@ -67,11 +67,58 @@ export function renderCodexCard(job, {
   const started = stamp(job.startedAt);
   const elapsedMs = started ? Math.max(0, clock - started) : 0;
   const duration = durationLine(job.startedAt, job.finishedAt, clock);
-  const problem = job.isError === true || ['error', 'killed', 'orphaned'].includes(job.status);
+  const hasProblem = job.isError === true || ['error', 'killed', 'orphaned'].includes(job.status);
   const running = job.status === 'pending' || job.status === 'running';
 
-  if (!running && problem) {
-    return `<article class="live-card live-card--error" data-live-card="codex:${escapeHtml(id)}"><span>${escapeHtml(t('chat.live.codex.problem', '❌ Codex tuvo un problema · Claude lo revisa'))}</span>${dismissButton('codex', id)}</article>`;
+  if (!running && hasProblem) {
+    const rawProblem = job.problem && typeof job.problem === 'object' && !Array.isArray(job.problem)
+      ? job.problem
+      : { kind: 'unknown', ball: 'claude', work: 'unknown', detail: '' };
+    const kinds = ['restart', 'crash', 'silent', 'timeout', 'conflict', 'isolation', 'auth', 'missing', 'unknown'];
+    const balls = ['system', 'claude', 'you', 'support'];
+    const works = ['untouched', 'saved', 'partial', 'unknown'];
+    const kind = kinds.includes(rawProblem.kind) ? rawProblem.kind : 'unknown';
+    const ball = balls.includes(rawProblem.ball) ? rawProblem.ball : 'claude';
+    const work = works.includes(rawProblem.work) ? rawProblem.work : 'unknown';
+    const detail = String(rawProblem.detail || '');
+    const titles = {
+      restart: t('chat.live.codex.problem.title.restart', '❌ Codex se detuvo antes de terminar: lo frenaron o se reinició la consola'),
+      crash: t('chat.live.codex.problem.title.crash', '❌ Codex se cerró de golpe sin terminar el trabajo'),
+      silent: t('chat.live.codex.problem.title.silent', '❌ Codex dejó de responder y se dio por perdido'),
+      timeout: t('chat.live.codex.problem.title.timeout', '❌ Codex se pasó del tiempo máximo permitido'),
+      conflict: t('chat.live.codex.problem.title.conflict', '❌ Codex no aplicó el cambio: otra sesión tocó los mismos archivos'),
+      isolation: t('chat.live.codex.problem.title.isolation', '❌ Codex no pudo preparar su espacio de trabajo aislado'),
+      auth: t('chat.live.codex.problem.title.auth', '❌ Codex no arrancó: no tiene la sesión iniciada'),
+      missing: t('chat.live.codex.problem.title.missing', '❌ Codex no se pudo arrancar en este entorno'),
+      unknown: t('chat.live.codex.problem.title.unknown', '❌ Codex se cortó por un motivo que no reconozco'),
+    };
+    const ballTexts = {
+      system: t('chat.live.codex.problem.ball.system', '🟢 Fue algo pasajero · no tenés que hacer nada'),
+      claude: t('chat.live.codex.problem.ball.claude', '🔵 Claude decide cómo seguir · no tenés que hacer nada'),
+      you: kind === 'auth'
+        ? t('chat.live.codex.problem.ball.youAuth', '🟡 Te toca: reconectar Codex en Conexiones')
+        : t('chat.live.codex.problem.ball.you', '🟡 Te toca: revisalo vos'),
+      support: t('chat.live.codex.problem.ball.support', '🔴 No se arregla reintentando · avisá a soporte'),
+    };
+    const workTexts = {
+      untouched: t('chat.live.codex.problem.work.untouched', '🛟 No se tocó nada'),
+      saved: t('chat.live.codex.problem.work.saved', '🛟 Tu trabajo quedó guardado aparte'),
+      partial: t('chat.live.codex.problem.work.partial', '🛟 Puede haber quedado a medias: Claude lo revisa'),
+      unknown: t('chat.live.codex.problem.work.unknown', '🛟 Claude revisa si quedó algo a medias'),
+    };
+    const titleText = titles[kind];
+    const ballText = ballTexts[ball];
+    const workText = workTexts[work];
+    const details = detail
+      ? `<button type="button" class="live-toggle" data-live-toggle="${escapeHtml(id)}">${escapeHtml(expanded
+        ? t('chat.live.codex.problem.hideDetail', '▾ Ocultar detalle')
+        : t('chat.live.codex.problem.showDetail', '▸ Ver detalle'))}</button><div class="live-expanded"${expanded ? '' : ' hidden'}><pre class="live-problem-detail">${escapeHtml(detail)}</pre></div>`
+      : '';
+    return `<article class="live-card live-card--error live-card--problem live-card--ball-${ball}" data-live-card="codex:${escapeHtml(id)}">
+      <div class="live-problem-head"><strong>${escapeHtml(titleText)}</strong>${dismissButton('codex', id)}</div>
+      <div class="live-chips"><span class="live-chip live-chip--ball live-chip--ball-${ball}">${escapeHtml(ballText)}</span><span class="live-chip">${escapeHtml(workText)}</span></div>
+      ${details}
+    </article>`;
   }
   if (!running) {
     const parts = [t('chat.live.codex.finished', '✅ Codex terminó')];

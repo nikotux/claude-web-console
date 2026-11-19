@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { codexBadge, codexLiveForChat, codexTypical, liveKey } from '../src/modules/chat/live-status.js';
+import {
+  codexBadge, codexLiveForChat, codexTypical, describeCodexProblem, liveKey,
+} from '../src/modules/chat/live-status.js';
 import { buildWakeText, WAKE_PREFIX } from '../src/modules/chat/shared.js';
 import { formatLiveDuration, renderCiCard, renderCodexCard } from '../public/js/modules/chat/live-cards.js';
 import { isWakeText, wakeSummary } from '../public/js/modules/chat/wake-notice.js';
@@ -59,6 +61,111 @@ test('badge desaparece sin trabajos activos', () => {
 });
 test('liveKey es estable para el mismo valor', () => {
   assert.equal(liveKey({ jobs: [job('a')] }), liveKey({ jobs: [job('a')] }));
+});
+test('no describe trabajos activos ni terminados correctamente', () => {
+  assert.equal(describeCodexProblem(job('running', { isError: true })), null);
+  assert.equal(describeCodexProblem(job('done', { status: 'done' })), null);
+});
+test('clasifica una detención por señal como reinicio pasajero', () => {
+  assert.deepEqual(describeCodexProblem(job('restart', {
+    status: 'killed', error: 'El runner de Codex recibió SIGTERM y terminó antes de completar el job.',
+  })), {
+    kind: 'restart', ball: 'system', work: 'untouched',
+    detail: 'El runner de Codex recibió SIGTERM y terminó antes de completar el job.',
+  });
+});
+test('clasifica un proceso huérfano sin pid como cierre abrupto', () => {
+  const problem = describeCodexProblem(job('crash', {
+    status: 'orphaned', error: 'El runner de Codex quedó huérfano: el pid 42 ya no existe.',
+  }));
+  assert.deepEqual({ kind: problem.kind, ball: problem.ball }, { kind: 'crash', ball: 'system' });
+});
+test('clasifica un heartbeat vencido como falta de respuesta', () => {
+  const problem = describeCodexProblem(job('silent', {
+    status: 'orphaned', error: 'El runner de Codex quedó huérfano: heartbeat vencido por más de 90 s.',
+  }));
+  assert.deepEqual({ kind: problem.kind, ball: problem.ball }, { kind: 'silent', ball: 'system' });
+});
+test('clasifica un conflicto y conserva el trabajo aislado', () => {
+  const problem = describeCodexProblem(job('conflict', {
+    status: 'done', isError: true,
+    report: '⚠️ CONFLICTO AL APLICAR LA DELEGACIÓN AISLADA\n\nArchivos declarados:\napp.js\n\nstderr de git apply:\npatch failed',
+  }));
+  assert.deepEqual({ kind: problem.kind, ball: problem.ball, work: problem.work }, {
+    kind: 'conflict', ball: 'claude', work: 'saved',
+  });
+  assert.match(problem.detail, /stderr de git apply:\npatch failed/);
+});
+test('clasifica una falla de aislamiento sin tocar el proyecto', () => {
+  const problem = describeCodexProblem(job('isolation', {
+    status: 'done', isError: true,
+    report: '⛔ DELEGACIÓN NO EJECUTADA: no se pudo montar el aislamiento solicitado.\n\nMotivo exacto:\nárbol ocupado',
+  }));
+  assert.deepEqual({ kind: problem.kind, ball: problem.ball, work: problem.work }, {
+    kind: 'isolation', ball: 'claude', work: 'untouched',
+  });
+  assert.match(problem.detail, /Motivo exacto:\nárbol ocupado/);
+});
+test('clasifica una sesión de Codex sin autenticar como acción de la persona', () => {
+  const problem = describeCodexProblem(job('auth', {
+    status: 'done', isError: true,
+    report: '⚠️ Codex terminó con problema: Codex no está autenticado para este usuario.',
+  }));
+  assert.deepEqual({ kind: problem.kind, ball: problem.ball }, { kind: 'auth', ball: 'you' });
+});
+test('clasifica un runner que no pudo arrancar como problema de soporte', () => {
+  const problem = describeCodexProblem(job('missing', {
+    status: 'error', error: 'No se pudo lanzar el runner de Codex: spawn ENOENT',
+  }));
+  assert.deepEqual({ kind: problem.kind, ball: problem.ball }, { kind: 'missing', ball: 'support' });
+});
+test('clasifica el exceso de tiempo y calcula si dejó trabajo parcial', () => {
+  const problem = describeCodexProblem(job('timeout', {
+    status: 'done', isError: true, progress: { counts: { files: 2 } },
+    report: '⚠️ Codex terminó con problema: timeout tras 60 min',
+  }));
+  assert.deepEqual({ kind: problem.kind, ball: problem.ball, work: problem.work }, {
+    kind: 'timeout', ball: 'claude', work: 'partial',
+  });
+});
+test('clasifica un problema no reconocido con el fallback seguro', () => {
+  const problem = describeCodexProblem(job('unknown', {
+    status: 'error', error: 'Algo raro que no conocemos',
+  }));
+  assert.deepEqual({ kind: problem.kind, ball: problem.ball, work: problem.work }, {
+    kind: 'unknown', ball: 'claude', work: 'unknown',
+  });
+});
+test('calcula el estado del trabajo según archivos declarados y progreso', () => {
+  assert.equal(describeCodexProblem(job('partial', {
+    status: 'killed', progress: { counts: { files: 2 } },
+  })).work, 'partial');
+  assert.equal(describeCodexProblem(job('isolated', {
+    status: 'killed', files: ['app.js'], progress: { counts: { files: 2 } },
+  })).work, 'untouched');
+});
+test('ignora timeout si aparece solo dentro del resumen del reporte', () => {
+  const problem = describeCodexProblem(job('summary-timeout', {
+    status: 'done', isError: true,
+    report: 'RESUMEN DE CODEX:\nEl cambio menciona un timeout en la documentación.',
+  }));
+  assert.equal(problem.kind, 'unknown');
+});
+test('recorta el detalle técnico a un máximo seguro', () => {
+  const problem = describeCodexProblem(job('long-detail', {
+    status: 'error', error: 'x'.repeat(900),
+  }));
+  assert.ok(problem.detail.length <= 601);
+  assert.ok(problem.detail.endsWith('…'));
+});
+test('proyecta el problema sin exponer reporte ni error crudos', () => {
+  const [live] = codexLiveForChat([job('projected', {
+    status: 'done', isError: true, finishedAt: now,
+    error: 'No se pudo lanzar el runner de Codex: spawn ENOENT', report: 'secreto',
+  })], 'chat-a', now);
+  assert.equal(live.problem.kind, 'missing');
+  assert.equal(Object.hasOwn(live, 'error'), false);
+  assert.equal(Object.hasOwn(live, 'report'), false);
 });
 test('tarjeta Codex usa singular para un archivo y una acción', () => {
   const running = renderCodexCard(job('singular', { progress: { counts: { files: 1, actions: 1 } } }), { now });
@@ -128,6 +235,33 @@ test('tarjeta Codex limpia markdown en pasos, mensaje y acciones', () => {
   assert.match(html, /Revisando índice/);
   assert.match(html, /Abrió app\.js/);
   assert.doesNotMatch(html, /`|\*\*|__/);
+});
+test('tarjeta de autenticación muestra responsable y detalle desplegable', () => {
+  const failed = job('auth-card', {
+    status: 'done', isError: true,
+    problem: { kind: 'auth', ball: 'you', work: 'untouched', detail: 'Codex no está autenticado' },
+  });
+  const collapsed = renderCodexCard(failed, { now, expanded: false });
+  assert.match(collapsed, /reconectar Codex/);
+  assert.match(collapsed, /live-card--ball-you/);
+  assert.match(collapsed, /Ver detalle/);
+  assert.match(collapsed, /class="live-expanded" hidden/);
+  const expanded = renderCodexCard(failed, { now, expanded: true });
+  assert.match(expanded, /class="live-expanded"><pre/);
+  assert.doesNotMatch(expanded, /class="live-expanded" hidden/);
+});
+test('tarjeta de problema escapa el detalle y valida la clase de pelota', () => {
+  const html = renderCodexCard(job('safe-card', {
+    status: 'error', isError: true,
+    problem: { kind: 'unknown', ball: 'x" onclick', work: 'unknown', detail: '<script>alert(1)</script>' },
+  }), { now });
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(html, /live-card--ball-claude/);
+  assert.doesNotMatch(html, /x&quot; onclick|x" onclick/);
+});
+test('tarjeta de error antigua usa el problema genérico sin romper', () => {
+  const html = renderCodexCard(job('legacy-error', { status: 'error', isError: true }), { now });
+  assert.match(html, /motivo que no reconozco/);
 });
 test('tarjeta CI usa singular y plural según los conteos', () => {
   const failedOne = renderCiCard({
