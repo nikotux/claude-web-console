@@ -37,18 +37,47 @@ Los hallazgos `blocking` son los que frenan el merge; los `P2` y `P3` son mejora
 
 No copies el JSON crudo si una explicación breve alcanza. Incluí también los hallazgos no bloqueantes.
 
-## Ciclo de corrección
+## Triage de hallazgos: argumento primero, código por descarte
 
-1. Corregí los hallazgos mediante el flujo normal de la sesión (Codex/Tándem).
-2. Confirmá los cambios en un commit: los cambios sin commit no entran en la revisión.
-3. Volvé a correr `/bot`.
-4. Repetí hasta obtener `approve`.
+Aplica a los hallazgos del preflight y a los del bot sobre el PR. Antes de escribir una línea de código, pasá cada hallazgo por estas preguntas en orden. El código es el último recurso: cada arreglo es código nuevo que el bot revisa de cero y puede traer hallazgos nuevos (así se arma el loop).
 
-Hacé como máximo 5 rondas. Si todavía no hay `approve`, frená y escalá al usuario con los hallazgos que siguen abiertos y lo que ya se intentó.
+Las citas `:NN` son líneas de `.github/review-policy.md` en `origin/main` de Tolkien. Releelas antes de citar: la política cambia.
+
+1. **¿Lo introdujo el PR?** Si no → respuesta con evidencia de que el defecto ya existía (`:50`).
+2. **¿Es de Simplicidad?** Si el reemplazo stock que propone el bot no resuelve el escenario → respuesta explicando por qué (`:50`). Si lo resuelve → código (suele achicar el PR).
+3. **¿Es improbable según Likelihood (`:20-27`)?** El escenario requiere alguna de estas cosas, sin evidencia de que pase en producción:
+   - 1️⃣ un sistema externo (Zoho, Graph, Teams, QuickBooks…) que viola su contrato documentado;
+   - 2️⃣ una salida de IA equivocada de forma puntual que pasa todas las validaciones;
+   - 3️⃣ datos que ni la fuente ni el código del camino normal pueden producir;
+   - 4️⃣ un operador que usa mal un comando privilegiado a propósito.
+   Si encaja y el impacto no es grave → respuesta citando el criterio + evidencia.
+   ⚠️ Excepción `:34`: plata mal cobrada o pagada, datos de una persona vistos por otra, datos borrados o pisados, o una frontera de seguridad cruzada siguen bloqueando aunque sean improbables.
+4. **Experimento vigente (Nico, 2026-11-25): argumento en todo.** Aunque el hallazgo no encaje claro en 1–3, intentá primero la respuesta con evidencia. Recién si el bot la rechaza (`still_open`), pasá a código.
+
+Cómo responder (`:54`: sin evidencia, el argumento falla; repetir la política no es respuesta):
+- Una respuesta por hallazgo, **en su hilo**, con: el criterio (`:NN`), `Requires:` qué tendría que pasar, y la evidencia: `archivo:línea` del código que produce o limita el dato, el contrato documentado del proveedor, o datos de producción.
+- Respondé todos los hallazgos **en una sola tanda**: el bot junta las respuestas que llegan dentro de 60 s en una sola re-revisión, y cada head tiene solo 3 re-revisiones por comentario.
+- Antes de publicar, mostrale al usuario el texto exacto de cada respuesta y esperá su OK (es un mensaje externo).
+- En el preflight todavía no hay PR ni hilos: dejá las respuestas redactadas y publicalas después de abrir el PR.
+
+Registrá el experimento en una tabla al cerrar cada ronda:
+
+| Hallazgo | Ruta (argumento / código) | Criterio citado | Resultado del bot |
+|---|---|---|---|
+
+## Ciclo y tope
+
+1. Hacé el triage de todos los hallazgos.
+2. Publicá las respuestas (con OK) o corregí por el flujo normal de la sesión (Codex/Tándem) solo los hallazgos que quedaron para código.
+3. Confirmá los cambios en un commit: los cambios sin commit no entran en la revisión.
+4. Volvé a correr `/bot` (preflight) o esperá la re-revisión del bot en el PR.
+
+Tope: **como máximo 2 rondas de código por PR**. Desde la tercera, solo respuestas con evidencia o escalar al usuario con los hallazgos abiertos, lo que se intentó y el resultado de cada argumento.
 
 ## Reglas duras
 
 - Nunca hagas push ni abras un PR desde esta skill. Sigue aplicando el gate normal de push.
+- Nunca publiques respuestas a hallazgos sin mostrar el texto exacto y tener el OK del usuario.
 - Nunca muestres ni registres el token de GitHub.
 - Los cambios sin commit no se revisan: pedí que se confirmen primero.
 - Si el CLI termina con exit code 3, explicá que el modo preflight del bot todavía no está desplegado y continuá con el flujo normal.
