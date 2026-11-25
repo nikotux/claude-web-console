@@ -54,6 +54,17 @@ Las citas `:NN` son líneas de `.github/review-policy.md` en `origin/main` de To
    ⚠️ Excepción `:34`: plata mal cobrada o pagada, datos de una persona vistos por otra, datos borrados o pisados, o una frontera de seguridad cruzada siguen bloqueando aunque sean improbables.
 4. **Experimento vigente (Nico, 2026-11-25): argumento en todo.** Aunque el hallazgo no encaje claro en 1–3, intentá primero la respuesta con evidencia. Recién si el bot la rechaza (`still_open`), pasá a código.
 
+**Qué argumento rinde más (resultado del experimento en Tolkien #2331, 2026-11-25: 4 de 6 hallazgos cerrados sin código):**
+
+| Argumento | Cita | Resultado |
+|---|---|---|
+| No lo introdujo el PR (el mismo camino existe en la base) | `:50` | ✅ 1/1 |
+| No puede ocurrir (un workflow o guard lo impide, citando `archivo:línea`) | `:50` | ✅ 1/1 |
+| Impacto menor → P3, que no bloquea (acotar tamaño, alcance y quién lo ve) | `:51` | ✅ 2/2 |
+| Improbable con datos de prod | `:20-27` | ⚠️ 0/3: el bot lo rechaza si los datos no cubren exactamente el escenario (p. ej. ramas pusheadas vs. locales) o si el camino normal puede producirlo |
+
+Orden sugerido: 1) no lo introdujo el PR, 2) no puede ocurrir, 3) **impacto menor → P3**, 4) recién después, improbable. Si un argumento de probabilidad fue rechazado, probá impacto menor sobre el mismo hallazgo antes de ir a código.
+
 Cómo responder (`:54`: sin evidencia, el argumento falla; repetir la política no es respuesta):
 - Una respuesta por hallazgo, **en su hilo**, con: el criterio (`:NN`), `Requires:` qué tendría que pasar, y la evidencia: `archivo:línea` del código que produce o limita el dato, el contrato documentado del proveedor, o datos de producción.
 - Respondé todos los hallazgos **en una sola tanda**: el bot junta las respuestas que llegan dentro de 60 s en una sola re-revisión, y cada head tiene solo 3 re-revisiones por comentario.
